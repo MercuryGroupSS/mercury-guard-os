@@ -29,6 +29,7 @@ class MainActivity : Activity() {
  private val cyan = Color.rgb(63,193,255)
  private val bright = Color.WHITE
  private var currentPage = "dashboard"
+ private var identityCreating = false
  private var auditBefore = Long.MAX_VALUE
  private var auditSequence = 0L
  private var incidentInput: EditText? = null
@@ -49,6 +50,7 @@ class MainActivity : Activity() {
   try {
    showDashboard()
    auditBefore = savedInstanceState?.getLong("audit_before", Long.MAX_VALUE) ?: Long.MAX_VALUE
+   if (savedInstanceState?.getString("page") == "info") showInfo()
    if (savedInstanceState?.getString("page") == "device_readiness") showDeviceReadiness()
    if (savedInstanceState?.getString("page") == "audit") showAudit(auditBefore)
    if (savedInstanceState?.getString("page") == "audit_detail") showAuditDetail(savedInstanceState.getLong("audit_sequence"))
@@ -84,7 +86,7 @@ class MainActivity : Activity() {
   text = value; textSize = size; setTextColor(color); setPadding(0,12,0,12)
  }
  private fun action(title: String, block: () -> Unit) {
-  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events" && title != "Review local audit events" && title != "Device readiness" && currentPage !in listOf("audit", "audit_detail", "device_readiness")) { showDashboard() } else block() } }
+  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Create installation identity" && title != "Return" && title != "Export local audit events" && title != "Review local audit events" && title != "Device readiness" && currentPage !in listOf("audit", "audit_detail", "device_readiness")) { showDashboard() } else block() } }
   root.addView(b, LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = 12 })
  }
  private fun heading(title: String, subtitle: String) {
@@ -113,7 +115,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.9 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.10 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -346,6 +348,32 @@ class MainActivity : Activity() {
   heading("DEVICE MANAGEMENT","Read-only device capabilities")
   val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
   root.addView(label("Server shift authorization: disabled · no staging issuer or trusted key configured",13f,Color.LTGRAY))
+  try {
+   val identity = DeviceIdentity(this).publicIdentity()
+   root.addView(label(if (identity == null) "Installation identity: not initialized" else "Installation public-key fingerprint: ${identity.thumbprint}",13f,Color.LTGRAY))
+   root.addView(label("This is an installation key, not a guard login or fleet enrollment. Hardware backing is unverified. No identity is uploaded.",12f,Color.LTGRAY))
+   if (identity == null) action("Create installation identity") {
+    AlertDialog.Builder(this).setTitle("Create local installation key?")
+     .setMessage("Creates a signing key in Android Keystore for future enrollment. It does not enroll this phone, authenticate a guard or send data. Uninstalling or losing the key changes the installation identity.")
+     .setNegativeButton("Cancel",null).setPositiveButton("Create key") { _, _ ->
+      if (!identityCreating) {
+       identityCreating = true
+       Toast.makeText(this,"Creating installation key…",Toast.LENGTH_SHORT).show()
+       Thread {
+        val success = try { DeviceIdentity(applicationContext).create(); true } catch (_: Exception) { false }
+        runOnUiThread {
+         identityCreating = false
+         if (!isDestroyed) {
+          if (!success) Toast.makeText(this,"Identity could not be initialized. Existing key material was not replaced.",Toast.LENGTH_LONG).show()
+          if (currentPage == "info") showInfo()
+         }
+        }
+       }.start()
+      }
+     }.show()
+   }
+  } catch (_: Exception) { root.addView(label("Installation identity unavailable or mismatched. Existing material was preserved; administrator recovery is required.",13f,Color.LTGRAY)) }
+
   root.addView(label("Manufacturer: ${Build.MANUFACTURER}\nModel: ${Build.MODEL}\nAndroid: ${Build.VERSION.RELEASE}\nManaged device owner: ${dpm.isDeviceOwnerApp(packageName)}\nKiosk allowlisted: ${dpm.isLockTaskPermitted(packageName)}\nTracking: only during active demo shifts"))
   action("Return") { showDashboard() }
  }
