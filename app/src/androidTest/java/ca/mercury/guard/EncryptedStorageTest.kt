@@ -30,6 +30,19 @@ class EncryptedStorageTest {
   try { crypto.decrypt(a, "other-purpose") } catch (_: Exception) { rejected = true }
   assertTrue("Purpose mismatch must fail authentication", rejected)
  }
+ @Test fun largePayloadRoundTripsAndTamperingStillFails() {
+  val cipher = DeviceCipher()
+  val bytes = ByteArray(600000) { (it % 251).toByte() }
+  val envelope = cipher.encrypt(bytes, "large-test")
+  assertArrayEquals(bytes, cipher.decrypt(envelope, "large-test"))
+  val changed = JSONObject(envelope)
+  val encrypted = Base64.decode(changed.getString("ciphertext"), Base64.NO_WRAP)
+  encrypted[encrypted.size / 2] = (encrypted[encrypted.size / 2].toInt() xor 1).toByte()
+  changed.put("ciphertext", Base64.encodeToString(encrypted, Base64.NO_WRAP))
+  var rejected = false
+  try { cipher.decrypt(changed.toString(), "large-test") } catch (_: Exception) { rejected = true }
+  assertTrue(rejected)
+ }
  @Test fun migrationPreservesOldEventsAndEncryptsPayload() {
   val name = "test-migration-${UUID.randomUUID()}.db"
   val path = context.getDatabasePath(name).apply { parentFile!!.mkdirs() }

@@ -6,4 +6,6 @@ Receipt handling is transport-neutral and has no production caller. It validates
 
 No network transmission, endpoint, credentials, server receipt or simulated success button is enabled. All existing records remain pending in normal app use. Production integration still requires isolated staging identity, signed grants, authenticated transport, server idempotency/access tests, media handling and release signing. Existing Mercury apps and other repositories remain untouched. The white Jarvis-inspired visual redesign remains deferred.
 
-Validation pending: six unit tests, thirteen instrumented tests on API 28 and 35, build, lint and signature verification. Physical Fold6 testing remains pending.
+Validation pending: six unit tests, fourteen instrumented tests on API 28 and 35, build, lint and signature verification. Physical Fold6 testing remains pending.
+
+Initial validation caught an Android 9 Keystore failure on a large record. Cipher input is now submitted in bounded chunks with all decrypted output withheld until final authentication. A dedicated 600 KB round-trip/tamper regression test was added. Validation is pending the corrected build.

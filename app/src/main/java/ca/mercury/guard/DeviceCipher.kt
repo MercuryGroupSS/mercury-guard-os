@@ -4,6 +4,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -24,12 +25,24 @@ class DeviceCipher {
    }.generateKey()
   }
  }
+ // Keep individual Keystore calls bounded on older Android implementations. Return no
+ // decrypted bytes to callers until doFinal has authenticated the complete message.
+ private fun finish(cipher: Cipher, input: ByteArray): ByteArray {
+  val output = ByteArrayOutputStream()
+  var offset = 0
+  while (input.size - offset > 16384) {
+   cipher.update(input, offset, 16384)?.let { output.write(it) }
+   offset += 16384
+  }
+  output.write(cipher.doFinal(input, offset, input.size - offset))
+  return output.toByteArray()
+ }
  fun encrypt(plaintext: ByteArray, purpose: String): String {
   val cipher = Cipher.getInstance("AES/GCM/NoPadding")
   cipher.init(Cipher.ENCRYPT_MODE, key())
   cipher.updateAAD(purpose.toByteArray(Charsets.UTF_8))
   return JSONObject().put("v", 1).put("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-   .put("ciphertext", Base64.encodeToString(cipher.doFinal(plaintext), Base64.NO_WRAP)).toString()
+   .put("ciphertext", Base64.encodeToString(finish(cipher, plaintext), Base64.NO_WRAP)).toString()
  }
  fun decrypt(envelope: String, purpose: String): ByteArray {
   val value = JSONObject(envelope)
@@ -37,6 +50,6 @@ class DeviceCipher {
   val cipher = Cipher.getInstance("AES/GCM/NoPadding")
   cipher.init(Cipher.DECRYPT_MODE, key(create = false), GCMParameterSpec(128, Base64.decode(value.getString("iv"), Base64.NO_WRAP)))
   cipher.updateAAD(purpose.toByteArray(Charsets.UTF_8))
-  return cipher.doFinal(Base64.decode(value.getString("ciphertext"), Base64.NO_WRAP))
+  return finish(cipher, Base64.decode(value.getString("ciphertext"), Base64.NO_WRAP))
  }
 }
