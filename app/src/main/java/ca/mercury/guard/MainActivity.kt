@@ -32,7 +32,7 @@ class MainActivity : Activity() {
  private val expiryHandler = Handler(Looper.getMainLooper())
  private val expiryCheck = object : Runnable {
   override fun run() {
-   if (!shiftActive && currentPage in listOf("incident", "readiness", "active")) {
+   if (!shiftActive && currentPage in listOf("incident", "readiness", "active", "patrol")) {
     stopService(Intent(this@MainActivity, PatrolService::class.java)); showDashboard()
    }
    expiryHandler.postDelayed(this, 1000)
@@ -43,6 +43,7 @@ class MainActivity : Activity() {
   window.statusBarColor = navy; window.navigationBarColor = navy
   try {
    showDashboard()
+   if (shiftActive && savedInstanceState?.getString("page") == "patrol") showPatrol()
    if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident(savedInstanceState?.getString("draft").orEmpty())
    if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState?.getString("challenge"))
   } catch (_: Exception) {
@@ -101,14 +102,14 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.3 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.4 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events",13f,Color.LTGRAY))
   if(!active) {
    action("Start simulated authorized shift") { beginShift() }
    action("Device information") { showInfo() }
   } else {
-   action("Patrol · Begin checkpoint") { log("patrol_checkpoint",JSONObject().put("source","manual")) }
+   action("Patrol · Open demo route") { showPatrol() }
    action("Respond to readiness prompt") { showReadiness() }
    action("Capture photo evidence") { captureEvidence() }
    action("Incident report") { showIncident() }
@@ -137,6 +138,26 @@ class MainActivity : Activity() {
  }
  private fun endShift() {
   session.end(); stopService(Intent(this,PatrolService::class.java)); log("shift_ended_demo"); showDashboard()
+ }
+ private fun showPatrol() {
+  if (!shiftActive) { showDashboard(); return }
+  currentPage = "patrol"
+  val sessionId = session.identity()
+  val next = store.patrolProgress(sessionId)
+  heading("DEMO PATROL ROUTE", "Manual test route · no QR, NFC or physical presence verification")
+  root.addView(label("$next / ${DemoRoute.checkpoints.size} checkpoints recorded", 20f, cyan))
+  DemoRoute.checkpoints.forEachIndexed { i, name -> root.addView(label("${if (i < next) "✓" else "○"} $name")) }
+  if (next < DemoRoute.checkpoints.size) {
+   action("Record checkpoint: ${DemoRoute.checkpoints[next]}") {
+    try {
+     if (shiftActive && session.identity() == sessionId) store.recordCheckpoint(sessionId, next)
+     showPatrol()
+    } catch (_: Exception) {
+     Toast.makeText(this, "Checkpoint was not saved. Please try again.", Toast.LENGTH_LONG).show()
+    }
+   }
+  } else root.addView(label("Demo route complete. A new shift starts a new route."))
+  action("Return") { showDashboard() }
  }
  private fun showReadiness(restored: String? = null) {
   currentPage = "readiness"
