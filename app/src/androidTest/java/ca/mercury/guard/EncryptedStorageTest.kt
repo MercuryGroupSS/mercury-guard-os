@@ -53,6 +53,16 @@ class EncryptedStorageTest {
    assertEquals(2, db.count())
   } finally { db.close(); context.deleteDatabase(name) }
  }
+ @Test fun providerExposesOnlyTemporaryCaptureAndExportPaths() {
+  val capture = File(File(context.cacheDir, "capture"), "test.jpg")
+  val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", capture)
+  assertEquals("content", uri.scheme)
+  val protectedFile = File(File(context.noBackupFilesDir, "evidence"), "not-public.enc")
+  var rejected = false
+  try { androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", protectedFile) }
+  catch (_: IllegalArgumentException) { rejected = true }
+  assertTrue("Retained encrypted media must not be in the provider roots", rejected)
+ }
  @Test fun jpegEvidenceRoundTripsEncryptedAndRejectsInvalidFiles() {
   val file = File(context.cacheDir,"test-${UUID.randomUUID()}.jpg")
   val evidence = EvidenceStore(context)

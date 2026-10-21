@@ -46,6 +46,7 @@ class MainActivity : Activity() {
    if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident(savedInstanceState?.getString("draft").orEmpty())
    if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState?.getString("challenge"))
   } catch (_: Exception) {
+   currentPage = "storage_error"
    heading("LOCAL STORAGE UNAVAILABLE", "Encrypted data could not be opened. No records were erased.")
    root.addView(label("Restart the app or contact your administrator. Do not uninstall if you need to preserve records."))
   }
