@@ -1,4 +1,4 @@
-# Galaxy Z Fold6 test APK v0.7
+# Galaxy Z Fold6 test APK v0.8
 
 This APK is a removable offline prototype. It does not replace Android or connect to existing Mercury applications. Use synthetic test notes only.
 
@@ -17,6 +17,7 @@ Debug signing is for tests, not production updates. A fresh hosted runner may us
 - Start shift with location denied: incidents and patrol/check-in records still work.
 - Open the demo patrol route; record Main entrance, reopen the app, then record Perimeter and Control point. Verify progress is preserved and the completed route cannot be recorded again. End and start another shift; verify its route starts at zero. These manual entries do not prove physical presence.
 - Record a synthetic incident; rotate and fold/unfold; verify records persist. Incident drafts and readiness choices should also survive activity recreation. Type a synthetic draft, close/reopen the app and resume it. Cancel should keep it; Discard should require confirmation. Submit it once and verify one incident event and an empty draft. Drafts remain across demo shifts on this test device; there is no per-guard identity separation.
+- Open Device readiness before starting a shift: no GPS request should start. Verify precise-location, GPS provider and notification states against system settings. On Android 13+, request notifications explicitly and test both allow/deny; changing notifications must not grant location. During an active shift, retry GPS only through its button. Disable/re-enable GPS in settings and refresh; distinguish requesting updates from a received fix.
 - If location is granted, verify the system's foreground tracking indicator. End shift and confirm it stops; no further GPS events should be recorded.
 - Reboot: no tracking restarts and the session is invalidated.
 - Confirm notification behavior on the installed Android/One UI version, cover/inner display usability, large text, back navigation, and battery consumption.

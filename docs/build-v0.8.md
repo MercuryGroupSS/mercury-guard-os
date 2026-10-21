@@ -8,4 +8,6 @@ Android may run a foreground service even if notification permission is denied; 
 
 No production backend, network sync, management/enrollment, other repo or existing app changes. White Jarvis-inspired design remains deferred. Stable release signing remains pending.
 
-Validation pending: six unit tests and twenty-five device tests on each API 28 and 35, build, lint and signature verification. Automated coverage checks denied permissions and passive readiness viewing; real system permission-dialog choices and live GPS are not validated by those tests.
+Validation passed: six unit tests and twenty-five device tests on each API 28 and 35, build, lint and APK signature verification. Automated coverage checks denied permissions and passive readiness viewing; real system permission-dialog choices and live GPS are not validated by those tests.
+
+Source commit `ff522ba4f85012a21f1b4334e1467b83485df0d1`, [run 39626672617](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39626672617). APK SHA-256: `9f2602560d813f5b39fd3f64394fb5ea8e048bf1fadf7cb512bd66e30a2924a9`. Downloaded artifact digest and APK checksum were compared locally.

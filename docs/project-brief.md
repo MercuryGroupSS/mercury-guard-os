@@ -67,3 +67,8 @@ Android v0.6 adds encrypted draft autosave, resume after reopen, confirmed disca
 ## v1.8 continuation — local audit viewer
 
 Android v0.7 adds a read-only, paged local audit viewer and event detail recovery. Viewing neither records nor acknowledges events. Drafts remain excluded until submitted; photo records show metadata only. Six unit tests and twenty-two device tests on each API 28 and 35 passed in run 39624625205. See [v0.7 build](build-v0.7.md). The demo has no guard sign-in, live sync or server verification. Physical Fold6 validation, release signing and the deferred white Jarvis UI remain pending.
+
+
+## v1.9 continuation — device readiness
+
+Android v0.8 adds permission/provider/notification checks and process-local GPS request/fix observations. Notification permission and GPS retries require explicit actions; readiness viewing is passive. Six unit tests and twenty-five device tests on each API 28 and 35 passed in run 39626672617. See [v0.8 build](build-v0.8.md). Physical Fold6 permission-dialog/GPS/notification/background validation, backend integration, release signing and the deferred white Jarvis UI remain pending.
