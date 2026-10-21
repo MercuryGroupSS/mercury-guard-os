@@ -5,9 +5,9 @@
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
- <uses-permission android:name="android.permission.CAMERA"/>
+
  <application android:allowBackup="false" android:label="Mercury Guard" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.NoActionBar" android:supportsRtl="true">
-  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified" android:lockTaskMode="if_whitelisted">
+  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified" android:resizeableActivity="true" android:lockTaskMode="if_whitelisted">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
   </activity>
   <service android:name=".PatrolService" android:exported="false" android:foregroundServiceType="location"/>

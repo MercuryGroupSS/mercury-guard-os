@@ -10,15 +10,13 @@ import android.os.*
 import android.view.*
 import android.widget.*
 import org.json.JSONObject
-import java.text.SimpleDateFormat
-import java.util.*
 
 /** Phase 1 field prototype: standalone, with clearly marked local DEMO assignment. */
 class MainActivity : Activity() {
  private lateinit var root: LinearLayout
  private lateinit var store: GuardStore
- private val prefs by lazy { getSharedPreferences("mercury_demo", MODE_PRIVATE) }
- private var shiftActive: Boolean get() = prefs.getBoolean("shift", false); set(v) { prefs.edit().putBoolean("shift", v).apply() }
+ private val session by lazy { DemoSession(this) }
+ private val shiftActive get() = session.active()
  private val navy = Color.rgb(12,21,38)
  private val cyan = Color.rgb(63,193,255)
  private val bright = Color.WHITE
@@ -31,20 +29,25 @@ class MainActivity : Activity() {
   text = value; textSize = size; setTextColor(color); setPadding(0,12,0,12)
  }
  private fun action(title: String, block: () -> Unit) {
-  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { block() } }
+  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events") { showDashboard() } else block() } }
   root.addView(b, LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = 12 })
  }
  private fun heading(title: String, subtitle: String) {
-  val scroll = ScrollView(this).apply { setBackgroundColor(navy); fillViewport=true }
+  val scroll = ScrollView(this).apply { setBackgroundColor(navy); isFillViewport=true }
   root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(28,36,28,30) }
   scroll.addView(root); setContentView(scroll)
+  scroll.setOnApplyWindowInsetsListener { view, insets ->
+   view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
+   insets
+  }
+  scroll.requestApplyInsets()
   root.addView(label("◆ MERCURY  /  GUARD OS",24f,cyan))
   root.addView(label(title,26f)); root.addView(label(subtitle,13f,Color.LTGRAY))
  }
  private fun log(kind: String, details: JSONObject = JSONObject()) { store.record(kind,details); Toast.makeText(this,"Recorded: $kind",Toast.LENGTH_SHORT).show() }
  private fun showDashboard() {
   val active = shiftActive
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.1 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.2 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events",13f,Color.LTGRAY))
   if(!active) {
@@ -63,7 +66,7 @@ class MainActivity : Activity() {
   root.addView(label("No facial recognition, client messaging, payroll sync, or true remote management is enabled in this prototype.",12f,Color.LTGRAY))
  }
  private fun beginShift() {
-  shiftActive = true; log("shift_started_demo")
+  session.start(); log("shift_started_demo")
   if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
    requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),101)
   } else startTracking()
@@ -79,7 +82,7 @@ class MainActivity : Activity() {
   if(requestCode==101 && grantResults.isNotEmpty() && grantResults[0]==PackageManager.PERMISSION_GRANTED) startTracking()
  }
  private fun endShift() {
-  stopService(Intent(this,PatrolService::class.java)); log("shift_ended_demo"); shiftActive=false; showDashboard()
+  session.end(); stopService(Intent(this,PatrolService::class.java)); log("shift_ended_demo"); showDashboard()
  }
  private fun showReadiness() {
   heading("READINESS CHALLENGE", "Respond while on duty · visible, voluntary test")
@@ -112,5 +115,5 @@ class MainActivity : Activity() {
   val send=Intent(Intent.ACTION_SEND).apply { type="application/json"; putExtra(Intent.EXTRA_TEXT,store.exportJson()) }
   startActivity(Intent.createChooser(send,"Export demo audit trail"))
  }
- override fun onDestroy() { super.onDestroy() }
+ override fun onDestroy() { store.close(); super.onDestroy() }
 }
