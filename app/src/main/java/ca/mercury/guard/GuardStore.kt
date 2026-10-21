@@ -182,6 +182,22 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
    db.setTransactionSuccessful()
   } finally { db.endTransaction() }
  }
+ data class AuditEntry(val sequence: Long, val delivered: Boolean, val event: JSONObject)
+ /** Keyset pagination keeps newly inserted rows from shifting older pages. No mutations. */
+ fun auditPage(before: Long = Long.MAX_VALUE, limit: Int = 20): List<AuditEntry> {
+  require(before > 0 && limit in 1..50)
+  val result = mutableListOf<AuditEntry>()
+  readableDatabase.rawQuery("SELECT id,synced,body FROM event WHERE id<? ORDER BY id DESC LIMIT ?", arrayOf(before.toString(), limit.toString())).use { c ->
+   while (c.moveToNext()) result.add(AuditEntry(c.getLong(0), c.getInt(1) == 1, decodeEvent(c.getString(2))))
+  }
+  return result
+ }
+ fun auditEvent(sequence: Long): AuditEntry? {
+  require(sequence > 0)
+  return readableDatabase.rawQuery("SELECT id,synced,body FROM event WHERE id=?", arrayOf(sequence.toString())).use { c ->
+   if (c.moveToFirst()) AuditEntry(c.getLong(0), c.getInt(1) == 1, decodeEvent(c.getString(2))) else null
+  }
+ }
  fun count(): Int = readableDatabase.rawQuery("SELECT count(*) FROM event", null).use { if (it.moveToFirst()) it.getInt(0) else 0 }
  fun exportJson(): String {
   val all = org.json.JSONArray()

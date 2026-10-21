@@ -29,6 +29,8 @@ class MainActivity : Activity() {
  private val cyan = Color.rgb(63,193,255)
  private val bright = Color.WHITE
  private var currentPage = "dashboard"
+ private var auditBefore = Long.MAX_VALUE
+ private var auditSequence = 0L
  private var incidentInput: EditText? = null
  private var challengeExpected: String? = null
  private val localPrefs by lazy { getSharedPreferences("mercury_local", MODE_PRIVATE) }
@@ -46,6 +48,9 @@ class MainActivity : Activity() {
   window.statusBarColor = navy; window.navigationBarColor = navy
   try {
    showDashboard()
+   auditBefore = savedInstanceState?.getLong("audit_before", Long.MAX_VALUE) ?: Long.MAX_VALUE
+   if (savedInstanceState?.getString("page") == "audit") showAudit(auditBefore)
+   if (savedInstanceState?.getString("page") == "audit_detail") showAuditDetail(savedInstanceState.getLong("audit_sequence"))
    if (shiftActive && savedInstanceState?.getString("page") == "patrol") showPatrol()
    if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident()
    if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState?.getString("challenge"))
@@ -63,6 +68,8 @@ class MainActivity : Activity() {
  }
  override fun onSaveInstanceState(outState: Bundle) {
   outState.putString("page", currentPage)
+  outState.putLong("audit_before", auditBefore)
+  outState.putLong("audit_sequence", auditSequence)
   outState.putString("challenge", challengeExpected)
   super.onSaveInstanceState(outState)
  }
@@ -75,7 +82,7 @@ class MainActivity : Activity() {
   text = value; textSize = size; setTextColor(color); setPadding(0,12,0,12)
  }
  private fun action(title: String, block: () -> Unit) {
-  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events") { showDashboard() } else block() } }
+  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events" && title != "Review local audit events" && currentPage !in listOf("audit", "audit_detail")) { showDashboard() } else block() } }
   root.addView(b, LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = 12 })
  }
  private fun heading(title: String, subtitle: String) {
@@ -104,7 +111,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.6 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.7 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -120,6 +127,7 @@ class MainActivity : Activity() {
    action("Shift check-in") { log("guard_check_in") }
    action("End shift and stop GPS") { endShift() }
   }
+  action("Review local audit events") { showAudit() }
   action("Export local audit events") { shareEvents() }
   root.addView(label("Photos are encrypted locally. Identity/uniform verification, live dispatch, payroll sync and remote management are not enabled.",12f,Color.LTGRAY))
  }
@@ -266,6 +274,40 @@ class MainActivity : Activity() {
      catch (_: Exception) { status.text = "Draft could not be discarded. Please retry." }
     }.show()
   }
+ }
+ private fun showAudit(before: Long = Long.MAX_VALUE) {
+  currentPage = "audit"; auditBefore = before
+  heading("LOCAL AUDIT", "Read-only local records · sync disabled · device timestamps are not server verified")
+  root.addView(label("This demo has no guard sign-in. Anyone using this test installation can review its saved records. Use synthetic data only.",12f,Color.LTGRAY))
+  try {
+   val entries = store.auditPage(before)
+   if (entries.isEmpty()) root.addView(label("No records on this page."))
+   entries.forEach { entry ->
+    val kind = entry.event.getString("kind").take(80)
+    action("Event #${entry.sequence} · $kind") { showAuditDetail(entry.sequence) }
+    root.addView(label("${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(entry.event.getLong("at")))} · ${if (entry.delivered) "Acknowledged locally" else "Pending · sync disabled"}",12f,Color.LTGRAY))
+   }
+   if (entries.size == 20) action("Older records") { showAudit(entries.last().sequence) }
+   if (before != Long.MAX_VALUE) action("Newest records") { showAudit() }
+  } catch (_: Exception) { root.addView(label("Records could not be opened. Stored data was preserved.")) }
+  action("Return") { showDashboard() }
+ }
+ private fun showAuditDetail(sequence: Long) {
+  currentPage = "audit_detail"; auditSequence = sequence
+  heading("AUDIT EVENT", "Read-only · local demo record · no server verification")
+  try {
+   val entry = store.auditEvent(sequence)
+   if (entry == null) root.addView(label("Record is unavailable."))
+   else {
+    root.addView(label("Event #${entry.sequence} · ${entry.event.getString("kind").take(80)}",20f,cyan))
+    root.addView(label(if (entry.delivered) "Acknowledged locally; this screen does not authenticate a server receipt." else "Pending · sync disabled",13f,Color.LTGRAY))
+    val detail = entry.event.toString(2)
+    root.addView(label(detail.take(16000),14f))
+    if (detail.length > 16000) root.addView(label("Display limited to 16,000 characters. The stored record is unchanged; use audit export for full content.",12f,Color.LTGRAY))
+    if (entry.event.getString("kind") == "photo_evidence") root.addView(label("This record contains photo metadata. Retained encrypted images are not displayed or exported here.",12f,Color.LTGRAY))
+   }
+  } catch (_: Exception) { root.addView(label("Record could not be opened. Stored data was preserved.")) }
+  action("Back to audit") { showAudit(auditBefore) }
  }
  private fun showInfo() {
   currentPage = "info"
