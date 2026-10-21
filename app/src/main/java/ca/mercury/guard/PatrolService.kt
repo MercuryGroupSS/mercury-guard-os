@@ -32,7 +32,7 @@ class PatrolService : Service() {
   nm.createNotificationChannel(NotificationChannel("mercury_shift", "Active guard shift", NotificationManager.IMPORTANCE_LOW))
   val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
   val note = Notification.Builder(this, "mercury_shift").setContentTitle("Mercury Guard · Demo shift")
-   .setContentText("Work-time GPS active · open app to end shift").setContentIntent(open)
+   .setContentText("Demo GPS requested · open app to check status or end shift").setContentIntent(open)
    .setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
   try {
    if (Build.VERSION.SDK_INT >= 29) startForeground(701, note, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -42,6 +42,7 @@ class PatrolService : Service() {
    listener = object : LocationListener {
     override fun onLocationChanged(loc: Location) {
      if (session.active() && hasLocation()) {
+      TrackingStatus.lastFixElapsed = SystemClock.elapsedRealtime()
       recordSafely("gps", JSONObject().put("latitude",loc.latitude).put("longitude",loc.longitude).put("accuracy_m",loc.accuracy).put("mock",loc.isFromMockProvider))
      } else stopSelf()
     }
@@ -51,6 +52,7 @@ class PatrolService : Service() {
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
    }
    manager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 30000L, 15f, listener!!)
+   TrackingStatus.requesting = true
    handler.post(expiryCheck)
   } catch (e: SecurityException) { recordSafely("gps_permission_missing"); stopSelf() }
     catch (e: IllegalArgumentException) { recordSafely("gps_unavailable"); stopSelf() }
@@ -60,6 +62,7 @@ class PatrolService : Service() {
  }
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
  override fun onDestroy() {
+  TrackingStatus.stopped()
   handler.removeCallbacksAndMessages(null)
   try { listener?.let { manager?.removeUpdates(it) } } catch (_: SecurityException) { /* Permission was revoked. */ }
   stopForeground(STOP_FOREGROUND_REMOVE)

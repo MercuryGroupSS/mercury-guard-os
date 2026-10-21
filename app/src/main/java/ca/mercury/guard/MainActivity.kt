@@ -49,6 +49,7 @@ class MainActivity : Activity() {
   try {
    showDashboard()
    auditBefore = savedInstanceState?.getLong("audit_before", Long.MAX_VALUE) ?: Long.MAX_VALUE
+   if (savedInstanceState?.getString("page") == "device_readiness") showDeviceReadiness()
    if (savedInstanceState?.getString("page") == "audit") showAudit(auditBefore)
    if (savedInstanceState?.getString("page") == "audit_detail") showAuditDetail(savedInstanceState.getLong("audit_sequence"))
    if (shiftActive && savedInstanceState?.getString("page") == "patrol") showPatrol()
@@ -75,6 +76,7 @@ class MainActivity : Activity() {
  }
  override fun onResume() {
   super.onResume(); expiryHandler.post(expiryCheck)
+  if (currentPage == "device_readiness") showDeviceReadiness()
   File(cacheDir, "exports").listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 3600000L }?.forEach { it.delete() }
  }
  override fun onPause() { expiryHandler.removeCallbacksAndMessages(null); super.onPause() }
@@ -82,7 +84,7 @@ class MainActivity : Activity() {
   text = value; textSize = size; setTextColor(color); setPadding(0,12,0,12)
  }
  private fun action(title: String, block: () -> Unit) {
-  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events" && title != "Review local audit events" && currentPage !in listOf("audit", "audit_detail")) { showDashboard() } else block() } }
+  val b = Button(this).apply { text = title; isAllCaps = false; setTextColor(navy); setBackgroundTintList(android.content.res.ColorStateList.valueOf(cyan)); setOnClickListener { if (title != "End shift and stop GPS" && title != "Start simulated authorized shift" && !shiftActive && title != "Device information" && title != "Return" && title != "Export local audit events" && title != "Review local audit events" && title != "Device readiness" && currentPage !in listOf("audit", "audit_detail", "device_readiness")) { showDashboard() } else block() } }
   root.addView(b, LinearLayout.LayoutParams(-1,-2).apply { bottomMargin = 12 })
  }
  private fun heading(title: String, subtitle: String) {
@@ -111,7 +113,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.7 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.8 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -127,6 +129,7 @@ class MainActivity : Activity() {
    action("Shift check-in") { log("guard_check_in") }
    action("End shift and stop GPS") { endShift() }
   }
+  action("Device readiness") { showDeviceReadiness() }
   action("Review local audit events") { showAudit() }
   action("Export local audit events") { shareEvents() }
   root.addView(label("Photos are encrypted locally. Identity/uniform verification, live dispatch, payroll sync and remote management are not enabled.",12f,Color.LTGRAY))
@@ -146,6 +149,7 @@ class MainActivity : Activity() {
  override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
   super.onRequestPermissionsResult(requestCode,permissions,grantResults)
   if(requestCode==101 && grantResults.isNotEmpty() && grantResults[0]==PackageManager.PERMISSION_GRANTED) startTracking()
+  if (currentPage == "device_readiness" && requestCode in listOf(101,303)) showDeviceReadiness()
  }
  private fun endShift() {
   session.end(); stopService(Intent(this,PatrolService::class.java)); log("shift_ended_demo"); showDashboard()
@@ -308,6 +312,34 @@ class MainActivity : Activity() {
    }
   } catch (_: Exception) { root.addView(label("Record could not be opened. Stored data was preserved.")) }
   action("Back to audit") { showAudit(auditBefore) }
+ }
+ private fun showDeviceReadiness() {
+  currentPage = "device_readiness"
+  val readiness = DeviceReadiness(this)
+  heading("DEVICE READINESS", "Read-only checks · permission changes require your choice")
+  root.addView(label("Precise location: ${if (readiness.preciseLocationGranted()) "granted" else "not granted"}"))
+  root.addView(label("Device GPS: ${if (readiness.gpsEnabled()) "enabled" else "disabled or unavailable"}"))
+  root.addView(label("Shift notifications: ${if (readiness.notificationsEnabled()) "enabled" else "blocked or not granted"}"))
+  root.addView(label(readiness.trackingDescription(), 16f, cyan))
+  root.addView(label("A location request does not prove a current fix or physical presence. Notification permission does not grant location access. If notifications are blocked, Android may still run a foreground location service; check system indicators. Photos, notes and manual checkpoints work without location.",12f,Color.LTGRAY))
+  if (Build.VERSION.SDK_INT >= 33 && !readiness.notificationPermissionGranted()) action("Request notification permission") {
+   requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS),303)
+  }
+  action("Open notification settings") {
+   try { startActivity(Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)) }
+   catch (_: Exception) { Toast.makeText(this,"Notification settings are unavailable.",Toast.LENGTH_SHORT).show() }
+  }
+  action("Open location settings") {
+   try { startActivity(Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+   catch (_: Exception) { Toast.makeText(this,"Location settings are unavailable.",Toast.LENGTH_SHORT).show() }
+  }
+  if (shiftActive) action("Request GPS for active demo shift") {
+   if (!shiftActive) { showDeviceReadiness() }
+   else if (!readiness.preciseLocationGranted()) requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),101)
+   else { startTracking(); showDeviceReadiness() }
+  }
+  action("Refresh readiness") { showDeviceReadiness() }
+  action("Return") { showDashboard() }
  }
  private fun showInfo() {
   currentPage = "info"
