@@ -32,3 +32,8 @@ Automated device tests cover encrypted round-trip, independent IVs, ciphertext t
 ## v0.5 offline outbox
 
 Schema v3 assigns stable UUIDs inside encrypted payloads, including migrated records. Durable outbox contents use the same Android Keystore key with a distinct purpose string. Row order, delivery flags and record counts remain visible; sequence values are local database row IDs, not a cross-device identity. Migration is transactional and preserves logical events. The server-authentication and device-signature layers are not implemented. Receipt membership checks protect local queue consistency only; a future authenticated transport must validate receipts before calling acknowledgement. No production UI or network caller can mark records delivered in this build. Accepted test records remain in the audit history.
+
+
+## v0.6 durable incident drafts
+
+A single device-local draft is encrypted in the database using a distinct purpose string under the existing Keystore key. Saved draft text is excluded from audit export/outbox and Activity saved-instance state. The editor disables automatic hierarchy state saving. Submission inserts the audit event and clears the draft transactionally; a failed insert preserves it. Corrupt/unreadable draft storage blocks opening and is not automatically replaced. Drafts persist across demo shifts until submitted, cleared or explicitly discarded, so this prototype does not provide guard identity separation. Use synthetic data only. Autosave errors are shown; unsaved keystrokes cannot be guaranteed after forced process termination. Screen/keyboard/app-memory exposure, manual retention and key-loss recovery remain production concerns.

@@ -6,4 +6,6 @@ Submitting reads the saved draft, inserts one encrypted incident event and delet
 
 Migration creates the draft table without replacing existing events/outbox batches. No network transport, credentials, production backend, phone management, other repositories or existing applications are changed. White Jarvis-inspired styling remains deferred.
 
-Validation pending: six unit tests and nineteen device tests on each API 28 and 35, build, lint and signature verification. Physical Fold6 testing remains pending. Stable release signing is still required for predictable in-place updates.
+Validation passed: six unit tests and nineteen device tests on each API 28 and 35, build, lint and APK signature verification. Physical Fold6 testing remains pending. Stable release signing is still required for predictable in-place updates.
+
+Source commit `4a0891fe291089c3c5593c540e26fda4917d3cc0`, [run 39623542785](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39623542785). APK SHA-256: `4090a1fc79e7ae1d58bae900b2b1a51b6f2ec904fee5d704dfe40166f10b3784`. Downloaded artifact digest and APK checksum were compared locally.
