@@ -40,3 +40,10 @@ A dedicated-device experience can use DPC-allowlisted lock task mode, with manag
 ## Test build delivery
 
 Installable debug APK: `ca.mercury.guard`, version 0.2.0 (2), minimum Android 9/API 28, target API 35. No native ABI-specific libraries. Compiled APK and checksum are delivered with the Fold6 test guide. Debug signing is unsuitable for production updates; stable release signing and physical Fold6 acceptance are still required. This milestone is an emulator-tested standalone prototype, not completion of the production Guard ecosystem.
+
+
+## Continuation v1.4 — app v0.3
+
+The user approved continuing core functionality before a later clean, futuristic white Jarvis-inspired UI redesign. The Mac browser simulation still represents v0.2. See [v0.3 build continuation](build-v0.3.md), [local data security](local-data-security.md), and [proposed staging contract](staging-integration-contract.md).
+
+New code encrypts retained event payloads and photos under Android Keystore; migrates existing logical demo records; adds a user-confirmed camera workflow and file-based audit export; preserves incident drafts/readiness choices during activity recreation; expires foreground shift screens; and stops GPS on protected-storage failure. No live backend, identity or uniform verification, fleet management, or production release signing is implemented by these changes. Test evidence and the exact APK checksum will be recorded in the continuation brief.
