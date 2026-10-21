@@ -6,10 +6,14 @@
  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>
  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
+ <queries><intent><action android:name="android.media.action.IMAGE_CAPTURE"/></intent></queries>
  <application android:allowBackup="false" android:label="Mercury Guard" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.NoActionBar" android:supportsRtl="true">
   <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified" android:resizeableActivity="true" android:lockTaskMode="if_whitelisted">
    <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
   </activity>
+  <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">
+   <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/shared_paths"/>
+  </provider>
   <service android:name=".PatrolService" android:exported="false" android:foregroundServiceType="location"/>
   <receiver android:name=".MercuryDeviceAdmin" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">
    <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin"/>

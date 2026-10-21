@@ -41,6 +41,27 @@ class GuardFlowTest {
    assertFalse(DemoSession(c).active())
   }
  }
+ @Test fun unfinishedIncidentSurvivesRecreation() {
+  val c = InstrumentationRegistry.getInstrumentation().targetContext
+  DemoSession(c).start()
+  ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+   onView(withText("Incident report")).perform(scrollTo(), click())
+   onView(withHint("Describe the incident")).perform(replaceText("UNSAVED TEST DRAFT"), closeSoftKeyboard())
+   scenario.recreate()
+   onView(withHint("Describe the incident")).check(matches(withText("UNSAVED TEST DRAFT")))
+   onView(withText("Cancel")).perform(scrollTo(), click())
+  }
+ }
+ @Test fun photoConsentCanBeCancelledWithoutOpeningCamera() {
+  val c = InstrumentationRegistry.getInstrumentation().targetContext
+  DemoSession(c).start()
+  ActivityScenario.launch(MainActivity::class.java).use {
+   onView(withText("Capture photo evidence")).perform(scrollTo(), click())
+   onView(withText("Capture test photo")).check(matches(isDisplayed()))
+   onView(withText("Cancel")).perform(click())
+   onView(withText("ACTIVE SHIFT")).check(matches(isDisplayed()))
+  }
+ }
  @Test fun queueRoundTripsJson() {
   val c = InstrumentationRegistry.getInstrumentation().targetContext
   val db = GuardStore(c)
