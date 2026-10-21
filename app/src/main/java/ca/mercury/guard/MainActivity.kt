@@ -113,7 +113,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.8 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.9 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -345,6 +345,7 @@ class MainActivity : Activity() {
   currentPage = "info"
   heading("DEVICE MANAGEMENT","Read-only device capabilities")
   val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+  root.addView(label("Server shift authorization: disabled · no staging issuer or trusted key configured",13f,Color.LTGRAY))
   root.addView(label("Manufacturer: ${Build.MANUFACTURER}\nModel: ${Build.MODEL}\nAndroid: ${Build.VERSION.RELEASE}\nManaged device owner: ${dpm.isDeviceOwnerApp(packageName)}\nKiosk allowlisted: ${dpm.isLockTaskPermitted(packageName)}\nTracking: only during active demo shifts"))
   action("Return") { showDashboard() }
  }
