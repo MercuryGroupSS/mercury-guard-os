@@ -1,4 +1,4 @@
-# Galaxy Z Fold6 test APK v0.6
+# Galaxy Z Fold6 test APK v0.7
 
 This APK is a removable offline prototype. It does not replace Android or connect to existing Mercury applications. Use synthetic test notes only.
 
@@ -21,6 +21,7 @@ Debug signing is for tests, not production updates. A fresh hosted runner may us
 - Reboot: no tracking restarts and the session is invalidated.
 - Confirm notification behavior on the installed Android/One UI version, cover/inner display usability, large text, back navigation, and battery consumption.
 - Capture a synthetic test photo: confirm camera opening, take and accept the photo, then verify the photo_evidence event in audit export. No identity/uniform verification or upload occurs. Cancel a second capture and verify it is not retained. Physical camera behavior is unverified until this test.
+- Open Review local audit events from standby and active shift. Open an incident record, rotate/fold and verify detail recovery. Browse Older records and Newest records when enough events exist. Review must not change event or pending counts. Drafts must not appear before submission; photo records show metadata only.
 - Export audit JSON after reading the decrypted-export disclosure, using Android's share chooser to a destination you choose. Photos are excluded.
 
 Passing emulator tests does not establish Fold6 hardware compatibility. Record model, Android/One UI version, test steps and failures before fleet use.

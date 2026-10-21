@@ -37,3 +37,8 @@ Schema v3 assigns stable UUIDs inside encrypted payloads, including migrated rec
 ## v0.6 durable incident drafts
 
 A single device-local draft is encrypted in the database using a distinct purpose string under the existing Keystore key. Saved draft text is excluded from audit export/outbox and Activity saved-instance state. The editor disables automatic hierarchy state saving. Submission inserts the audit event and clears the draft transactionally; a failed insert preserves it. Corrupt/unreadable draft storage blocks opening and is not automatically replaced. Drafts persist across demo shifts until submitted, cleared or explicitly discarded, so this prototype does not provide guard identity separation. Use synthetic data only. Autosave errors are shown; unsaved keystrokes cannot be guaranteed after forced process termination. Screen/keyboard/app-memory exposure, manual retention and key-loss recovery remain production concerns.
+
+
+## v0.7 local audit review
+
+The read-only viewer decrypts a bounded page of submitted events in app memory and displays event details, including potentially sensitive notes and GPS fields. It does not alter delivery flags or create events. Drafts remain excluded. The viewer is available in standby because this test app has no production guard authentication; the screen explicitly warns that anyone using the installation can read records. Production needs authenticated guard/site scope, screen protection and retention policy before real operational data is used. Physical presence, server acknowledgement authentication and immutable history are not established by these records.
