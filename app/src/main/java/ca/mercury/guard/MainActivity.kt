@@ -35,12 +35,17 @@ class MainActivity : Activity() {
  private fun heading(title: String, subtitle: String) {
   val scroll = ScrollView(this).apply { setBackgroundColor(navy); isFillViewport=true }
   root = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(28,36,28,30) }
-  scroll.addView(root); setContentView(scroll)
-  scroll.setOnApplyWindowInsetsListener { view, insets ->
+  scroll.addView(root)
+  val frame = FrameLayout(this).apply {
+   setBackgroundColor(navy)
+   addView(scroll, FrameLayout.LayoutParams(-1, -1))
+  }
+  setContentView(frame)
+  frame.setOnApplyWindowInsetsListener { view, insets ->
    view.setPadding(insets.systemWindowInsetLeft, insets.systemWindowInsetTop, insets.systemWindowInsetRight, insets.systemWindowInsetBottom)
    insets
   }
-  scroll.requestApplyInsets()
+  frame.requestApplyInsets()
   root.addView(label("◆ MERCURY  /  GUARD OS",24f,cyan))
   root.addView(label(title,26f)); root.addView(label(subtitle,13f,Color.LTGRAY))
  }

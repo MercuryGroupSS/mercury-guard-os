@@ -34,7 +34,8 @@ class GuardFlowTest {
    onView(withText("Save incident")).perform(scrollTo(), click())
    s.recreate()
    onView(withText("ACTIVE SHIFT")).check(matches(isDisplayed()))
-   GuardStore(c).use { assertTrue(it.exportJson().contains("AUTOMATED TEST incident")) }
+   val db = GuardStore(c)
+   try { assertTrue(db.exportJson().contains("AUTOMATED TEST incident")) } finally { db.close() }
    onView(withText("End shift and stop GPS")).perform(scrollTo(), click())
    onView(withText("DEVICE STANDBY")).check(matches(isDisplayed()))
    assertFalse(DemoSession(c).active())
@@ -42,9 +43,10 @@ class GuardFlowTest {
  }
  @Test fun queueRoundTripsJson() {
   val c = InstrumentationRegistry.getInstrumentation().targetContext
-  GuardStore(c).use { db ->
+  val db = GuardStore(c)
+  try {
    db.record("test", JSONObject().put("description", "Quotes: \" & Unicode ◆"))
    assertTrue(db.exportJson().contains("Unicode ◆"))
-  }
+  } finally { db.close() }
  }
 }
