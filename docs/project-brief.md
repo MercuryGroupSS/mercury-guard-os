@@ -72,3 +72,8 @@ Android v0.7 adds a read-only, paged local audit viewer and event detail recover
 ## v1.9 continuation — device readiness
 
 Android v0.8 adds permission/provider/notification checks and process-local GPS request/fix observations. Notification permission and GPS retries require explicit actions; readiness viewing is passive. Six unit tests and twenty-five device tests on each API 28 and 35 passed in run 39626672617. See [v0.8 build](build-v0.8.md). Physical Fold6 permission-dialog/GPS/notification/background validation, backend integration, release signing and the deferred white Jarvis UI remain pending.
+
+
+## v2.0 continuation — signed-grant verification foundation
+
+Android v0.9 adds a separate staging signed-grant verifier and scoped monotonic action gate. Fixed trusted-key RSA-SHA256 signatures, exact bindings/actions, malformed inputs, expiry and reboot/rollback checks passed in the test suite. Six unit tests and thirty-one device tests on each API 28 and 35 passed in run 39666296794. See [v0.9 protocol and limits](build-v0.9.md). There is no configured production issuer/key, authenticated identity/time source or transport. DemoSession remains explicitly simulated and does not consume grants. Staging integration, protocol review, release signing, physical Fold6 tests and the deferred white Jarvis UI remain pending.

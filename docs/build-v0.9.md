@@ -12,4 +12,6 @@ The initial provisional grant lifetime is capped at 15 minutes. Issued time <= n
 
 Test signing keys are generated at test runtime and are not installed as trusted app keys. Empty/unknown key trust rejects grants. No existing apps/repositories, phone state, cloud resources or credentials are changed. White Jarvis-inspired styling remains deferred.
 
-Validation pending: six unit tests and thirty-one instrumented tests on each API 28 and 35, build, lint and signature verification. Physical Fold6 testing, production signing and authenticated staging integration remain pending.
+Validation passed: six unit tests and thirty-one instrumented tests on each API 28 and 35, build, lint and APK signature verification. Physical Fold6 testing, production signing and authenticated staging integration remain pending.
+
+Source commit `3d2ea6edfaf52315dd54374b414ad406a2c549a9`, [run 39666296794](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39666296794). APK SHA-256: `6cef1a06c91f5a6d7fcf28a988e1ff3612ca3a690edabd8586d8a62ee26c095d`. Downloaded artifact digest and APK checksum were compared locally.
