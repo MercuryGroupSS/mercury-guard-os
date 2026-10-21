@@ -2,6 +2,7 @@ package ca.mercury.guard
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
 import android.app.admin.DevicePolicyManager
 import android.content.*
 import android.content.pm.PackageManager
@@ -42,8 +43,8 @@ class MainActivity : Activity() {
   window.statusBarColor = navy; window.navigationBarColor = navy
   try {
    showDashboard()
-   if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident(savedInstanceState.getString("draft", ""))
-   if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState.getString("challenge"))
+   if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident(savedInstanceState?.getString("draft").orEmpty())
+   if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState?.getString("challenge"))
   } catch (_: Exception) {
    heading("LOCAL STORAGE UNAVAILABLE", "Encrypted data could not be opened. No records were erased.")
    root.addView(label("Restart the app or contact your administrator. Do not uninstall if you need to preserve records."))
