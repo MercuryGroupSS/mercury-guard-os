@@ -1,4 +1,4 @@
-# Mercury Guard OS — Android prototype v0.4
+# Mercury Guard OS — Android prototype v0.5
 
 Native Kotlin Android prototype for Samsung Galaxy Z Fold6, with portable Pixel-compatible APIs. This is **not** an actual replacement operating system, production guard tracking system, or production-ready deployment. See GitHub Actions for the current build/test result.
 
@@ -6,6 +6,7 @@ Native Kotlin Android prototype for Samsung Galaxy Z Fold6, with portable Pixel-
 - Mercury-branded native UI: standby, simulated shift, active shift, ordered persistent demo patrol, readiness challenge, incident note, dispatch acknowledgement, check-in, end shift
 - Opt-in visible foreground-service GPS during a simulated shift; 30-second / 15-metre requests (Android may throttle); stops at end/expiry and never resumes after reboot
 - Encrypted local SQLite event payloads using a per-install Android Keystore key; user-confirmed JSON file export
+- Durable encrypted outbox with stable event IDs and local receipt validation; network sync remains disabled
 - User-confirmed camera photo capture with encrypted local retention and hashed event metadata
 - Incident drafts and readiness choices preserved through activity recreation
 - Device-owner and kiosk capability inspection (read-only)
@@ -18,7 +19,7 @@ Production server-side shift authorization; secure authentication; biometric/liv
 
 ## Build
 
-The original v0.1 source was recovered unchanged in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Current changes add compilation fixes, bounded demo sessions, local encryption, photo capture and automated tests. See [v0.4 continuation](docs/build-v0.4.md). See [development brief](docs/project-brief.md) and [Fold6 test guide](docs/fold6-test-guide.md).
+The original v0.1 source was recovered unchanged in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Current changes add compilation fixes, bounded demo sessions, local encryption, photo capture and automated tests. See [v0.5 continuation](docs/build-v0.5.md). See [development brief](docs/project-brief.md) and [Fold6 test guide](docs/fold6-test-guide.md).
 
 Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`. APK appears in `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions build workflow provided. Android developer installation: enable permitted app sideloading, install debug APK; **no root, flash, factory reset, or system takeover**.
 

@@ -52,3 +52,8 @@ New code encrypts retained event payloads and photos under Android Keystore; mig
 ## v1.5 continuation — ordered demo patrol
 
 Android v0.4 adds three ordered manual demo checkpoints with encrypted progress persistence, shift isolation and transactional duplicate protection. Six unit tests and ten device tests on each API 28 and 35 passed. See [v0.4 build](build-v0.4.md). Physical presence verification, live backend, release signing and Fold6 hardware testing remain pending. White futuristic Jarvis-inspired styling is deferred.
+
+
+## v1.6 continuation — encrypted offline outbox
+
+Android v0.5 adds stable event IDs, transactional v3 migration, durable encrypted batches, partial-receipt handling and pending counts. Large cipher input now uses bounded chunks after Android 9 regression testing found a failure. Corrected run 39622096255 passed six unit and fourteen device tests on each API 28 and 35. See [v0.5 build](build-v0.5.md). No transport, server authentication or production connection is enabled. Release signing, physical Fold6 testing and the deferred white Jarvis UI remain pending.

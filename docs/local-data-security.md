@@ -27,3 +27,8 @@ Automated device tests cover encrypted round-trip, independent IVs, ciphertext t
 - [Android cryptography](https://developer.android.com/privacy-and-security/cryptography)
 - [Android FileProvider](https://developer.android.com/reference/androidx/core/content/FileProvider)
 - [Camera intent workflow](https://developer.android.com/media/camera/camera-deprecated/photobasics)
+
+
+## v0.5 offline outbox
+
+Schema v3 assigns stable UUIDs inside encrypted payloads, including migrated records. Durable outbox contents use the same Android Keystore key with a distinct purpose string. Row order, delivery flags and record counts remain visible; sequence values are local database row IDs, not a cross-device identity. Migration is transactional and preserves logical events. The server-authentication and device-signature layers are not implemented. Receipt membership checks protect local queue consistency only; a future authenticated transport must validate receipts before calling acknowledgement. No production UI or network caller can mark records delivered in this build. Accepted test records remain in the audit history.

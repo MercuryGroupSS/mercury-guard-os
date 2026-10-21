@@ -22,3 +22,10 @@ This is a design contract for the next implementation phase, not a live service 
 ## Open before connection
 
 Choose the isolated staging service/identity provider, define dashboard-compatible schemas and ownership, select allowed offline durations, handle credential recovery, and test unauthorized/cross-site/replay access. Existing production dashboard security must be reviewed through a separately authorized integration change before sensitive telemetry is connected. Until then the APK stays explicitly demo-only and sends nothing to existing Mercury applications.
+
+
+## Implemented client foundation in v0.5
+
+The local queue now provides stable per-event UUIDs, local row sequence, encrypted persistent batches and validated transactional receipt application. Retrying before a receipt returns the same batch ID and content. A partial receipt produces a new batch ID containing remaining events with their original event IDs; the server must deduplicate by event ID as well as batch ID. Stale batch receipts are rejected locally. No records are deleted on acknowledgement. Batch selection is limited to 100 events and a 256 KiB event-data budget. Oversized records need a future explicit resolution policy.
+
+This remains transport-neutral: no endpoint, credentials, server signature validation, enrollment, signed device events, background scheduler or live network sync is present. The schema version is provisional for an isolated staging contract, not evidence of compatibility with any existing Mercury application.

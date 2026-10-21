@@ -6,6 +6,8 @@ Receipt handling is transport-neutral and has no production caller. It validates
 
 No network transmission, endpoint, credentials, server receipt or simulated success button is enabled. All existing records remain pending in normal app use. Production integration still requires isolated staging identity, signed grants, authenticated transport, server idempotency/access tests, media handling and release signing. Existing Mercury apps and other repositories remain untouched. The white Jarvis-inspired visual redesign remains deferred.
 
-Validation pending: six unit tests, fourteen instrumented tests on API 28 and 35, build, lint and signature verification. Physical Fold6 testing remains pending.
+Validation passed: six unit tests, fourteen instrumented tests on each API 28 and 35, build, lint and APK signature verification. Physical Fold6 testing remains pending.
 
-Initial validation caught an Android 9 Keystore failure on a large record. Cipher input is now submitted in bounded chunks with all decrypted output withheld until final authentication. A dedicated 600 KB round-trip/tamper regression test was added. Validation is pending the corrected build.
+Initial validation caught an Android 9 Keystore failure on a large record. Cipher input is now submitted in bounded chunks with all decrypted output withheld until final authentication. A dedicated 600 KB round-trip/tamper regression test was added. Corrected validation passed in [run 39622096255](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39622096255) at commit `9087bec9da72bcaa825700790b78975e12b63586`.
+
+APK SHA-256: `5e7535cd8fadf3ec295b0d00a5ce09deba9e124b67e38d5e12c68ac812fa55e2`. Downloaded artifact digest and APK checksum were compared locally.
