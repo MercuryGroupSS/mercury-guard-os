@@ -47,3 +47,8 @@ Installable debug APK: `ca.mercury.guard`, version 0.2.0 (2), minimum Android 9/
 The user approved continuing core functionality before a later clean, futuristic white Jarvis-inspired UI redesign. The Mac browser simulation still represents v0.2. See [v0.3 build continuation](build-v0.3.md), [local data security](local-data-security.md), and [proposed staging contract](staging-integration-contract.md).
 
 New code encrypts retained event payloads and photos under Android Keystore; migrates existing logical demo records; adds a user-confirmed camera workflow and file-based audit export; preserves incident drafts/readiness choices during activity recreation; expires foreground shift screens; and stops GPS on protected-storage failure. No live backend, identity or uniform verification, fleet management, or production release signing is implemented by these changes. Test evidence and the exact APK checksum will be recorded in the continuation brief.
+
+
+## v1.5 continuation — ordered demo patrol
+
+Android v0.4 adds three ordered manual demo checkpoints with encrypted progress persistence, shift isolation and transactional duplicate protection. Six unit tests and ten device tests on each API 28 and 35 passed. See [v0.4 build](build-v0.4.md). Physical presence verification, live backend, release signing and Fold6 hardware testing remain pending. White futuristic Jarvis-inspired styling is deferred.
