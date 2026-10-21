@@ -10,6 +10,9 @@ import android.graphics.Color
 import android.os.*
 import android.view.*
 import android.widget.*
+import android.text.Editable
+import android.text.TextWatcher
+import android.text.InputFilter
 import org.json.JSONObject
 import androidx.core.content.FileProvider
 import android.provider.MediaStore
@@ -44,7 +47,7 @@ class MainActivity : Activity() {
   try {
    showDashboard()
    if (shiftActive && savedInstanceState?.getString("page") == "patrol") showPatrol()
-   if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident(savedInstanceState?.getString("draft").orEmpty())
+   if (shiftActive && savedInstanceState?.getString("page") == "incident") showIncident()
    if (shiftActive && savedInstanceState?.getString("page") == "readiness") showReadiness(savedInstanceState?.getString("challenge"))
   } catch (_: Exception) {
    currentPage = "storage_error"
@@ -60,7 +63,6 @@ class MainActivity : Activity() {
  }
  override fun onSaveInstanceState(outState: Bundle) {
   outState.putString("page", currentPage)
-  outState.putString("draft", incidentInput?.text?.toString())
   outState.putString("challenge", challengeExpected)
   super.onSaveInstanceState(outState)
  }
@@ -102,7 +104,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.5 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.6 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -113,6 +115,7 @@ class MainActivity : Activity() {
    action("Respond to readiness prompt") { showReadiness() }
    action("Capture photo evidence") { captureEvidence() }
    action("Incident report") { showIncident() }
+   if (store.incidentDraft().isNotEmpty()) root.addView(label("An encrypted incident draft is available. Open Incident report to resume it.", 13f, Color.LTGRAY))
    action("Dispatch · Acknowledge message") { log("dispatch_acknowledged") }
    action("Shift check-in") { log("guard_check_in") }
    action("End shift and stop GPS") { endShift() }
@@ -221,14 +224,48 @@ class MainActivity : Activity() {
   }
   showDashboard()
  }
- private fun showIncident(draft: String = "") {
+ private fun showIncident() {
+  val draft = try { store.incidentDraft() } catch (_: Exception) {
+   Toast.makeText(this, "Draft could not be opened. Its stored data was preserved.", Toast.LENGTH_LONG).show(); return
+  }
   currentPage = "incident"
-  heading("INCIDENT REPORT","Saved locally on this phone · no external transmission")
-  val input = EditText(this).apply { hint="Describe the incident"; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); minLines=4; setText(draft) }
+  heading("INCIDENT REPORT","Draft saved encrypted on this phone · no external transmission")
+  val status = label("Encrypted draft saved · up to ${GuardStore.MAX_DRAFT_LENGTH} characters", 12f, Color.LTGRAY)
+  val input = EditText(this).apply {
+   hint="Describe the incident"; setTextColor(Color.WHITE); setHintTextColor(Color.LTGRAY); minLines=4
+   filters = arrayOf(InputFilter.LengthFilter(GuardStore.MAX_DRAFT_LENGTH))
+   isSaveEnabled = false; isSaveFromParentEnabled = false
+   setText(draft)
+  }
   incidentInput = input
-  root.addView(input)
-  action("Save incident") { val value=input.text.toString().trim(); if(value.isNotEmpty()) {if (log("incident",JSONObject().put("description",value))) showDashboard()} }
-  action("Cancel") { showDashboard() }
+  input.addTextChangedListener(object : TextWatcher {
+   override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+   override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+   override fun afterTextChanged(text: Editable?) {
+    try { store.saveIncidentDraft(text.toString()); status.text = "Encrypted draft saved" }
+    catch (_: Exception) { status.text = "Draft could not be saved. Keep this screen open and retry." }
+   }
+  })
+  root.addView(input); root.addView(status)
+  root.addView(label("Cancel keeps your draft. Drafts remain on this test device across shifts until submitted or explicitly discarded.",12f,Color.LTGRAY))
+  action("Save incident") {
+   try {
+    store.saveIncidentDraft(input.text.toString())
+    if (store.submitIncidentDraft()) { Toast.makeText(this,"Incident saved",Toast.LENGTH_SHORT).show(); showDashboard() }
+   } catch (_: Exception) { status.text = "Incident was not saved. Draft data was preserved; retry." }
+  }
+  action("Cancel") {
+   try { store.saveIncidentDraft(input.text.toString()); showDashboard() }
+   catch (_: Exception) { status.text = "Draft was not saved. Keep this screen open and retry." }
+  }
+  action("Discard draft") {
+   AlertDialog.Builder(this).setTitle("Discard this draft?")
+    .setMessage("This removes the unfinished incident draft from this phone. Submitted audit events are kept.")
+    .setNegativeButton("Keep draft", null).setPositiveButton("Discard") { _, _ ->
+     try { store.discardIncidentDraft(); showDashboard() }
+     catch (_: Exception) { status.text = "Draft could not be discarded. Please retry." }
+    }.show()
+  }
  }
  private fun showInfo() {
   currentPage = "info"

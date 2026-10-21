@@ -9,7 +9,7 @@ import org.json.JSONArray
 import java.util.UUID
 
 /** Whole event payload is encrypted; row IDs/counts remain visible. Not a tamper-evident history. */
-class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : SQLiteOpenHelper(context, databaseName, null, 3) {
+class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : SQLiteOpenHelper(context, databaseName, null, 4) {
  private val cipher = DeviceCipher()
  override fun onConfigure(db: SQLiteDatabase) {
   super.onConfigure(db)
@@ -19,12 +19,16 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
  }
  override fun onOpen(db: SQLiteDatabase) {
   super.onOpen(db)
+  db.rawQuery("SELECT body FROM draft WHERE id=1", null).use { c ->
+   if (c.moveToFirst()) cipher.decrypt(c.getString(0), "mercury-draft-v1")
+  }
   // Authenticate an existing record before permitting new writes with a missing/replaced key.
   db.rawQuery("SELECT body FROM event ORDER BY id LIMIT 1", null).use { cursor ->
    if (cursor.moveToFirst()) cipher.decrypt(cursor.getString(0), "mercury-event-v1")
   }
  }
  override fun onCreate(db: SQLiteDatabase) {
+  db.execSQL("CREATE TABLE draft (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
   db.execSQL("CREATE TABLE outbox (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
   db.execSQL("CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
  }
@@ -53,8 +57,37 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
     }
    }
   }
+  if (oldVersion < 4) db.execSQL("CREATE TABLE draft (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
  }
  private fun decodeEvent(value: String) = JSONObject(String(cipher.decrypt(value, "mercury-event-v1"), Charsets.UTF_8))
+ companion object { const val MAX_DRAFT_LENGTH = 8000 }
+ fun incidentDraft(): String = readableDatabase.rawQuery("SELECT body FROM draft WHERE id=1", null).use { c ->
+  if (c.moveToFirst()) String(cipher.decrypt(c.getString(0), "mercury-draft-v1"), Charsets.UTF_8) else ""
+ }
+ fun saveIncidentDraft(text: String) {
+  require(text.length <= MAX_DRAFT_LENGTH)
+  val db = writableDatabase
+  // Authenticate the previous draft before replacing it; unreadable data is preserved.
+  incidentDraft()
+  if (text.isEmpty()) db.delete("draft", "id=1", null)
+  else check(db.insertWithOnConflict("draft", null, ContentValues().apply {
+   put("id", 1); put("body", cipher.encrypt(text.toByteArray(Charsets.UTF_8), "mercury-draft-v1"))
+  }, SQLiteDatabase.CONFLICT_REPLACE) != -1L)
+ }
+ fun discardIncidentDraft() { writableDatabase.delete("draft", "id=1", null) }
+ /** Read saved text and clear it in the same transaction as creating the audit event. */
+ fun submitIncidentDraft(): Boolean {
+  val db = writableDatabase
+  db.beginTransaction()
+  try {
+   val value = incidentDraft().trim()
+   if (value.isEmpty()) { db.setTransactionSuccessful(); return false }
+   record("incident", JSONObject().put("description", value))
+   db.delete("draft", "id=1", null)
+   db.setTransactionSuccessful()
+   return true
+  } finally { db.endTransaction() }
+ }
  fun record(kind: String, body: JSONObject = JSONObject()) {
   writableDatabase.insertOrThrow("event", null, protectedValues(System.currentTimeMillis(), kind, body))
  }

@@ -14,6 +14,8 @@ class GuardFlowTest {
  @Before fun reset() {
   val c = InstrumentationRegistry.getInstrumentation().targetContext
   DemoSession(c).end()
+  val draftStore = GuardStore(c)
+  try { draftStore.discardIncidentDraft() } finally { draftStore.close() }
   // Deny permissions to verify the complete offline flow still works without GPS.
   InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm revoke ${c.packageName} android.permission.ACCESS_FINE_LOCATION").close()
   InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("pm revoke ${c.packageName} android.permission.ACCESS_COARSE_LOCATION").close()
@@ -82,6 +84,25 @@ class GuardFlowTest {
    onView(withText("Record checkpoint: Perimeter")).perform(scrollTo(), click())
    onView(withText("Record checkpoint: Control point")).perform(scrollTo(), click())
    onView(withText("Demo route complete. A new shift starts a new route.")).perform(scrollTo()).check(matches(isDisplayed()))
+  }
+ }
+ @Test fun incidentDraftSurvivesFullActivityCloseAndCanBeDiscarded() {
+  val c = InstrumentationRegistry.getInstrumentation().targetContext
+  DemoSession(c).start()
+  ActivityScenario.launch(MainActivity::class.java).use {
+   onView(withText("Incident report")).perform(scrollTo(), click())
+   onView(withHint("Describe the incident")).perform(replaceText("DURABLE TEST DRAFT"), closeSoftKeyboard())
+  }
+  ActivityScenario.launch(MainActivity::class.java).use {
+   onView(withText("Incident report")).perform(scrollTo(), click())
+   onView(withHint("Describe the incident")).check(matches(withText("DURABLE TEST DRAFT")))
+   onView(withText("Discard draft")).perform(scrollTo(), click())
+   onView(withText("Keep draft")).perform(click())
+   onView(withHint("Describe the incident")).check(matches(withText("DURABLE TEST DRAFT")))
+   onView(withText("Discard draft")).perform(scrollTo(), click())
+   onView(withText("Discard")).perform(click())
+   onView(withText("Incident report")).perform(scrollTo(), click())
+   onView(withHint("Describe the incident")).check(matches(withText("")))
   }
  }
  @Test fun queueRoundTripsJson() {
