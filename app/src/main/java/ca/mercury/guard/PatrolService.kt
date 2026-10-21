@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.*
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.*
@@ -38,19 +39,29 @@ class PatrolService : Service() {
    else startForeground(701, note)
    if (!session.active() || !hasLocation()) { stopSelf(); return }
    manager = getSystemService(LOCATION_SERVICE) as LocationManager
-   listener = LocationListener { loc ->
-    if (session.active() && hasLocation()) store.record("gps", JSONObject().put("latitude",loc.latitude).put("longitude",loc.longitude).put("accuracy_m",loc.accuracy).put("mock",loc.isFromMockProvider))
-    else stopSelf()
+   listener = object : LocationListener {
+    override fun onLocationChanged(loc: Location) {
+     if (session.active() && hasLocation()) {
+      recordSafely("gps", JSONObject().put("latitude",loc.latitude).put("longitude",loc.longitude).put("accuracy_m",loc.accuracy).put("mock",loc.isFromMockProvider))
+     } else stopSelf()
+    }
+    override fun onProviderEnabled(provider: String) {}
+    override fun onProviderDisabled(provider: String) {}
+    @Deprecated("Required on Android 9")
+    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
    }
    manager?.requestLocationUpdates(LocationManager.GPS_PROVIDER, 30000L, 15f, listener!!)
    handler.post(expiryCheck)
-  } catch (e: SecurityException) { store.record("gps_permission_missing"); stopSelf() }
-    catch (e: IllegalArgumentException) { store.record("gps_unavailable"); stopSelf() }
+  } catch (e: SecurityException) { recordSafely("gps_permission_missing"); stopSelf() }
+    catch (e: IllegalArgumentException) { recordSafely("gps_unavailable"); stopSelf() }
+ }
+ private fun recordSafely(kind: String, data: JSONObject = JSONObject()) {
+  try { store.record(kind, data) } catch (_: Exception) { stopSelf() }
  }
  override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
  override fun onDestroy() {
   handler.removeCallbacksAndMessages(null)
-  listener?.let { manager?.removeUpdates(it) }
+  try { listener?.let { manager?.removeUpdates(it) } } catch (_: SecurityException) { /* Permission was revoked. */ }
   stopForeground(STOP_FOREGROUND_REMOVE)
   store.close()
   super.onDestroy()
