@@ -9,7 +9,12 @@ import org.json.JSONObject
 /** Whole event payload is encrypted; row IDs/counts remain visible. Not a tamper-evident history. */
 class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : SQLiteOpenHelper(context, databaseName, null, 2) {
  private val cipher = DeviceCipher()
- override fun onConfigure(db: SQLiteDatabase) { super.onConfigure(db); db.execSQL("PRAGMA secure_delete=ON") }
+ override fun onConfigure(db: SQLiteDatabase) {
+  super.onConfigure(db)
+  db.rawQuery("PRAGMA secure_delete=ON", null).use { cursor ->
+   check(cursor.moveToFirst() && cursor.getInt(0) == 1) { "SQLite secure deletion unavailable" }
+  }
+ }
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
  }
@@ -39,3 +44,4 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
   return all.toString(2)
  }
 }
+
