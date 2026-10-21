@@ -10,4 +10,6 @@ The future server must independently validate the public-key fingerprint, signat
 
 No existing apps, other repositories, cloud services or phone-management state are changed. White Jarvis design is deferred. Stable APK release signing remains separate and pending.
 
-Validation pending: six unit tests and thirty-six device tests on each API 28 and 35, build, lint and signature verification. New tests cover explicit initialization, persistence, non-exported private-key bytes, public fingerprint, challenge signatures/context binding, malformed inputs, missing/mismatched key continuity and the confirmation UI. Physical Fold6 hardware/attestation testing remains pending.
+Validation passed: six unit tests and thirty-six device tests on each API 28 and 35, build, lint and APK signature verification. New tests cover explicit initialization, persistence, non-exported private-key bytes, public fingerprint, challenge signatures/context binding, malformed inputs, missing/mismatched key continuity and the confirmation UI. Physical Fold6 hardware/attestation testing remains pending.
+
+Source commit `c2dba659b85297c469068be708bb3effd91f63e8`, [run 39674984682](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39674984682). APK SHA-256: `a858955b6ef6fff9ef3fa53bfd220613413f8930838e8c1c649464475a2e5777`. Downloaded artifact digest and APK checksum were compared locally.

@@ -34,3 +34,8 @@ This remains transport-neutral: no endpoint, credentials, server signature valid
 ## Implemented client verifier foundation in v0.9
 
 A separate signed-grant verifier now checks fixed RSA-SHA256 envelope signatures, exact expected issuer/audience/binding, bounded lifetime, explicit actions, revocation version and monotonic/boot expiry. See [full provisional protocol and limits](build-v0.9.md). This supersedes the earlier statement that no verifier code exists, but not the pending integration requirements. It is not wired into DemoSession or any production operation. No trusted issuer, key, authenticated time source, enrollment, live revocation or transport is configured. A future integration must independently establish expected guard/device/site/assignment context and server time, enforce grants on every operational path and on the server, and replace local demo authorization before production use.
+
+
+## Implemented installation identity foundation in v0.10
+
+An explicit P-256 Android Keystore signing key now has a stable public SPKI fingerprint and a scoped enrollment challenge signer. See [proof encoding and continuity limits](build-v0.10.md). There is no live enrollment flow, server nonce service, attestation or event-signing integration. Future server enrollment must verify challenge freshness/ownership/single-use state, audience, signature and the SPKI fingerprint before associating a device with inventory and grant bindings. Local key creation does not approve inventory or authenticate a guard. The installation identity key is separate from local data encryption, server issuer keys and APK update signing.

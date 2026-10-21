@@ -77,3 +77,8 @@ Android v0.8 adds permission/provider/notification checks and process-local GPS 
 ## v2.0 continuation — signed-grant verification foundation
 
 Android v0.9 adds a separate staging signed-grant verifier and scoped monotonic action gate. Fixed trusted-key RSA-SHA256 signatures, exact bindings/actions, malformed inputs, expiry and reboot/rollback checks passed in the test suite. Six unit tests and thirty-one device tests on each API 28 and 35 passed in run 39666296794. See [v0.9 protocol and limits](build-v0.9.md). There is no configured production issuer/key, authenticated identity/time source or transport. DemoSession remains explicitly simulated and does not consume grants. Staging integration, protocol review, release signing, physical Fold6 tests and the deferred white Jarvis UI remain pending.
+
+
+## v2.1 continuation — installation identity foundation
+
+Android v0.10 adds explicit P-256 Android Keystore installation-key creation, public SPKI fingerprint/continuity checks and scoped enrollment challenge signatures. It is separate from data encryption, server issuer and APK signing. Six unit tests and thirty-six device tests on each API 28 and 35 passed in run 39674984682. See [v0.10 proof format and limits](build-v0.10.md). No live enrollment, attestation, guard identity, grant enforcement or network sync is enabled. Recovery/rotation, staging integration, release signing, physical Fold6 checks and deferred white Jarvis UI remain pending.
