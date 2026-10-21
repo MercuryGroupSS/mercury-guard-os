@@ -15,6 +15,13 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
    check(cursor.moveToFirst() && cursor.getInt(0) == 1) { "SQLite secure deletion unavailable" }
   }
  }
+ override fun onOpen(db: SQLiteDatabase) {
+  super.onOpen(db)
+  // Authenticate an existing record before permitting new writes with a missing/replaced key.
+  db.rawQuery("SELECT body FROM event ORDER BY id LIMIT 1", null).use { cursor ->
+   if (cursor.moveToFirst()) cipher.decrypt(cursor.getString(0), "mercury-event-v1")
+  }
+ }
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE event (id INTEGER PRIMARY KEY AUTOINCREMENT, at_ms INTEGER NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0)")
  }
@@ -44,4 +51,3 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
   return all.toString(2)
  }
 }
-
