@@ -64,4 +64,41 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    .put("challenge",challenge).put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki)
    .put("signature_der",encoded(signature))
  }
+ /** Signs an immutable snapshot of a validated local outbox batch; does not send or acknowledge it. */
+ fun signEventBatch(audience: String, batch: JSONObject): JSONObject = synchronized(lock) {
+  require(audience.matches(Regex("[A-Za-z0-9._:/-]{1,128}")))
+  val raw = batch.toString()
+  require(raw.toByteArray(Charsets.UTF_8).size <= 263168)
+  val snapshot = JSONObject(raw)
+  require(snapshot.keys().asSequence().toSet() == setOf("batch_id", "schema_version", "events"))
+  fun uuid(value: Any): String = (value as? String ?: error("UUID required")).also { require(UUID.fromString(it).toString() == it) }
+  fun integer(value: Any): Long { require(value is Int || value is Long); return (value as Number).toLong() }
+  uuid(snapshot.get("batch_id")); require(integer(snapshot.get("schema_version")) == 1L)
+  val events = snapshot.getJSONArray("events"); require(events.length() in 1..100)
+  val ids = mutableSetOf<String>(); var previous = 0L
+  for (i in 0 until events.length()) {
+   val event = events.getJSONObject(i)
+   require(event.keys().asSequence().toSet() == setOf("event_id", "at", "kind", "data", "sequence"))
+   require(ids.add(uuid(event.get("event_id"))))
+   val sequence = integer(event.get("sequence")); require(sequence > previous); previous = sequence
+   require(integer(event.get("at")) >= 0)
+   val kind = event.get("kind") as? String ?: error("Event kind required")
+   require(kind.isNotBlank() && kind.length <= 128); event.getJSONObject("data")
+  }
+  val ks = store(); val identity = checked(ks) ?: error("Installation signing key not initialized")
+  val payload = encoded(raw.toByteArray(Charsets.UTF_8))
+  val message = "mercury-event-batch-v1\n$audience\n${identity.thumbprint}\n$payload".toByteArray(Charsets.US_ASCII)
+  val signature = Signature.getInstance("SHA256withECDSA").run {
+   initSign(ks.getKey(alias,null) as PrivateKey)
+   var offset = 0
+   while (offset < message.size) {
+    val count = minOf(16384,message.size-offset); update(message,offset,count); offset += count
+   }
+   sign()
+  }
+  JSONObject().put("version",1).put("algorithm","SHA256withECDSA").put("audience",audience)
+   .put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki)
+   .put("payload",payload).put("signature_der",encoded(signature))
+ }
+
 }
