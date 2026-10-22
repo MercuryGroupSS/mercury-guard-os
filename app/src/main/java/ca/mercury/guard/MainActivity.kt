@@ -115,7 +115,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.11 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.12 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -347,6 +347,7 @@ class MainActivity : Activity() {
   currentPage = "info"
   heading("DEVICE MANAGEMENT","Read-only device capabilities")
   val dpm = getSystemService(DEVICE_POLICY_SERVICE) as DevicePolicyManager
+  root.addView(label("Incoming assignments/dispatch: disabled · no authenticated staging connection",13f,Color.LTGRAY))
   root.addView(label("Server shift authorization: disabled · no staging issuer or trusted key configured",13f,Color.LTGRAY))
   try {
    val identity = DeviceIdentity(this).publicIdentity()
