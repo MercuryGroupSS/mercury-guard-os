@@ -102,3 +102,8 @@ Adds an offline Node server reference with twelve passing local tests for the ex
 ## v2.5 continuation — local synthetic round-trip tests
 
 User chose local testing without additional hosting charges; this supersedes pending hosted staging selection/cost requests. No new hosted resource is authorized or created. Seventeen server reference tests pass locally, including synthetic receive/send, lost receipts, deduplication, altered-ID rejection, rollback and assignment-bound v2 signatures. The backend is an in-memory test double, not a live server or Android/Supabase integration. Android remains v0.12/v1 signatures until a separately tested client protocol update. Existing applications remain unchanged.
+
+
+## v2.6 continuation — Android v0.13 scoped signing
+
+Six unit tests and forty-nine device tests on each API 28/35 passed, along with seventeen local Node tests. An actual API 35 Android Keystore synthetic proof verified independently in Node. See [v0.13 limits](build-v0.13.md). This signer is not wired to unscoped demo records; authenticated capture-time scope persistence and transport remain pending. User reports Fold6 ready; physical connection/setup has not been confirmed. No new hosted resources or existing application changes.

@@ -1,4 +1,4 @@
-# Galaxy Z Fold6 test APK v0.12
+# Galaxy Z Fold6 test APK v0.13
 
 This APK is a removable offline prototype. It does not replace Android or connect to existing Mercury applications. Use synthetic test notes only.
 
@@ -30,3 +30,7 @@ Debug signing is for tests, not production updates. A fresh hosted runner may us
 - Export audit JSON after reading the decrypted-export disclosure, using Android's share chooser to a destination you choose. Photos are excluded.
 
 Passing emulator tests does not establish Fold6 hardware compatibility. Record model, Android/One UI version, test steps and failures before fleet use.
+
+## Local-only integration boundary in v0.13
+
+The scoped v2 signer is tested independently; operational demo records remain unscoped and are not uploaded or relabelled to a current assignment. No local network server or Supabase connection is enabled. Use synthetic notes/photos on the Fold6. Physical testing starts after connection/setup is confirmed.
