@@ -1,6 +1,6 @@
 # Offline server protocol reference
 
-Run `node --test server/*.test.mjs` with Node 24.19.0. No packages, credentials or cloud connection are required. Twelve tests currently pass locally. CI runs independently from Android builds. The APK remains v0.12; this change does not add a network connection.
+Run `node --test server/*.test.mjs` with Node 24.19.0. No packages, credentials or cloud connection are required. Seventeen tests currently pass locally. CI runs independently from Android builds. The APK remains v0.12; this change does not add a network connection.
 
 `verifyBatch` checks the Android v0.11/v0.12 envelope's SHA256withECDSA DER signature, P-256 SPKI fingerprint, exact audience, strict duplicate-free JSON, bounded encoding, event IDs/order/types and an injected server authorization context. That context must come from trusted server authentication, enrollment, current revocation/assignment and grant checks. Never populate it from request parameters or user-editable metadata. Server time governs authorization, while event observation timestamps may be old during offline recovery. Numeric fields must be safe integers for this JavaScript reference.
 
@@ -10,4 +10,10 @@ The existing signed batch does not cryptographically include guard/site/assignme
 
 Remaining gates: real sign-in/session freshness; administrator-controlled enrollment with one-use challenge storage; signed grants; scope-bound protocol and Android interoperability fixtures; durable transactional ingestion/replay receipts; authoritative backend adapters; inbound authorization, cursor reset and retention; deployment limits/rate controls; isolated synthetic-data round-trip tests. No existing application or database is modified by this reference.
 
-Hosted staging is proposed as a separate project in the existing organization's Canadian region. Creation is pending agreement to the provider's quoted cost. A branch would reuse configuration/functions and has an observed unrelated migration failure, so it is not assumed safe or ready. See https://supabase.com/docs/guides/deployment/branching.
+The user selected local testing without additional hosting charges. No hosted project or branch will be created under this decision. No Supabase connection or production credentials are used by these tests.
+
+## Local round-trip simulation
+
+`local-roundtrip.test.mjs` supplies a synthetic backend and device signer entirely inside the test process. It receives synthetic assignment/dispatch pages, queues observations, verifies signed batches, simulates a lost receipt, deduplicates retries and rejects changed-content ID reuse. A late conflict rolls back the synthetic transaction. This is an in-memory test double, not a persistent server, real Supabase authentication or the Android app running over a network. It does not test database concurrency, crash recovery, RLS, actual identity mappings or physical devices.
+
+The new `verifyScopedBatch` reference uses envelope version 2, payload schema_version 2 and signature domain `mercury-event-batch-v2`. The signed payload adds exact scope fields guard_id, site_id, assignment_id, device_thumbprint and revocation_version, checked against independent trusted context. This prevents changing the assignment of an existing signed payload. Android v0.12 still emits v1; it must be upgraded and tested with cross-platform fixtures before this proposed v2 format can be used. The tests do not claim to establish real authentication or enrollment.

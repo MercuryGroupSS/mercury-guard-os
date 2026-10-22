@@ -97,3 +97,8 @@ Android v0.12 adds encrypted, scoped versioned records and atomic cursor persist
 ## v2.4 continuation — server proof verification reference
 
 Adds an offline Node server reference with twelve passing local tests for the existing Android batch signature format, malformed/duplicate JSON, altered payloads, device/audience checks, authorization expiry and strict event validation. This does not deploy an endpoint or change Android v0.12. See [server reference and security gates](../server/README.md). Importantly the existing signed batch does not include assignment scope, so historical event-to-grant attribution must be added before live ingestion. Durable replay/sequence transactions, real identity/enrollment and two-way staging tests remain pending. Hosted staging cost approval is pending; no existing apps/databases were modified.
+
+
+## v2.5 continuation — local synthetic round-trip tests
+
+User chose local testing without additional hosting charges; this supersedes pending hosted staging selection/cost requests. No new hosted resource is authorized or created. Seventeen server reference tests pass locally, including synthetic receive/send, lost receipts, deduplication, altered-ID rejection, rollback and assignment-bound v2 signatures. The backend is an in-memory test double, not a live server or Android/Supabase integration. Android remains v0.12/v1 signatures until a separately tested client protocol update. Existing applications remain unchanged.

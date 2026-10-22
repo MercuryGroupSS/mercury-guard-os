@@ -58,10 +58,19 @@ export function strictJson(raw) {
  * This verifies a proof only; durable idempotency/sequence acceptance is deliberately separate.
  */
 export function verifyBatch(rawEnvelope, context, now) {
+  return verifyProof(rawEnvelope, context, now, 1);
+}
+
+// New local-only protocol; Android v0.12 does not emit this format yet.
+export function verifyScopedBatch(rawEnvelope, context, now) {
+  return verifyProof(rawEnvelope, context, now, 2);
+}
+
+function verifyProof(rawEnvelope, context, now, version) {
   if (typeof rawEnvelope !== 'string' || Buffer.byteLength(rawEnvelope) > 360000) fail();
   const proof = strictJson(rawEnvelope);
   if (!fields(proof, ['version','algorithm','audience','device_thumbprint','public_key_spki','payload','signature_der']) ||
-      proof.version !== 1 || proof.algorithm !== 'SHA256withECDSA') fail();
+      proof.version !== version || proof.algorithm !== 'SHA256withECDSA') fail();
   if (!context || context.enrolled !== true || context.revoked !== false || !Number.isSafeInteger(now) ||
       !Number.isSafeInteger(context.notBefore) || !Number.isSafeInteger(context.expiresAt) ||
       now < context.notBefore || now >= context.expiresAt || context.expiresAt - context.notBefore > 900 ||
@@ -77,12 +86,19 @@ export function verifyBatch(rawEnvelope, context, now) {
   if (key.asymmetricKeyType !== 'ec' || key.asymmetricKeyDetails?.namedCurve !== 'prime256v1') fail();
   const payload = decode(proof.payload, 263168);
   const signature = decode(proof.signature_der, 80);
-  const message = `mercury-event-batch-v1\n${proof.audience}\n${proof.device_thumbprint}\n${proof.payload}`;
+  const message = `mercury-event-batch-v${version}\n${proof.audience}\n${proof.device_thumbprint}\n${proof.payload}`;
   if (!verify('sha256', Buffer.from(message, 'ascii'), key, signature)) fail();
   const text = new TextDecoder('utf-8', {fatal: true}).decode(payload);
   const batch = strictJson(text);
-  if (!fields(batch, ['batch_id','schema_version','events']) || !uuid(batch.batch_id) || batch.schema_version !== 1 ||
+  if (!fields(batch, version === 2 ? ['batch_id','schema_version','events','scope'] : ['batch_id','schema_version','events']) || !uuid(batch.batch_id) || batch.schema_version !== version ||
       !Array.isArray(batch.events) || !batch.events.length || batch.events.length > 100) fail();
+  if (version === 2) {
+    const expected = {guard_id: context.guardId, site_id: context.siteId,
+      assignment_id: context.assignmentId, device_thumbprint: context.thumbprint,
+      revocation_version: context.revocationVersion};
+    if (!fields(batch.scope, Object.keys(expected)) ||
+        Object.entries(expected).some(([key, value]) => batch.scope[key] !== value)) fail();
+  }
   const seen = new Set(); let previous = 0;
   for (const event of batch.events) {
     if (!fields(event, ['event_id','at','kind','data','sequence']) || !uuid(event.event_id) || seen.has(event.event_id) ||
