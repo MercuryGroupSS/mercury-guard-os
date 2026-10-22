@@ -1,4 +1,4 @@
-# Galaxy Z Fold6 test APK v0.10
+# Galaxy Z Fold6 test APK v0.11
 
 This APK is a removable offline prototype. It does not replace Android or connect to existing Mercury applications. Use synthetic test notes only.
 
@@ -14,6 +14,7 @@ Debug signing is for tests, not production updates. A fresh hosted runner may us
 ## Acceptance checks
 
 - In Device information, viewing must not initialize an installation identity. Cancel key creation and confirm no fingerprint appears. Explicitly create it, reopen/rotate and verify the same public fingerprint. No enrollment/upload or guard authentication should occur. This key is separate from APK signing; hardware backing and attestation are unverified.
+- Signed upload-batch preparation is a tested code boundary only; this build has no network upload or successful-sync button. Review must keep events pending.
 - Device information should state that server authorization is disabled because no staging issuer/trusted key is configured. A local demo shift remains a simulation; this build cannot enroll/authenticate a real guard or fetch grants.
 - Standby shows LOCAL DEMO ONLY and no active assignment. The pending-event count increases with new records; network sync is disabled, so normal use never marks records as delivered.
 - Start shift with location denied: incidents and patrol/check-in records still work.

@@ -39,3 +39,8 @@ A separate signed-grant verifier now checks fixed RSA-SHA256 envelope signatures
 ## Implemented installation identity foundation in v0.10
 
 An explicit P-256 Android Keystore signing key now has a stable public SPKI fingerprint and a scoped enrollment challenge signer. See [proof encoding and continuity limits](build-v0.10.md). There is no live enrollment flow, server nonce service, attestation or event-signing integration. Future server enrollment must verify challenge freshness/ownership/single-use state, audience, signature and the SPKI fingerprint before associating a device with inventory and grant bindings. Local key creation does not approve inventory or authenticate a guard. The installation identity key is separate from local data encryption, server issuer keys and APK update signing.
+
+
+## v0.11 signed batches and confirmed bidirectional requirement
+
+The local outbox can now prepare a scoped device-signed batch proof without creating keys, transmitting data or acknowledging delivery. See [batch encoding and limits](build-v0.11.md). Incoming assignments/site instructions/routes/dispatch/revocation and outgoing events/evidence/acknowledgements are core requirements. Reuse authoritative existing application data through restricted server-side integration adapters, develop in isolated staging and establish stable guard/site/assignment mappings before enabling access. No existing schemas, rows, roles or applications have been changed.

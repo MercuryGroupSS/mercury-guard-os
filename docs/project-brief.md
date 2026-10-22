@@ -82,3 +82,8 @@ Android v0.9 adds a separate staging signed-grant verifier and scoped monotonic 
 ## v2.1 continuation — installation identity foundation
 
 Android v0.10 adds explicit P-256 Android Keystore installation-key creation, public SPKI fingerprint/continuity checks and scoped enrollment challenge signatures. It is separate from data encryption, server issuer and APK signing. Six unit tests and thirty-six device tests on each API 28 and 35 passed in run 39674984682. See [v0.10 proof format and limits](build-v0.10.md). No live enrollment, attestation, guard identity, grant enforcement or network sync is enabled. Recovery/rotation, staging integration, release signing, physical Fold6 checks and deferred white Jarvis UI remain pending.
+
+
+## v2.2 continuation — signed outbound batches and two-way integration
+
+Android v0.11 connects durable batch preparation to the installation key without sending or acknowledging data. Six unit tests and forty-one device tests on each API 28 and 35 passed in run 39796747895. See [v0.11 batch format and limits](build-v0.11.md). The user confirmed bidirectional exchange with existing applications as a core requirement; see [proposed inbound/outbound contract](bidirectional-sync-contract.md). Production should reuse authoritative existing data through restricted server adapters, developed against isolated staging first. No existing application/database was modified. Live inbound/outbound sync, staging/enrollment/identity/grants, release signing, physical Fold6 checks and deferred white Jarvis UI remain pending.
