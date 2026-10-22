@@ -1,0 +1,13 @@
+# Offline server protocol reference
+
+Run `node --test server/*.test.mjs` with Node 24.19.0. No packages, credentials or cloud connection are required. Twelve tests currently pass locally. CI runs independently from Android builds. The APK remains v0.12; this change does not add a network connection.
+
+`verifyBatch` checks the Android v0.11/v0.12 envelope's SHA256withECDSA DER signature, P-256 SPKI fingerprint, exact audience, strict duplicate-free JSON, bounded encoding, event IDs/order/types and an injected server authorization context. That context must come from trusted server authentication, enrollment, current revocation/assignment and grant checks. Never populate it from request parameters or user-editable metadata. Server time governs authorization, while event observation timestamps may be old during offline recovery. Numeric fields must be safe integers for this JavaScript reference.
+
+This is NOT an ingestion endpoint or deployable authorization service. It writes nothing and produces no delivery acknowledgement. Replaying a valid proof passes this stateless verifier; a future transactional ingestion store must deduplicate event IDs and batch IDs, reject changed-ID content and enforce per-device sequence policy. Partial batch retries retain original event IDs.
+
+The existing signed batch does not cryptographically include guard/site/assignment/revocation scope. Consequently this reference cannot prove the assignment under which an offline event was captured. It must not be used to accept events into whichever assignment is current at upload time. Before live transport, add a versioned scope-bound envelope or an independently verifiable event-to-grant association; preserve that association across retries and scope changes. Binding a returned object to the current caller context does not solve historical attribution. Scope fields in the result are trusted context labels, not claims signed by this batch format.
+
+Remaining gates: real sign-in/session freshness; administrator-controlled enrollment with one-use challenge storage; signed grants; scope-bound protocol and Android interoperability fixtures; durable transactional ingestion/replay receipts; authoritative backend adapters; inbound authorization, cursor reset and retention; deployment limits/rate controls; isolated synthetic-data round-trip tests. No existing application or database is modified by this reference.
+
+Hosted staging is proposed as a separate project in the existing organization's Canadian region. Creation is pending agreement to the provider's quoted cost. A branch would reuse configuration/functions and has an observed unrelated migration failure, so it is not assumed safe or ready. See https://supabase.com/docs/guides/deployment/branching.

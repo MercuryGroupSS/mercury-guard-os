@@ -92,3 +92,8 @@ Android v0.11 connects durable batch preparation to the installation key without
 ## v2.3 continuation — incoming assignment and dispatch cache
 
 Android v0.12 adds encrypted, scoped versioned records and atomic cursor persistence, including replay/conflict checks, tombstones and transactional failure recovery. Six unit tests and forty-seven device tests on each API 28 and 35 passed in run 39799340947. See [v0.12 contract and limits](build-v0.12.md). Existing backend identity mappings are candidates for reuse, subject to authorization and completeness review. No existing app/database was modified. Live inbound/outbound transport, authenticated guard enrollment/grants, cache lifecycle management, release signing, physical Fold6 testing and deferred white Jarvis UI remain pending.
+
+
+## v2.4 continuation — server proof verification reference
+
+Adds an offline Node server reference with twelve passing local tests for the existing Android batch signature format, malformed/duplicate JSON, altered payloads, device/audience checks, authorization expiry and strict event validation. This does not deploy an endpoint or change Android v0.12. See [server reference and security gates](../server/README.md). Importantly the existing signed batch does not include assignment scope, so historical event-to-grant attribution must be added before live ingestion. Durable replay/sequence transactions, real identity/enrollment and two-way staging tests remain pending. Hosted staging cost approval is pending; no existing apps/databases were modified.

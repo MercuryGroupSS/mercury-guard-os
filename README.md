@@ -37,3 +37,5 @@ Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3.
 4. Add Android Enterprise management / dedicated-device kiosk for company-owned phones; separate administrator-controlled provisioning using factory-reset test unit.
 5. Production diagnostics, audit logging, privacy notices, battery impact tests, staging API integration with Mercury Operations Dashboard.
 6. Optional **Pixel-only** custom Android firmware feasibility track. Never flash the Galaxy Fold6 with an unverified image; bootloader unlock support depends on precise model/region.
+
+Server-side integration work: [offline signature verifier and pending deployment gates](server/README.md).
