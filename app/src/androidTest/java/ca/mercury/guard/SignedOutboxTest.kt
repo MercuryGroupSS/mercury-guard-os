@@ -86,4 +86,31 @@ class SignedOutboxTest {
   assertTrue(verifies(proof,key)); assertEquals(200000,payload(proof).getJSONArray("events").getJSONObject(0).getJSONObject("data").getString("description").length)
   assertEquals(1,store.pendingCount()); assertEquals(1,store.count())
  }
+
+ @Test fun scopedProofUsesOriginalBindingAndIndependentSignatureDomain() = isolated { store,identity,_ ->
+  val key = identity.create(); store.record("incident",JSONObject().put("description","SYNTHETIC CROSS PLATFORM"))
+  val original = store.prepareBatch()!!
+  val binding = GrantBinding("synthetic-guard","synthetic-site","synthetic-assignment",key.thumbprint,1)
+  val proof = identity.signScopedEventBatch("mercury-local",original,binding)
+  assertEquals(2,proof.getInt("version")); val signed = payload(proof)
+  assertEquals(2,signed.getInt("schema_version")); assertEquals(binding.assignmentId,signed.getJSONObject("scope").getString("assignment_id"))
+  val publicKey = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(Base64.getUrlDecoder().decode(key.publicKeySpki)))
+  val valid = Signature.getInstance("SHA256withECDSA").run {
+   initVerify(publicKey); update("mercury-event-batch-v2\nmercury-local\n${key.thumbprint}\n${proof.getString("payload")}".toByteArray(Charsets.US_ASCII))
+   verify(Base64.getUrlDecoder().decode(proof.getString("signature_der")))
+  }
+  assertTrue(valid); assertFalse(verifies(proof,key,"mercury-local"))
+  assertEquals(original.toString(),store.prepareBatch()!!.toString()); assertEquals(1,store.pendingCount())
+  // Synthetic ephemeral key only. Export through test output for independent Node verification.
+  println("MERCURY_V2_FIXTURE:" + encoded(proof.toString().toByteArray(Charsets.UTF_8)))
+ }
+ @Test fun scopedSignerRejectsWrongDeviceMalformedBindingAndUnsafeIntegers() = isolated { store,identity,_ ->
+  val key = identity.create(); store.record("incident")
+  val batch = store.prepareBatch()!!; val binding = GrantBinding("guard","site","assignment",key.thumbprint,1)
+  for (bad in listOf(binding.copy(deviceThumbprint="a".repeat(64)),binding.copy(assignmentId=""),binding.copy(revocationVersion=-1)))
+   reject { identity.signScopedEventBatch("mercury-local",batch,bad) }
+  val unsafe = JSONObject(batch.toString()); unsafe.getJSONArray("events").getJSONObject(0).put("at",9007199254740992L)
+  reject { identity.signScopedEventBatch("mercury-local",unsafe,binding) }
+  assertEquals(batch.toString(),store.prepareBatch()!!.toString()); assertEquals(1,store.pendingCount())
+ }
 }

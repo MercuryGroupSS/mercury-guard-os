@@ -65,7 +65,12 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    .put("signature_der",encoded(signature))
  }
  /** Signs an immutable snapshot of a validated local outbox batch; does not send or acknowledge it. */
- fun signEventBatch(audience: String, batch: JSONObject): JSONObject = synchronized(lock) {
+ fun signEventBatch(audience: String, batch: JSONObject): JSONObject = signBatch(audience, batch, null)
+ /** Caller must supply the original capture binding, never the current assignment of an unscoped queue.
+  * This low-level signer does not establish authorization or historical attribution. */
+ fun signScopedEventBatch(audience: String, batch: JSONObject, captureBinding: GrantBinding): JSONObject =
+  signBatch(audience, batch, captureBinding)
+ private fun signBatch(audience: String, batch: JSONObject, captureBinding: GrantBinding?): JSONObject = synchronized(lock) {
   require(audience.matches(Regex("[A-Za-z0-9._:/-]{1,128}")))
   val raw = batch.toString()
   require(raw.toByteArray(Charsets.UTF_8).size <= 263168)
@@ -86,8 +91,23 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    require(kind.isNotBlank() && kind.length <= 128); event.getJSONObject("data")
   }
   val ks = store(); val identity = checked(ks) ?: error("Installation signing key not initialized")
-  val payload = encoded(raw.toByteArray(Charsets.UTF_8))
-  val message = "mercury-event-batch-v1\n$audience\n${identity.thumbprint}\n$payload".toByteArray(Charsets.US_ASCII)
+  val version = if (captureBinding == null) 1 else 2
+  if (captureBinding != null) {
+   require(captureBinding.deviceThumbprint == identity.thumbprint)
+   require(captureBinding.revocationVersion in 0..9007199254740991L)
+   for (id in listOf(captureBinding.guardId,captureBinding.siteId,captureBinding.assignmentId)) require(id.isNotBlank() && id.length <= 256)
+   for (i in 0 until events.length()) {
+    val event = events.getJSONObject(i)
+    require(integer(event.get("sequence")) <= 9007199254740991L && integer(event.get("at")) <= 9007199254740991L)
+   }
+   snapshot.put("schema_version",2).put("scope",JSONObject().put("guard_id",captureBinding.guardId)
+    .put("site_id",captureBinding.siteId).put("assignment_id",captureBinding.assignmentId)
+    .put("device_thumbprint",captureBinding.deviceThumbprint).put("revocation_version",captureBinding.revocationVersion))
+  }
+  val signedRaw = if (captureBinding == null) raw else snapshot.toString()
+  require(signedRaw.toByteArray(Charsets.UTF_8).size <= 263168)
+  val payload = encoded(signedRaw.toByteArray(Charsets.UTF_8))
+  val message = "mercury-event-batch-v$version\n$audience\n${identity.thumbprint}\n$payload".toByteArray(Charsets.US_ASCII)
   val signature = Signature.getInstance("SHA256withECDSA").run {
    initSign(ks.getKey(alias,null) as PrivateKey)
    var offset = 0
@@ -96,7 +116,7 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    }
    sign()
   }
-  JSONObject().put("version",1).put("algorithm","SHA256withECDSA").put("audience",audience)
+  JSONObject().put("version",version).put("algorithm","SHA256withECDSA").put("audience",audience)
    .put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki)
    .put("payload",payload).put("signature_der",encoded(signature))
  }
