@@ -8,3 +8,6 @@ local.properties
 
 .local-signing/
 *.keystore
+
+.android-local/
+.avd/

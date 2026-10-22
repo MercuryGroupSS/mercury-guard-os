@@ -11,3 +11,9 @@ Fold6 fixes: Refresh readiness now confirms its tap. Explicit GPS retry re-regis
 Local APK/instrumentation assembly, lint and 15 JVM tests passed. Combined API28/API35 regression verification is pending. The local emulator could not start in the current sandbox, so no screenshot/runtime claim is made for the combined version yet. No Supabase environment or new hosting charge, backend change, reset, flashing, enrollment or phone special-access setting was performed.
 
 Debug signing can differ from the APK already installed on the Fold6. Never uninstall or erase it to resolve a mismatch: its encrypted data key would be lost. A separately identified preview build can preserve the original installation for UI validation; local debug signing material is excluded from Git and source packages. This is not production release signing.
+
+## Safe physical preview variant
+
+The localPreview build property selects a separate application ID and preview manifest overlay. The overlay omits USE_FULL_SCREEN_INTENT, preventing installation from initially granting that optional special access. Normal permission choices remain user controlled. It installed successfully on the Fold6 and cold-launched; a cover-screen capture confirms the recovered white login/particle field. No assignment, sign-in, patrol or tracking was started in the preview. The inactive inner display capture was black and is not UI evidence. The original v0.13 package remains installed. Runtime workflow tests on this preview are still pending.
+
+Build with localPreview=true and a developer-owned localDebugKeystore path; never include the keystore in source/artifacts. The default package retains opt-in full-screen code for separate owner-reviewed testing; the preview does not have that access.

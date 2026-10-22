@@ -3,6 +3,9 @@ android {
  namespace = "ca.mercury.guard"
  compileSdk = 35
  defaultConfig { applicationId = if (providers.gradleProperty("localPreview").orNull == "true") "ca.mercury.guard.preview" else "ca.mercury.guard"; minSdk = 28; targetSdk = 35; versionCode = 22; versionName = "0.22.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+ if (providers.gradleProperty("localPreview").orNull == "true") {
+  sourceSets.getByName("debug").manifest.srcFile("src/preview/AndroidManifest.xml")
+ }
  signingConfigs.getByName("debug") {
   providers.gradleProperty("localDebugKeystore").orNull?.let { storeFile = file(it); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }
  }
