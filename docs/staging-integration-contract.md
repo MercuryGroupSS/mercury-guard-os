@@ -44,3 +44,8 @@ An explicit P-256 Android Keystore signing key now has a stable public SPKI fing
 ## v0.11 signed batches and confirmed bidirectional requirement
 
 The local outbox can now prepare a scoped device-signed batch proof without creating keys, transmitting data or acknowledging delivery. See [batch encoding and limits](build-v0.11.md). Incoming assignments/site instructions/routes/dispatch/revocation and outgoing events/evidence/acknowledgements are core requirements. Reuse authoritative existing application data through restricted server-side integration adapters, develop in isolated staging and establish stable guard/site/assignment mappings before enabling access. No existing schemas, rows, roles or applications have been changed.
+
+
+## v0.12 receive-cache foundation
+
+A separate encrypted incoming cache now validates exact assignment/dispatch page scope, applies versioned changes/tombstones and advances its cursor atomically. Exact last-page replay is idempotent; conflicting versions, stale cursors and scope mismatches fail without partial persistence. See [v0.12 storage contract and limits](build-v0.12.md). It has no live receiver, grant integration or demo operational UI. A future transport must authenticate the server and independently establish scope before calling it. Policy/revocation processing, full-snapshot reset, guard switch/old-scope retention and real inbox/actions remain future work.

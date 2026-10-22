@@ -87,3 +87,8 @@ Android v0.10 adds explicit P-256 Android Keystore installation-key creation, pu
 ## v2.2 continuation — signed outbound batches and two-way integration
 
 Android v0.11 connects durable batch preparation to the installation key without sending or acknowledging data. Six unit tests and forty-one device tests on each API 28 and 35 passed in run 39796747895. See [v0.11 batch format and limits](build-v0.11.md). The user confirmed bidirectional exchange with existing applications as a core requirement; see [proposed inbound/outbound contract](bidirectional-sync-contract.md). Production should reuse authoritative existing data through restricted server adapters, developed against isolated staging first. No existing application/database was modified. Live inbound/outbound sync, staging/enrollment/identity/grants, release signing, physical Fold6 checks and deferred white Jarvis UI remain pending.
+
+
+## v2.3 continuation — incoming assignment and dispatch cache
+
+Android v0.12 adds encrypted, scoped versioned records and atomic cursor persistence, including replay/conflict checks, tombstones and transactional failure recovery. Six unit tests and forty-seven device tests on each API 28 and 35 passed in run 39799340947. See [v0.12 contract and limits](build-v0.12.md). Existing backend identity mappings are candidates for reuse, subject to authorization and completeness review. No existing app/database was modified. Live inbound/outbound transport, authenticated guard enrollment/grants, cache lifecycle management, release signing, physical Fold6 testing and deferred white Jarvis UI remain pending.

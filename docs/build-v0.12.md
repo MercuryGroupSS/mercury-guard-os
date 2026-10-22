@@ -10,4 +10,8 @@ Records/cursors are encrypted with purpose/context-bound AES-GCM under the exist
 
 This is a foundation for the confirmed two-way integration requirement: receive authoritative business instructions and send signed observations through a restricted API with server adapters. No existing app/database, staging branch, cloud resource or credential was modified. The previously observed unrelated staging migration failure was not changed. White Jarvis UI, stable APK update signing and physical Fold6 validation remain pending.
 
-Validation pending: six unit tests and forty-seven device tests on each API 28 and 35, build, lint and signature verification. New tests cover encrypted reopen/scope isolation, canonical replay, versions/tombstones, conflicts, transactional rollback/retry, ciphertext relocation, malformed/stale/oversized pages and unchanged cursors after failure.
+Validation passed: six unit tests and forty-seven device tests on each API 28 and 35, build, lint and APK signature verification. New tests cover encrypted reopen/scope isolation, canonical replay, versions/tombstones, conflicts, transactional rollback/retry, ciphertext relocation, malformed/stale/oversized pages and unchanged cursors after failure.
+
+Source commit: bca2e9621e2fd7ddbee76b3286b78a53d764f38b. [Successful build and tests](https://github.com/MercuryGroupSS/mercury-guard-os/actions/runs/39799340947).
+
+APK SHA-256: ded8c690a6ebdc744e01a5b73a659af0d9385d57e55778501a6574e01817ce6f
