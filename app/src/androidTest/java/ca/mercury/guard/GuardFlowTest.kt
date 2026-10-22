@@ -64,15 +64,17 @@ class GuardFlowTest {
    onView(withText("ACTIVE SHIFT")).check(matches(isDisplayed()))
   }
  }
- @Test fun patrolSurvivesRecreationAndRejectsDuplicateOrWrongOrder() {
+ @Test fun patrolAllowsAnyOrderSurvivesRecreationAndRejectsDuplicates() {
   val c = InstrumentationRegistry.getInstrumentation().targetContext
   DemoSession(c).start()
   val id = DemoSession(c).identity()
   val db = GuardStore(c)
   try {
-   assertFalse(db.recordCheckpoint(id, 1))
-   assertTrue(db.recordCheckpoint(id, 0))
-   assertFalse(db.recordCheckpoint(id, 0))
+   assertTrue(db.recordCheckpoint(id, 2))
+   assertFalse(db.recordCheckpoint(id, 2))
+   assertFalse(db.recordCheckpoint(id, -1))
+   assertFalse(db.recordCheckpoint(id, 3))
+   assertEquals(setOf(2), db.completedCheckpoints(id))
    assertEquals(1, db.patrolProgress(id))
    assertEquals(0, db.patrolProgress("other-session"))
   } finally { db.close() }
@@ -82,7 +84,7 @@ class GuardFlowTest {
    scenario.recreate()
    onView(withText("1 / 3 checkpoints recorded")).check(matches(isDisplayed()))
    onView(withText("Record checkpoint: Perimeter")).perform(scrollTo(), click())
-   onView(withText("Record checkpoint: Control point")).perform(scrollTo(), click())
+   onView(withText("Record checkpoint: Main entrance")).perform(scrollTo(), click())
    onView(withText("Demo route complete. A new shift starts a new route.")).perform(scrollTo()).check(matches(isDisplayed()))
   }
  }

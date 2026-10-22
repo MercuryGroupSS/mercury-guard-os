@@ -91,25 +91,26 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
  fun record(kind: String, body: JSONObject = JSONObject()) {
   writableDatabase.insertOrThrow("event", null, protectedValues(System.currentTimeMillis(), kind, body))
  }
- /** Ordered manual demo checkpoints; insertion and duplicate protection share one transaction. */
- fun patrolProgress(sessionId: String): Int {
+ /** Manual demo checkpoints may be recorded in any order, once per session. */
+ fun completedCheckpoints(sessionId: String): Set<Int> {
   val events = org.json.JSONArray(exportJson())
-  var next = 0
+  val completed = mutableSetOf<Int>()
   for (i in 0 until events.length()) {
    val event = events.getJSONObject(i)
    val data = event.getJSONObject("data")
-   if (event.getString("kind") == "patrol_checkpoint_demo" && data.optString("session") == sessionId && data.optInt("index", -1) == next) next++
+   val index = data.optInt("index", -1)
+   if (event.getString("kind") == "patrol_checkpoint_demo" && data.optString("session") == sessionId && index in DemoRoute.checkpoints.indices) completed.add(index)
   }
-  return next
+  return completed
  }
+ fun patrolProgress(sessionId: String): Int = completedCheckpoints(sessionId).size
  fun recordCheckpoint(sessionId: String, expectedIndex: Int): Boolean {
   val db = writableDatabase
   db.beginTransaction()
   try {
-   val next = patrolProgress(sessionId)
-   if (next != expectedIndex || next !in DemoRoute.checkpoints.indices) return false
-   record("patrol_checkpoint_demo", JSONObject().put("session", sessionId).put("index", next)
-    .put("checkpoint", DemoRoute.checkpoints[next]).put("source", "manual_demo").put("presence_verified", false))
+   if (expectedIndex !in DemoRoute.checkpoints.indices || expectedIndex in completedCheckpoints(sessionId)) return false
+   record("patrol_checkpoint_demo", JSONObject().put("session", sessionId).put("index", expectedIndex)
+    .put("checkpoint", DemoRoute.checkpoints[expectedIndex]).put("source", "manual_demo").put("presence_verified", false))
    db.setTransactionSuccessful()
    return true
   } finally { db.endTransaction() }

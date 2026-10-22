@@ -115,7 +115,7 @@ class MainActivity : Activity() {
   val active = shiftActive
   currentPage = if (active) "active" else "dashboard"
   incidentInput = null
-  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.13 · LOCAL DEMO ONLY · No server connection")
+  heading(if (active) "ACTIVE SHIFT" else "DEVICE STANDBY", "Prototype v0.14 · LOCAL DEMO ONLY · No server connection")
   root.addView(label(if(active) "Shift authorized on this device (demo)" else "No active assignment · restricted Mercury functions",17f))
   root.addView(label("Samsung Fold6 / Pixel adaptive layout  •  ${store.count()} local audit events · ${store.pendingCount()} pending (sync disabled)",13f,Color.LTGRAY))
   if(!active) {
@@ -160,20 +160,21 @@ class MainActivity : Activity() {
   if (!shiftActive) { showDashboard(); return }
   currentPage = "patrol"
   val sessionId = session.identity()
-  val next = store.patrolProgress(sessionId)
-  heading("DEMO PATROL ROUTE", "Manual test route · no QR, NFC or physical presence verification")
-  root.addView(label("$next / ${DemoRoute.checkpoints.size} checkpoints recorded", 20f, cyan))
-  DemoRoute.checkpoints.forEachIndexed { i, name -> root.addView(label("${if (i < next) "✓" else "○"} $name")) }
-  if (next < DemoRoute.checkpoints.size) {
-   action("Record checkpoint: ${DemoRoute.checkpoints[next]}") {
+  val completed = store.completedCheckpoints(sessionId)
+  heading("DEMO PATROL ROUTE", "Choose any checkpoint · manual test entries do not verify physical presence")
+  root.addView(label("${completed.size} / ${DemoRoute.checkpoints.size} checkpoints recorded", 20f, cyan))
+  DemoRoute.checkpoints.forEachIndexed { i, name ->
+   if (i in completed) root.addView(label("✓ $name · recorded"))
+   else action("Record checkpoint: $name") {
     try {
-     if (shiftActive && session.identity() == sessionId) store.recordCheckpoint(sessionId, next)
+     if (shiftActive && session.identity() == sessionId) store.recordCheckpoint(sessionId, i)
      showPatrol()
     } catch (_: Exception) {
      Toast.makeText(this, "Checkpoint was not saved. Please try again.", Toast.LENGTH_LONG).show()
     }
    }
-  } else root.addView(label("Demo route complete. A new shift starts a new route."))
+  }
+  if (completed.size == DemoRoute.checkpoints.size) root.addView(label("Demo route complete. A new shift starts a new route."))
   action("Return") { showDashboard() }
  }
  private fun showReadiness(restored: String? = null) {
