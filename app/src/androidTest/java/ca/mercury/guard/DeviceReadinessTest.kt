@@ -40,6 +40,7 @@ class DeviceReadinessTest {
   val pending: Int
   try { count = db.count(); pending = db.pendingCount() } finally { db.close() }
   ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+   onView(org.hamcrest.Matchers.anyOf(withText("Prototype tools"), withContentDescription("Prototype tools"))).perform(scrollTo(), click())
    onView(withText("Device readiness")).perform(scrollTo(), click())
    onView(withText("DEVICE READINESS")).check(matches(isDisplayed()))
    onView(withText("Precise location: not granted")).check(matches(isDisplayed()))
@@ -48,7 +49,7 @@ class DeviceReadinessTest {
    onView(withText("DEVICE READINESS")).check(matches(isDisplayed()))
    onView(withText("Refresh readiness")).perform(scrollTo(), click())
    onView(withText("Return")).perform(scrollTo(), click())
-   onView(withText("DEVICE STANDBY")).check(matches(isDisplayed()))
+   onView(withText("Mercury One")).check(matches(isDisplayed()))
   }
   assertFalse(DemoSession(context).active()); assertFalse(TrackingStatus.requesting)
   val after = GuardStore(context)
@@ -57,6 +58,7 @@ class DeviceReadinessTest {
  @Test fun activeReadinessDoesNotStartTrackingOrGrantPermissionByViewing() {
   DemoSession(context).start()
   ActivityScenario.launch(MainActivity::class.java).use {
+   onView(org.hamcrest.Matchers.anyOf(withText("Prototype tools"), withContentDescription("Prototype tools"))).perform(scrollTo(), click())
    onView(withText("Device readiness")).perform(scrollTo(), click())
    onView(withText("GPS tracking: unavailable · precise location not granted")).perform(scrollTo()).check(matches(isDisplayed()))
    onView(withText("Request GPS for active demo shift")).perform(scrollTo()).check(matches(isDisplayed()))

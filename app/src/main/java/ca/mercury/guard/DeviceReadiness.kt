@@ -10,9 +10,10 @@ import android.os.SystemClock
 
 /** Process-local service observations; never persisted as proof of tracking or presence. */
 object TrackingStatus {
+ @Volatile var lastLocation: android.location.Location? = null
  @Volatile var requesting = false
  @Volatile var lastFixElapsed = -1L
- fun stopped() { requesting = false; lastFixElapsed = -1L }
+ fun stopped() { requesting = false; lastFixElapsed = -1L; lastLocation = null }
 }
 
 class DeviceReadiness(private val context: Context) {

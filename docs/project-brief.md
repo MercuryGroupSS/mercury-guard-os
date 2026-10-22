@@ -107,3 +107,8 @@ User chose local testing without additional hosting charges; this supersedes pen
 ## v2.6 continuation — Android v0.13 scoped signing
 
 Six unit tests and forty-nine device tests on each API 28/35 passed, along with seventeen local Node tests. An actual API 35 Android Keystore synthetic proof verified independently in Node. See [v0.13 limits](build-v0.13.md). This signer is not wired to unscoped demo records; authenticated capture-time scope persistence and transport remain pending. User reports Fold6 ready; physical connection/setup has not been confirmed. No new hosted resources or existing application changes.
+
+
+## v2.7 continuation — combined Mercury One interface and workflows
+
+User asked to recover all adjustments from Style Mercury Guard OS and include them in this rebuild. Reconciled the saved v0.21 UI/workflow baseline with newer signing/receive-cache code and Fold6 fixes; see [combined build](build-v0.22.md). User chose local testing without hosting charges. Earlier pure-visual constraints were superseded by the direct request to include the saved functional adjustments. Optional OS access remains owner controlled. Combined runtime checks and physical revalidation remain pending.

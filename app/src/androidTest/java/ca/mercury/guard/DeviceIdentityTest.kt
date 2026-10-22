@@ -78,6 +78,7 @@ class DeviceIdentityTest {
  @Test fun uiRequiresConfirmationAndShowsFingerprintAfterRecreation() {
   DemoSession(context).end()
   ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+   onView(org.hamcrest.Matchers.anyOf(withText("Prototype tools"), withContentDescription("Prototype tools"))).perform(scrollTo(), click())
    onView(withText("Device information")).perform(scrollTo(),click())
    onView(withText("Create installation identity")).perform(scrollTo(),click())
    onView(withText("Cancel")).perform(click())

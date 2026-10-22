@@ -63,6 +63,7 @@ class AuditViewerTest {
    count = db.count(); pending = db.pendingCount()
   } finally { db.close() }
   ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+   onView(org.hamcrest.Matchers.anyOf(withText("Prototype tools"), withContentDescription("Prototype tools"))).perform(scrollTo(), click())
    onView(withText("Review local audit events")).perform(scrollTo(), click())
    onView(withText("Event #$sequence · viewer_test")).perform(scrollTo(), click())
    onView(withText("AUDIT EVENT")).check(matches(isDisplayed()))
@@ -71,7 +72,7 @@ class AuditViewerTest {
    onView(withText("AUDIT EVENT")).check(matches(isDisplayed()))
    onView(withText("Back to audit")).perform(scrollTo(), click())
    onView(withText("Return")).perform(scrollTo(), click())
-   onView(withText("DEVICE STANDBY")).check(matches(isDisplayed()))
+   onView(withText("Mercury One")).check(matches(isDisplayed()))
   }
   val after = GuardStore(context)
   try { assertEquals(count, after.count()); assertEquals(pending, after.pendingCount()) } finally { after.close() }

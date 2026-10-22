@@ -5,3 +5,6 @@ local.properties
 *.keystore
 .idea/
 .DS_Store
+
+.local-signing/
+*.keystore

@@ -20,6 +20,11 @@ class PatrolService : Service() {
  private val expiryCheck = object : Runnable {
   override fun run() {
    if (!session.active() || !hasLocation()) { stopSelf(); return }
+   try {
+    val duties = DutyPrompts(store)
+    val pending = duties.pending(session.identity())
+    DutyAlertDelivery(this@PatrolService,store).update(pending)
+   } catch (_: Exception) { /* An unavailable store does not acknowledge an alert. */ }
    handler.postDelayed(this, 1000)
   }
  }
@@ -30,8 +35,9 @@ class PatrolService : Service() {
   store = GuardStore(this)
   val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
   nm.createNotificationChannel(NotificationChannel("mercury_shift", "Active guard shift", NotificationManager.IMPORTANCE_LOW))
+  DutyAlertDelivery(this,store).ensureChannel()
   val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-  val note = Notification.Builder(this, "mercury_shift").setContentTitle("Mercury Guard · Demo shift")
+  val note = Notification.Builder(this, "mercury_shift").setContentTitle("Mercury One · Demo shift")
    .setContentText("Demo GPS requested · open app to check status or end shift").setContentIntent(open)
    .setSmallIcon(android.R.drawable.ic_menu_mylocation).setOngoing(true).build()
   try {
@@ -43,6 +49,7 @@ class PatrolService : Service() {
     override fun onLocationChanged(loc: Location) {
      if (session.active() && hasLocation()) {
       TrackingStatus.lastFixElapsed = SystemClock.elapsedRealtime()
+      TrackingStatus.lastLocation = Location(loc)
       recordSafely("gps", JSONObject().put("latitude",loc.latitude).put("longitude",loc.longitude).put("accuracy_m",loc.accuracy).put("mock",loc.isFromMockProvider))
      } else stopSelf()
     }
@@ -60,8 +67,22 @@ class PatrolService : Service() {
  private fun recordSafely(kind: String, data: JSONObject = JSONObject()) {
   try { store.record(kind, data) } catch (_: Exception) { stopSelf() }
  }
- override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
+ override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+  if (!session.active() || !hasLocation()) { stopSelf(); return START_NOT_STICKY }
+  if (intent?.getBooleanExtra("retry_gps",false) == true) {
+   try {
+    val current = listener ?: return START_NOT_STICKY
+    manager?.removeUpdates(current)
+    TrackingStatus.stopped()
+    manager?.requestLocationUpdates(LocationManager.GPS_PROVIDER,30000L,15f,current)
+    TrackingStatus.requesting = true
+   } catch (_: SecurityException) { recordSafely("gps_permission_missing"); stopSelf() }
+     catch (_: IllegalArgumentException) { recordSafely("gps_unavailable"); stopSelf() }
+  }
+  return START_NOT_STICKY
+ }
  override fun onDestroy() {
+  (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).cancel(702)
   TrackingStatus.stopped()
   handler.removeCallbacksAndMessages(null)
   try { listener?.let { manager?.removeUpdates(it) } } catch (_: SecurityException) { /* Permission was revoked. */ }

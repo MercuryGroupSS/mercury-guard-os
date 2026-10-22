@@ -115,6 +115,36 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
    return true
   } finally { db.endTransaction() }
  }
+ /** Event identity and insertion are atomic; repeated timer recovery cannot duplicate a miss. */
+ fun recordOnce(kind: String, key: String, body: JSONObject = JSONObject()): Boolean {
+  val db = writableDatabase
+  db.beginTransaction()
+  try {
+   if (eventsOf(kind).any { it.optString("event_key") == key }) return false
+   record(kind, body.put("event_key", key))
+   db.setTransactionSuccessful(); return true
+  } finally { db.endTransaction() }
+ }
+ private var cachedEventMax = -1L
+ private var cachedEvents: List<JSONObject> = emptyList()
+ fun eventsOf(kind: String): List<JSONObject> {
+  val max = readableDatabase.rawQuery("SELECT COALESCE(MAX(id),0) FROM event",null).use { it.moveToFirst(); it.getLong(0) }
+  if (max != cachedEventMax) {
+   val events = org.json.JSONArray(exportJson())
+   cachedEvents = (0 until events.length()).map { events.getJSONObject(it) }
+   cachedEventMax = max
+  }
+  return cachedEvents.filter { it.getString("kind") == kind }.map { it.getJSONObject("data") }
+ }
+ fun completedPoints(sessionId: String) = (eventsOf("patrol_point_completed") + eventsOf("patrol_checkpoint_demo"))
+  .filter { it.optString("session") == sessionId }.map { it.getInt("index") }.toSet()
+ fun completePoint(sessionId: String, index: Int, gps: JSONObject): Boolean {
+  require(index in DemoRoute.checkpoints.indices)
+  if (index in completedPoints(sessionId)) return false
+  return recordOnce("patrol_point_completed", "$sessionId:$index", JSONObject()
+   .put("session", sessionId).put("index", index).put("checkpoint", DemoRoute.checkpoints[index])
+   .put("completed_at", System.currentTimeMillis()).put("gps", gps).put("presence_verified", false))
+ }
  /** Transport-neutral outbox only. No network caller or simulated delivery acknowledgement. */
  fun pendingCount(): Int = readableDatabase.rawQuery("SELECT count(*) FROM event WHERE synced=0", null).use { it.moveToFirst(); it.getInt(0) }
  fun prepareBatch(limit: Int = 50): JSONObject? {
