@@ -8,7 +8,7 @@ Preserved newer work: encrypted incoming cache, outgoing batch identities and re
 
 Fold6 fixes: Refresh readiness now confirms its tap. Explicit GPS retry re-registers the listener when a service is already running and clears the old process-local fix observation while waiting. A retry cannot guarantee a new GPS fix. Incident, camera, fold recovery, notification permission and reported stop behaviour were user-confirmed on v0.13, not on this new interface.
 
-Local APK/instrumentation assembly, lint and 15 JVM tests passed. Combined API28/API35 regression verification passed in run 39854910053. The local emulator could not start in the current sandbox, so no screenshot/runtime claim is made for the combined version yet. No Supabase environment or new hosting charge, backend change, reset, flashing, enrollment or phone special-access setting was performed.
+Local APK/instrumentation assembly, lint and 15 JVM tests passed. Combined API28/API35 regression verification passed in run 39854910053. The local emulator could not start in the current sandbox. Runtime evidence below comes from GitHub Actions; the physical cover-screen launch was captured on the Fold6. No Supabase environment or new hosting charge, backend change, reset, flashing, enrollment or phone special-access setting was performed.
 
 Debug signing can differ from the APK already installed on the Fold6. Never uninstall or erase it to resolve a mismatch: its encrypted data key would be lost. A separately identified preview build can preserve the original installation for UI validation; local debug signing material is excluded from Git and source packages. This is not production release signing.
 
