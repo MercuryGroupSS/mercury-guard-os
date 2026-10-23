@@ -364,3 +364,7 @@ Created mercury_guard vendors/guards/guard_login in isolated local Supabase. Mul
 ### PostgreSQL directory adapter — October 23
 
 Added asynchronous parameterized guard/vendor/login lookup against the private identity schema. Login now awaits the limiter and directory before and after authentication, preserving revocation checks with asynchronous storage. The real local PostgreSQL service-role smoke passes; fixtures were rolled back. All 124 server tests pass. Driver pinned with lockfile and no lifecycle scripts. Production connection configuration, durable shared login throttling and runner activation remain unfinished.
+
+### Shared PostgreSQL login throttling — October 23
+
+Added a private database-time limiter with serialized global/account counters and expiry cleanup. PostgreSQL directory defaults to this limiter. Two concurrent service-role connections verified account and global limits, expiry, private execution grants and migration replay in a disposable database; cleanup passed. Local advisors are clear, migration history is aligned, directory integration passes and all 124 server regressions pass. Hosted deployment remains untouched.

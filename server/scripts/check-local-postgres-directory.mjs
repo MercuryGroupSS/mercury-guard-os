@@ -1,5 +1,5 @@
 import {Client} from 'pg';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 import {PostgresGuardDirectory} from '../postgres-guard-directory.mjs';
@@ -17,12 +17,12 @@ try{
  await client.query('INSERT INTO mercury_guard.guards(guard_id,auth_subject,vendor_id,active) VALUES($1,$2,$3,true)',[guard,subject,vendor]);
  await client.query('INSERT INTO mercury_guard.guard_login VALUES($1,$2)',[guard,email]);
  await client.query('SET LOCAL ROLE service_role');
- let count=0;const directory=new PostgresGuardDirectory({client,consumeLoginAttempt:async()=>++count<=1});
+ const directory=new PostgresGuardDirectory({client});
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  assert.deepEqual(await directory.loginAccount(guard),{subject,email});
  assert.equal(await directory.loginAccount("' OR true --"),null);
  assert.equal((await resolve({subject,active:true})).guardId,guard);
- assert.equal(await directory.consumeLoginAttempt('test',Date.now()),true);assert.equal(await directory.consumeLoginAttempt('test',Date.now()),false);
+ const bucket=createHash('sha256').update(subject).digest('hex');for(let i=0;i<5;i++)assert.equal(await directory.consumeLoginAttempt(bucket,Date.now()),true);assert.equal(await directory.consumeLoginAttempt(bucket,Date.now()),false);
  await client.query('UPDATE mercury_guard.vendors SET active=false WHERE vendor_id=$1',[vendor]);
  assert.equal(await directory.loginAccount(guard),null);assert.equal(await resolve({subject,active:true}),null);
  console.log('PASS: PostgreSQL service-role directory, parameterized lookup, mandatory limiter and vendor suspension');

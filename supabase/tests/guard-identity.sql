@@ -5,7 +5,7 @@ BEGIN
  IF has_schema_privilege('anon','mercury_guard','USAGE') OR has_schema_privilege('authenticated','mercury_guard','USAGE') THEN RAISE EXCEPTION 'Client schema access'; END IF;
  IF has_table_privilege('anon','mercury_guard.guards','SELECT') OR has_table_privilege('authenticated','mercury_guard.guards','SELECT') OR has_table_privilege('service_role','mercury_guard.guards','DELETE') THEN RAISE EXCEPTION 'Unexpected table privilege'; END IF;
  IF NOT has_table_privilege('service_role','mercury_guard.guards','SELECT,INSERT,UPDATE') THEN RAISE EXCEPTION 'Missing server grants'; END IF;
- IF (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='mercury_guard' AND c.relkind='r' AND c.relrowsecurity) <> 3 THEN RAISE EXCEPTION 'RLS missing'; END IF;
+ IF (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='mercury_guard' AND c.relkind='r' AND c.relname IN ('vendors','guards','guard_login') AND c.relrowsecurity) <> 3 THEN RAISE EXCEPTION 'RLS missing'; END IF;
  INSERT INTO auth.users(id,email) VALUES(a,a||'@example.invalid'),(b,b||'@example.invalid');
  INSERT INTO mercury_guard.vendors(vendor_id,kind,active) VALUES('synthetic-company','company',true);
  INSERT INTO mercury_guard.guards(guard_id,auth_subject,vendor_id,active) VALUES('synthetic-a',a,'synthetic-company',true),('synthetic-b',b,'synthetic-company',false);

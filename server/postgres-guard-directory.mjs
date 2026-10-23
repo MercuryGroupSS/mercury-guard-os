@@ -1,7 +1,8 @@
+import {createPostgresLoginLimiter} from './postgres-login-limiter.mjs';
 // Server-side read adapter. Client owns connection lifecycle and transport security.
-// A separately configured durable limiter is mandatory; no implicit unlimited login.
+// Database-backed shared throttling is the default; no implicit unlimited login.
 export class PostgresGuardDirectory{
- constructor({client,consumeLoginAttempt}){
+ constructor({client,consumeLoginAttempt=createPostgresLoginLimiter(client)}){
   if(typeof client?.query!=='function'||typeof consumeLoginAttempt!=='function')throw Error('Database client and login limiter required');
   this.client=client;this.consumeAttempt=consumeLoginAttempt;
  }
