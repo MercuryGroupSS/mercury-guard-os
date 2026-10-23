@@ -384,3 +384,7 @@ Added private relational device/site/assignment/challenge tables with guard/vend
 ### PostgreSQL device proof and asynchronous authorization checkpoint
 
 Implemented the PostgreSQL device/assignment adapter and verified one-time signed challenge consumption under concurrent requests using a disposable local database. Verified challenge replacement, rejected-signature rollback, expiry, device/site scope, cancellation and revocation. Shared company Vendor IDs remain separate from individual guard identities. Updated HTTP handlers to await database-backed device authorization; 125 server tests pass with asynchronous device providers. No hosted data or phone changes. Remaining before runtime activation: asynchronous check-in scheduler and PostgreSQL-compatible Ops assignment synchronization.
+
+### Asynchronous check-in scheduler
+
+Updated schedule reads for PostgreSQL compatibility. Concurrent sweeps share one operation; read failures retain the cursor for retry. Shutdown cancels future ticks, drains pending reads, and prevents stale results from creating alerts or advancing state. Verified recovery, stop-during-read, queued callback, existing deadline behavior and confirmed-shift bounds. 127 server tests pass locally. Runtime device-store selection and PostgreSQL Ops synchronization are still pending; no hosted deployment or handset changes.

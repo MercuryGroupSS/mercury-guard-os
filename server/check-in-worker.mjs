@@ -5,14 +5,14 @@ export function createCheckInWorker({store,devices,shiftLifecycle,now=Date.now,i
  store.db.exec(`CREATE TABLE IF NOT EXISTS check_in_worker_state(id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS check_in_worker_runs(assignment TEXT,revision INTEGER,finalized INTEGER NOT NULL,last_success INTEGER NOT NULL,PRIMARY KEY(assignment,revision));`);
  let totalFailures=0;
- let timer=null,running=false,last={processed:0,failed:0,at:null};
- function run(){
-  if(running)return last;running=true;
+ let timer=null,inflight=null,generation=0,last={processed:0,failed:0,at:null};
+ async function sweep(epoch){
   let processed=0,failed=0;const at=now();
   try{
    if(!Number.isSafeInteger(at)||at<=0)throw Error('Trusted time required');
    const cursor=store.db.prepare('SELECT cursor FROM check_in_worker_state WHERE id=1').get()?.cursor??'';
-   const rows=devices.scheduledAfter(cursor,batchSize);
+   const rows=await devices.scheduledAfter(cursor,batchSize);
+   if(epoch!==generation)return last;
    for(const assignment of rows){
     try{
      const p=assignment.checkInPolicy;
@@ -28,7 +28,15 @@ export function createCheckInWorker({store,devices,shiftLifecycle,now=Date.now,i
    const next=rows.length<batchSize?'':rows.at(-1).assignmentId;
    store.db.prepare('INSERT INTO check_in_worker_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET cursor=excluded.cursor').run(next);
    totalFailures+=failed;last={processed,failed,at};return last;
-  }finally{running=false;}
+  }catch(error){totalFailures++;last={processed,failed:failed+1,at};throw error;}
  }
- return {run,status:()=>({...last,totalFailures,running:timer!==null}),start(){if(timer!==null)return;run();timer=schedule(()=>{try{run();}catch{totalFailures++;last={processed:0,failed:1,at:now()};}},intervalMs);timer?.unref?.();},stop(){if(timer!==null){cancel(timer);timer=null;}}};
+ function run(){
+  if(inflight)return inflight;
+  inflight=sweep(generation).finally(()=>{inflight=null;});return inflight;
+ }
+ const tick=()=>timer===null?Promise.resolve(last):run().catch(()=>last);
+ return {run,status:()=>({...last,totalFailures,running:timer!==null,inflight:inflight!==null}),
+  async start(){if(timer!==null)return inflight;timer=schedule(tick,intervalMs);timer?.unref?.();try{return await run();}catch(error){await this.stop();throw error;}},
+  async stop(){generation++;if(timer!==null){cancel(timer);timer=null;}await inflight?.catch(()=>{});}
+ };
 }

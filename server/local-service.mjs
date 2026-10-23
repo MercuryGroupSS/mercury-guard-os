@@ -41,6 +41,6 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
   }catch{res.writeHead(500,{'content-type':'application/json','cache-control':'no-store'});res.end('{"error":"request_failed"}');}
  });
  server.requestTimeout=10000;server.headersTimeout=10000;
- return {schedulerStatus:()=>checkIns?.status()??null,async start(){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});try{checkIns?.start();}catch(e){await new Promise(resolve=>server.close(resolve));throw e;}return `http://127.0.0.1:${server.address().port}`;},
- async stop(){checkIns?.stop();server.closeAllConnections();await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+ return {schedulerStatus:()=>checkIns?.status()??null,async start(){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});try{await checkIns?.start();}catch(e){await new Promise(resolve=>server.close(resolve));throw e;}return `http://127.0.0.1:${server.address().port}`;},
+ async stop(){await checkIns?.stop();server.closeAllConnections();await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }
