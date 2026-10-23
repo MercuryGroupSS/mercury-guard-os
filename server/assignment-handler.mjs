@@ -50,6 +50,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     const result=devices.list(identity,body.proof,at);
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id&&a.canStart);
     if(!assignment)throw Error('Assignment unavailable');
+    if(shiftLifecycle&&!shiftLifecycle.permitsCapture({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint},at,{live:true}))throw Error('Active shift required');
     const device=devices.device(assignment.deviceId);
     const grant=grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
      allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});

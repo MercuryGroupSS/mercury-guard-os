@@ -38,3 +38,15 @@ test('shared vendor grants no shared identity or simultaneous phone shift',()=>{
   assert.equal(ledger.db.prepare('SELECT count(*) AS n FROM shift_sessions').get().n,1);
  }finally{ledger.close();}
 });
+
+test('capture authority closes at confirmed end but retains historical observations',()=>{
+ const ledger=new ShiftLifecycle(':memory:');const scope={guardId:'guard',vendorId:'company',siteId:'site',assignmentId:'shift',deviceThumbprint:context.deviceThumbprint};
+ try{
+  assert.equal(ledger.permitsCapture(scope,2000),false);
+  ledger.transition({...context,request:request('start'),now:1500});
+  assert.equal(ledger.permitsCapture(scope,1499),false);assert.equal(ledger.permitsCapture(scope,1500,{live:true}),true);assert.equal(ledger.permitsCapture(scope,5000),false);
+  for(const key of Object.keys(scope))assert.equal(ledger.permitsCapture({...scope,[key]:'other'},2000),false);
+  ledger.transition({...context,request:request('end','end','Synthetic reason'),now:3000});
+  assert.equal(ledger.permitsCapture(scope,2999),true);assert.equal(ledger.permitsCapture(scope,3000),false);assert.equal(ledger.permitsCapture(scope,2999,{live:true}),false);
+ }finally{ledger.close();}
+});

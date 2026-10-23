@@ -1,3 +1,4 @@
+import {ShiftLifecycle} from './shift-lifecycle.mjs';
 import {DispatchFeed} from './dispatch-feed.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +9,8 @@ import {ShiftGrantIssuer} from './shift-grant-issuer.mjs';
 import {DurableIngest} from './durable-ingest.mjs';
 import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
 const rsa=generateKeyPairSync('rsa',{modulusLength:2048});
-function setup(actions=['incident']){
+function setup(actions=['incident'],withLifecycle=false){
+ const shiftLifecycle=withLifecycle?new ShiftLifecycle(':memory:'):null;
  const dispatch=new DispatchFeed(':memory:');
  const directory=new LocalGuardDirectory(':memory:'),devices=new LocalDeviceAssignments(':memory:'),store=new DurableIngest(':memory:');
  const issuer=new ShiftGrantIssuer({path:':memory:',privateKey:rsa.privateKey,keyId:'key',issuer:'mercury-local',audience:'mercury-local'});
@@ -20,13 +22,13 @@ function setup(actions=['incident']){
  const issued=issuer.issue({identity,device,assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true},allowedActions:actions,sessionExpiresAt:100000,now:2000});
  const claims=JSON.parse(Buffer.from(issued.payload,'base64url'));
  let now=3000,subject='u';
- const handler=createGrantIngestHandler({directory,devices,store,dispatch,grantIssuer:issuer,verifySession:async()=>({subject,active:true,expiresAt:200000}),now:()=>now});
+ const handler=createGrantIngestHandler({directory,devices,store,dispatch,shiftLifecycle,grantIssuer:issuer,verifySession:async()=>({subject,active:true,expiresAt:200000}),now:()=>now});
  const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:'g',site_id:'s',assignment_id:'a',device_thumbprint:device.thumbprint,revocation_version:1},events:[{event_id:randomUUID(),sequence:1,at:2000,kind:'incident',data:{capture_grant_id:claims.grant_id,note:'synthetic'}}]};
  const send=async b=>{
   const payload=Buffer.from(JSON.stringify(b)).toString('base64url'),signature=sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${device.thumbprint}\n${payload}`),ec.privateKey).toString('base64url');
   return handler(new Request('https://example.test/v2/batches',{method:'POST',headers:{authorization:'Bearer token','content-type':'application/json'},body:JSON.stringify({version:2,algorithm:'SHA256withECDSA',audience:'mercury-local',device_thumbprint:device.thumbprint,public_key_spki:spki,payload,signature_der:signature})}));
  };
- return {dispatch,directory,devices,store,issuer,claims,batch,send,time:t=>{now=t},login:s=>{subject=s},close(){dispatch.close();directory.close();devices.close();store.close();issuer.close();}};
+ return {shiftLifecycle,device,identity,dispatch,directory,devices,store,issuer,claims,batch,send,time:t=>{now=t},login:s=>{subject=s},close(){shiftLifecycle?.close();dispatch.close();directory.close();devices.close();store.close();issuer.close();}};
 }
 test('issued capture grant permits ingestion and retains original vendor attribution',async()=>{
  const f=setup();try{
@@ -142,4 +144,23 @@ test('signed acknowledgements retain exact message version and reject foreign or
  const denied=setup();try{
   const b=structuredClone(denied.batch);b.events[0].kind='dispatch_ack';b.events[0].data={capture_grant_id:denied.claims.grant_id,message_id:'instruction',message_version:1};assert.equal((await denied.send(b)).status,400);assert.equal(denied.store.count(),0);
  }finally{denied.close();}
+});
+
+
+test('confirmed shift gates ingestion while preserving pre-exit uploads and retries',async()=>{
+ const f=setup(['incident'],true);try{
+  assert.equal((await f.send(f.batch)).status,400);
+  const assignment={assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',startsAt:1000,endsAt:100000,active:true};
+  const scope={identity:f.identity,assignment,deviceThumbprint:f.device.thumbprint};
+  f.shiftLifecycle.transition({...scope,request:{action:'start',request_id:'start',confirmed:true,reason:''},now:2000});
+  assert.equal((await f.send(f.batch)).status,200);
+  f.shiftLifecycle.transition({...scope,request:{action:'end',request_id:'end',confirmed:true,reason:'Synthetic early exit'},now:2500});
+  assert.equal((await f.send(f.batch)).status,200);
+  for(const at of [1999,2500,2600]){
+   const b=structuredClone(f.batch);b.batch_id=randomUUID();b.events[0].event_id=randomUUID();b.events[0].sequence=2;b.events[0].at=at;
+   assert.equal((await f.send(b)).status,400);
+  }
+  const delayed=structuredClone(f.batch);delayed.batch_id=randomUUID();delayed.events[0].event_id=randomUUID();delayed.events[0].sequence=2;delayed.events[0].at=2499;
+  assert.equal((await f.send(delayed)).status,200);assert.equal(f.store.count(),2);
+ }finally{f.close();}
 });

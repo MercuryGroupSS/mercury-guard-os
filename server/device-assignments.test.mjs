@@ -88,3 +88,18 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
   db.cancel('a');assert.equal((await send(body('a','end'))).status,400);
  }finally{shiftLifecycle.close();db.close();}
 });
+
+test('configured lifecycle refuses capture grants before start and after confirmed end',async()=>{
+ const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200,issued=0;
+ const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
+ const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,grantIssuer:{issue:()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const send=()=>handler(new Request('https://guard.test/v1/shift-grant',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:'a',proof:proof(k,db.challenge(identity,'phone',now))})}));
+ const scope={identity,assignment:{assignmentId:'a',guardId:'guard-1',vendorId:'MG001',siteId:'site-1',startsAt:100,endsAt:999999,active:true},deviceThumbprint:db.device('phone').thumbprint};
+ try{
+  assert.equal((await send()).status,400);assert.equal(issued,0);
+  shiftLifecycle.transition({...scope,request:{action:'start',request_id:'start',reason:'',confirmed:true},now});
+  assert.equal((await send()).status,200);assert.equal(issued,1);
+  now=300;shiftLifecycle.transition({...scope,request:{action:'end',request_id:'end',reason:'Synthetic early exit',confirmed:true},now});
+  assert.equal((await send()).status,400);assert.equal(issued,1);
+ }finally{shiftLifecycle.close();db.close();}
+});

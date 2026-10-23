@@ -31,5 +31,12 @@ export class ShiftLifecycle {
    this.db.prepare('INSERT INTO shift_transitions VALUES(?,?,?)').run(request.request_id,digest,JSON.stringify(receipt));this.db.exec('COMMIT');return receipt;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ permitsCapture(scope,at,{live=false}={}){
+  if(!scope||!Number.isSafeInteger(at)||at<=0)return false;
+  const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(scope.assignmentId);
+  if(!row||row.guard!==scope.guardId||row.vendor!==scope.vendorId||row.site!==scope.siteId||row.device!==scope.deviceThumbprint)return false;
+  if(live&&row.clocked_out!==null)return false;
+  return at>=row.clocked_in&&at<row.ends_at&&(row.clocked_out===null||at<row.clocked_out);
+ }
  close(){this.db.close();}
 }
