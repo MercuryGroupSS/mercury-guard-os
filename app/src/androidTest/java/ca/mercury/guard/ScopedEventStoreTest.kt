@@ -91,4 +91,13 @@ class ScopedEventStoreTest {
   }finally{reopened.close()}
  }}
 
+ @Test fun checkpointChoicesAreIndependentAndCannotBeRecordedTwice(){isolated{store,identity,name->
+  val a=binding(identity);val permission=VerifiedShiftGrant("patrol-grant",a,setOf("patrol"),100,1000,1)
+  store.captureCheckpoint(a,permission,identity,"route",1,"perimeter",10000)
+  store.captureCheckpoint(a,permission,identity,"route",1,"entrance",10001)
+  rejected{store.captureCheckpoint(a,permission,identity,"route",1,"perimeter",10002)}
+  store.close();val reopened=ScopedEventStore(context,name,{200},{1})
+  try{assertTrue(reopened.checkpointRecorded(a,"route",1,"perimeter"));assertTrue(reopened.checkpointRecorded(a,"route",1,"entrance"));assertEquals(2,reopened.pendingCount(a.guardId))}finally{reopened.close()}
+ }}
+
 }

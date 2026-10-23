@@ -121,6 +121,7 @@ class GuardAccountActivity : Activity() {
    var verified:VerifiedShiftGrant?=null
    var verifiedBinding:GrantBinding?=null
    var verifiedAnchor:ServerTimeAnchor?=null
+   var verifiedRoute:JSONObject?=null
    try{
     val identity=DeviceIdentity(this);val fingerprint=identity.publicIdentity()?.thumbprint?:error("Missing key")
     check(item.getString("deviceThumbprint")==fingerprint)
@@ -129,12 +130,12 @@ class GuardAccountActivity : Activity() {
     val response=GuardAccountClient(c.endpoint).grant(active,c.deviceId,binding.assignmentId,identity,c.audience)
     val anchor=ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot)
     verified=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,anchor,SystemClock.elapsedRealtime(),boot)
-    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime())
+    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime());verifiedRoute=response.optJSONObject("patrol_route")
    }catch(_:Exception){}
    val grant=verified;val binding=verifiedBinding;val anchor=verifiedAnchor
    runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){
     busy=false
-    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;captureScreen(item)}
+    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;val current=JSONObject(item.toString());current.remove("patrolRoute");verifiedRoute?.let{current.put("patrolRoute",it)};captureScreen(current)}
     else status.text="Shift authorization could not be verified. The assignment may not have started, may have changed, or the connection may be unavailable."
    }}
   }.start()
@@ -153,9 +154,35 @@ class GuardAccountActivity : Activity() {
     note.text.clear();status.text="Incident saved encrypted on this phone. It has not been sent."
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
+  if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
+  button("Sign out"){startScreen()}
+ }
+ private fun patrolScreen(item:JSONObject){
+  val binding=captureBinding?:return
+  screen("ASSIGNED PATROL","Select checkpoints in any order. Each checkpoint is a manual observation; it does not prove physical presence.")
+  try{
+   val route=item.getJSONObject("patrolRoute");val routeId=route.getString("routeId");val revision=route.getLong("revision");val points=route.getJSONArray("checkpoints")
+   require(points.length() in 1..100)
+   val db=ScopedEventStore(this)
+   try{for(i in 0 until points.length()){
+    val point=points.getJSONObject(i);val pointId=point.getString("id")
+    if(db.checkpointRecorded(binding,routeId,revision,pointId))root.addView(TextView(this).apply{text="Recorded · ${point.getString("label")}";textSize=16f;setPadding(0,dp(12),0,dp(12))})
+    else button("Record checkpoint: ${point.getString("label")}"){
+     try{
+      val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
+      val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+      val current=ScopedEventStore(this)
+      try{current.captureCheckpoint(binding,grant,DeviceIdentity(this),routeId,revision,pointId,observed)}finally{current.close()}
+      patrolScreen(item);status.text="Checkpoint saved encrypted on this phone. It has not been sent."
+     }catch(_:Exception){status.text="Checkpoint not recorded. It may already be saved, or authorization may have expired. Return to the assignment to refresh."}
+    }
+   }}finally{db.close()}
+  }catch(_:Exception){status.text="The assigned route could not be opened. Existing records were preserved."}
+  button("Send my queued records"){sendScoped(binding.guardId)}
+  button("Back to assignment"){captureScreen(item)}
   button("Sign out"){startScreen()}
  }
  private fun sendScoped(guardId:String){

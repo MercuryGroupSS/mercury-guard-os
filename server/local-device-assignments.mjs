@@ -1,3 +1,4 @@
+import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createPublicKey,createHash,randomBytes,randomUUID,verify} from 'node:crypto';
 import {assignmentForGuard} from './guard-directory.mjs';
@@ -34,6 +35,7 @@ export class LocalDeviceAssignments {
  assign(a){
   if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const row=Object.fromEntries(['assignmentId','guardId','vendorId','siteId','startsAt','endsAt','active'].map(k=>[k,a[k]]));
+  if(a.patrolRoute)row.patrolRoute=patrolRoute(a.patrolRoute);
   this.db.prepare('INSERT INTO assignments VALUES(?,?,?)').run(a.assignmentId,a.guardId,JSON.stringify(row));
  }
  cancel(assignmentId){const row=this.db.prepare('SELECT body FROM assignments WHERE id=?').get(assignmentId);if(!row)throw Error('Unknown assignment');const a=JSON.parse(row.body);a.active=false;this.db.prepare('UPDATE assignments SET body=? WHERE id=?').run(JSON.stringify(a),assignmentId);}
@@ -59,7 +61,7 @@ export class LocalDeviceAssignments {
    if(!verify('sha256',Buffer.from(message),key(d.publicKeySpki).key,decode(proof.signature_der,80)))throw Error('Invalid signature');
    this.db.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
    const assignments=this.db.prepare('SELECT body FROM assignments WHERE guard_id=?').all(identity.guardId)
-    .map(r=>assignmentForGuard({identity,assignment:JSON.parse(r.body),device:d,now})).filter(Boolean)
+    .map(r=>{const original=JSON.parse(r.body),mapped=assignmentForGuard({identity,assignment:original,device:d,now});return mapped?{...mapped,...(original.patrolRoute?{patrolRoute:original.patrolRoute}:{})}:null;}).filter(Boolean)
     .map(a=>({...a,deviceThumbprint:d.thumbprint,revocationVersion:d.revocationVersion}));
    this.db.exec('COMMIT');return {assignments};
   }catch(e){this.db.exec('ROLLBACK');throw e;}

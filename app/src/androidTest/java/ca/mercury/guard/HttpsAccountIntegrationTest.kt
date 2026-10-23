@@ -49,14 +49,17 @@ class HttpsAccountIntegrationTest {
    val grant=ShiftGrantVerifier("mercury-local","mercury-local",mapOf("https-fixture" to key)).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,ServerTimeAnchor(response.getLong("server_time_ms"),started,boot),SystemClock.elapsedRealtime(),boot)
    assertNotNull(grant)
    db.capture("incident",JSONObject().put("description","HTTPS integration synthetic incident"),binding,grant!!,identity,response.getLong("server_time_ms"))
+   val route=response.getJSONObject("patrol_route");assertEquals("fixture-route",route.getString("routeId"))
+   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"))
+   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"))
    val proof=db.prepareSigned(identity,"mercury-local","fixture-guard")!!
    val batch=JSONObject(String(Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
-   val ids=setOf(batch.getJSONArray("events").getJSONObject(0).getString("event_id"))
+   val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
    val transport=GuardTransport("https://localhost:55443")
    val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids)
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),"fixture-guard")
-   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(1,fixture("/test/receipts").getInt("count"))
+   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(3,fixture("/test/receipts").getInt("count"))
    var rejected=false;try{fixture("/test/receipts",host="127.0.0.1")}catch(_:javax.net.ssl.SSLException){rejected=true};assertTrue("Untrusted host accepted",rejected)
    session.clear();try{client.profile(session);fail("Cleared session reused")}catch(_:IllegalStateException){}
   }finally{

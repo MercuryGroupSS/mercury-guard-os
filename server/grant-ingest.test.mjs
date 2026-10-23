@@ -70,3 +70,17 @@ test('two guards share a device without blocking each other or sharing upload au
   f.login('u');assert.equal((await f.send(f.batch)).status,200);assert.equal(f.store.count(),2);
  }finally{f.close();}
 });
+
+test('patrol records must match issued route snapshot and cannot double-record a checkpoint',async()=>{
+ const f=setup();try{
+  const route={routeId:'r',revision:1,checkpoints:[{id:'a',label:'Entrance'},{id:'b',label:'Perimeter'}]};
+  const issued=f.issuer.issue({identity:{subject:'u',guardId:'g',vendorId:'v'},device:f.devices.device('d'),assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,patrolRoute:route},allowedActions:['patrol'],sessionExpiresAt:100000,now:2000});
+  const claims=JSON.parse(Buffer.from(issued.payload,'base64url'));route.checkpoints.length=0;
+  const b=structuredClone(f.batch);b.events[0].kind='patrol_checkpoint';b.events[0].data={capture_grant_id:claims.grant_id,route_id:'r',route_revision:1,checkpoint_id:'b'};
+  assert.equal((await f.send(b)).status,200);assert.equal((await f.send(b)).status,200);
+  const other=structuredClone(b);other.batch_id=randomUUID();other.events[0].event_id=randomUUID();other.events[0].sequence=2;
+  assert.equal((await f.send(other)).status,400);
+  other.events[0].data.checkpoint_id='unknown';assert.equal((await f.send(other)).status,400);
+  other.events[0].data.checkpoint_id='a';assert.equal((await f.send(other)).status,200);assert.equal(f.store.count(),2);
+ }finally{f.close();}
+});

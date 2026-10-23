@@ -9,7 +9,8 @@ export class DurableIngest {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS events(device TEXT, id TEXT, sequence INTEGER, digest TEXT, body TEXT,
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
-      CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));`);
+      CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
+      CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));`);
   }
   ingest(raw, trustedContext, now) {
     // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
@@ -35,6 +36,9 @@ export class DurableIngest {
           continue;
         }
         if (event.sequence <= last && trustedContext.allowHistoricalSequence !== true) throw new Error('Device sequence rollback');
+        if(event.kind==='patrol_checkpoint'&&trustedContext.allowHistoricalSequence===true){
+          this.db.prepare('INSERT INTO checkpoints VALUES(?,?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.route_id,event.data.route_revision,event.data.checkpoint_id,event.event_id);
+        }
         this.db.prepare('INSERT INTO events VALUES(?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body);
         last = event.sequence;
       }

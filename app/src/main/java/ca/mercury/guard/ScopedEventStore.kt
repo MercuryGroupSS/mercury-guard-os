@@ -78,6 +78,24 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.setTransactionSuccessful();return eventId
   } finally {db.endTransaction()}
  }
+ fun checkpointRecorded(original:GrantBinding,routeId:String,revision:Long,checkpointId:String):Boolean {
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
+   if(binding(record.getJSONObject("scope"))!=original)continue
+   val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+   if(event.getString("kind")=="patrol_checkpoint"&&data.optString("route_id")==routeId&&data.optLong("route_revision")==revision&&data.optString("checkpoint_id")==checkpointId)return true
+  }}
+  return false
+ }
+ fun captureCheckpoint(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,routeId:String,revision:Long,checkpointId:String,observedAt:Long):String {
+  require(routeId.isNotBlank()&&checkpointId.isNotBlank()&&revision>0)
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(!checkpointRecorded(original,routeId,revision,checkpointId)){"Checkpoint already recorded"}
+   val result=capture("patrol_checkpoint",JSONObject().put("route_id",routeId).put("route_revision",revision).put("checkpoint_id",checkpointId),original,grant,identity,observedAt)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
  /** Preserve per-guard FIFO and immutable retry snapshots; other guards can upload independently. */
  fun prepareSigned(identity: DeviceIdentity,audience: String,guardId:String?=null): JSONObject? {
   val db=writableDatabase;db.beginTransaction()

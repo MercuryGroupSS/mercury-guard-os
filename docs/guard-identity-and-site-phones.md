@@ -77,3 +77,11 @@ After full issued-grant validation, the server permits out-of-order arrival acro
 Sixty Node tests pass, including two authenticated guards sharing a key: guard B uploads sequence 2 before guard A's sequence 1, each is forbidden from uploading the other's records, and duplicates/conflicts remain rejected. Android tests cover independent pending snapshots, cross-guard receipt denial, restart and version-1 migration; emulator execution is pending for this revision. Same-guard FIFO across assignments remains, so a permanently denied older assignment still needs a later recovery workflow without deleting or relabelling records.
 
 The v0.27 account-screen build/emulator run 39984317451 completed successfully on API 28 and API 35. This does not establish configured HTTPS or physical-device execution.
+
+## Authorized patrol checkpoint
+
+Assignments can now carry an administrator-provided patrol route ID, positive revision and up to 100 uniquely identified/labeled checkpoints. Grant issuance persists an immutable route snapshot and returns it over the authenticated service response. The Android account UI uses that current returned route rather than a stale assignment-list copy.
+
+Guards may select checkpoints in any order. The encrypted capture store prevents a second local record for a completed checkpoint and retains completion after restart. The server verifies route ID/revision/checkpoint against the capture grant's persisted policy, and enforces one checkpoint record per guard/assignment/route revision across devices. Exact event retries remain idempotent; another event ID for the same checkpoint is rejected. A manual checkpoint is not physical-presence verification. This implements one assigned route per revision; repeating patrol rounds/schedules remain to be implemented explicitly rather than inferred from reopening a screen.
+
+Sixty-two Node tests pass, including out-of-order checkpoint choices, unknown checkpoints, old/new route revision checks, duplicate rejection and immutable policy snapshots. Android tests cover local order independence, duplicate rejection and restart persistence. The HTTPS test now covers an incident and two checkpoints. Emulator execution is still pending for these additions; physical testing is deferred.

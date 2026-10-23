@@ -1,3 +1,4 @@
+import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createPrivateKey,createPublicKey,randomUUID,sign} from 'node:crypto';
 const actions=new Set(['patrol','incident','photo','check_in','location']);
@@ -11,7 +12,8 @@ export class ShiftGrantIssuer {
   this.key=k;this.keyId=keyId;this.issuer=issuer;this.audience=audience;
   this.db=new DatabaseSync(path);
   this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-   CREATE TABLE IF NOT EXISTS issued_grants(id TEXT PRIMARY KEY,subject TEXT NOT NULL,vendor_id TEXT NOT NULL,payload TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);`);
+   CREATE TABLE IF NOT EXISTS issued_grants(id TEXT PRIMARY KEY,subject TEXT NOT NULL,vendor_id TEXT NOT NULL,payload TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);
+   CREATE TABLE IF NOT EXISTS grant_policies(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
  }
  publicKey(){return createPublicKey(this.key).export({type:'spki',format:'der'}).toString('base64url');}
  issue({identity,assignment,device,sessionExpiresAt,allowedActions,now=Date.now()}){
@@ -27,14 +29,21 @@ export class ShiftGrantIssuer {
   const claims={version:1,grant_id:randomUUID(),issuer:this.issuer,audience:this.audience,guard_id:identity.guardId,site_id:assignment.siteId,assignment_id:assignment.assignmentId,device_thumbprint:device.thumbprint,revocation_version:device.revocationVersion,issued_at_ms:now,not_before_ms:now,expires_at_ms:expiry,actions:[...allowedActions]};
   const payload=Buffer.from(JSON.stringify(claims)).toString('base64url');
   const signature=sign('sha256',Buffer.from(`mercury-shift-grant-v1.${this.keyId}.${payload}`),this.key).toString('base64url');
-  this.db.prepare('INSERT INTO issued_grants(id,subject,vendor_id,payload) VALUES(?,?,?,?)').run(claims.grant_id,identity.subject,identity.vendorId,payload);
-  return {key_id:this.keyId,payload,signature,server_time_ms:now};
+  const policy=assignment.patrolRoute?{patrolRoute:patrolRoute(assignment.patrolRoute)}:{};
+  this.db.exec('BEGIN IMMEDIATE');
+  try{
+   this.db.prepare('INSERT INTO issued_grants(id,subject,vendor_id,payload) VALUES(?,?,?,?)').run(claims.grant_id,identity.subject,identity.vendorId,payload);
+   this.db.prepare('INSERT INTO grant_policies VALUES(?,?)').run(claims.grant_id,JSON.stringify(policy));
+   this.db.exec('COMMIT');
+  }catch(e){this.db.exec('ROLLBACK');throw e;}
+  return {key_id:this.keyId,payload,signature,server_time_ms:now,patrol_route:policy.patrolRoute??null};
  }
  lookup(grantId){
   if(typeof grantId!=='string'||grantId.length>100)return null;
   const row=this.db.prepare('SELECT * FROM issued_grants WHERE id=?').get(grantId);
   if(!row||row.revoked)return null;
-  return {subject:row.subject,vendorId:row.vendor_id,claims:JSON.parse(Buffer.from(row.payload,'base64url').toString('utf8'))};
+  const policy=this.db.prepare('SELECT body FROM grant_policies WHERE id=?').get(grantId);
+  return {policy:policy?JSON.parse(policy.body):{},subject:row.subject,vendorId:row.vendor_id,claims:JSON.parse(Buffer.from(row.payload,'base64url').toString('utf8'))};
  }
  revoke(grantId){if(this.db.prepare('UPDATE issued_grants SET revoked=1 WHERE id=?').run(grantId).changes!==1)throw Error('Unknown grant');}
  close(){this.db.close();}
