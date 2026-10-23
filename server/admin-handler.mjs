@@ -10,7 +10,7 @@ async function body(request,max=65536){
 export function createAdminHandler({admin,verifySession,passwordSession,now=Date.now}){
  return async request=>{
   const url=new URL(request.url),path=url.pathname;
-  if(!['/v1/admin/login','/v1/admin/me','/v1/admin/catalog','/v1/admin/actions'].includes(path))return reply(404,{error:'not_found'});
+  if(!['/v1/admin/login','/v1/admin/me','/v1/admin/catalog','/v1/admin/actions','/v1/admin/resolve'].includes(path))return reply(404,{error:'not_found'});
   if(request.method!==(path==='/v1/admin/me'||path==='/v1/admin/catalog'?'GET':'POST'))return reply(405,{error:'method_not_allowed'});
   if(path!=='/v1/admin/catalog'&&url.search)return reply(400,{error:'invalid_request'});
   if(path==='/v1/admin/login'){
@@ -35,7 +35,7 @@ export function createAdminHandler({admin,verifySession,passwordSession,now=Date
     if([...url.searchParams.keys()].some(k=>!['kind','after'].includes(k))||url.searchParams.getAll('kind').length!==1||url.searchParams.getAll('after').length>1)return reply(400,{error:'invalid_request'});
     return reply(200,await admin.catalog(session,url.searchParams.get('kind'),url.searchParams.get('after')??''));
    }
-   return reply(200,await admin.apply(session,await body(request)));
+   return reply(200,await (path==='/v1/admin/resolve'?admin.settle(session,await body(request)):admin.apply(session,await body(request))));
   }catch(error){return error instanceof AdminDeniedError?reply(403,{error:'administrator_required'}):error instanceof AdminConflictError?reply(409,{error:'request_id_conflict'}):reply(400,{error:'admin_request_rejected'});}
  };
 }

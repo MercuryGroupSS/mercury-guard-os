@@ -27,3 +27,7 @@ test('admin password exchange is limited, rechecks membership and never returns 
  assert.equal((await handler(new Request('https://guard.test/v1/admin/login',{method:'POST',headers:{'content-type':'application/json'},body:'{'}))).status,400);
  assert.equal((await handler(request('login',{...credentials,password:'x'.repeat(5000)}))).status,400);
 });
+test('pending request resolution is protected and retains explicit conflict outcomes',async()=>{
+ let settled=0,member=true;const handler=createAdminHandler({now:()=>1000,verifySession:async()=>({active:true,expiresAt:1000}),admin:{member:async()=>member,settle:async value=>{settled++;return {status:'not_applied'};}}});
+ assert.equal((await handler(request('resolve',{}))).status,200);assert.equal(settled,1);member=false;assert.equal((await handler(request('resolve',{}))).status,403);assert.equal(settled,1);assert.equal((await handler(request('resolve'))).status,405);assert.equal((await handler(request('resolve?request_id=secret',{}))).status,400);
+});

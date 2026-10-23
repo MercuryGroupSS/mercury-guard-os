@@ -27,6 +27,15 @@ function validate(action,p){
 }
 export class AdminDeniedError extends Error{}
 export class AdminConflictError extends Error{}
+function prepareRequest(request,subject){
+ exact(request,['request_id','action','reason','payload']);
+ request={...request,request_id:typeof request.request_id==='string'?request.request_id.toLowerCase():request.request_id,payload:structuredClone(request.payload)};
+ if(['guard.link','ops_binding.approve'].includes(request.action)&&typeof request.payload?.authSubject==='string')request.payload.authSubject=request.payload.authSubject.toLowerCase();
+ if(!uuid(request.request_id)||typeof request.reason!=='string'||!request.reason.trim()||request.reason.length>500||/[\u0000-\u001f]/.test(request.reason))throw Error('Audited administration request required');
+ validate(request.action,request.payload);const input={action:request.action,reason:request.reason.trim(),payload:request.payload};
+ return {request,input,digest:createHash('sha256').update(JSON.stringify(canonical({actor:subject,...input}))).digest('hex')};
+}
+const requestLock=requestId=>createHash('sha256').update('mercury-admin:'+requestId).digest().readBigInt64BE().toString();
 export class PostgresAdministration{
  constructor({devices,loadAuthAccount,now=Date.now}){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.loadAuthAccount=loadAuthAccount;this.now=now;this.consumeLoginAttempt=createPostgresLoginLimiter(this.pool);this.ops=new PostgresOpsBindingStore(this.pool);this.sync=new PostgresOpsAssignmentSync(devices);this.bindings=new PostgresDashboardBindings(devices);this.dispatch=new PostgresDispatchFeed(devices);}
  async member(session,client=this.pool,lock=false){
@@ -35,7 +44,7 @@ export class PostgresAdministration{
  }
  async loginAccount(email){const r=(await this.pool.query('SELECT auth_subject,email FROM mercury_guard.admin_accounts WHERE email=$1 AND active',[email])).rows[0];return r?{subject:r.auth_subject,email:r.email}:null;}
  async catalog(session,kind,after=''){
-  const catalog={audit:['request_id',"SELECT request_id,actor_subject,action,recorded_at,input->>'reason' AS reason,receipt FROM mercury_guard.admin_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],vendors:['vendor_id','SELECT vendor_id,kind,active FROM mercury_guard.vendors WHERE vendor_id>$1 ORDER BY vendor_id LIMIT 51'],
+  const catalog={audit:['request_id',"SELECT request_id,actor_subject,action,recorded_at,input->>'reason' AS reason,receipt->>'status' AS status,receipt FROM mercury_guard.admin_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],vendors:['vendor_id','SELECT vendor_id,kind,active FROM mercury_guard.vendors WHERE vendor_id>$1 ORDER BY vendor_id LIMIT 51'],
    guards:['guard_id','SELECT g.guard_id,g.vendor_id,g.auth_subject,g.active,l.email FROM mercury_guard.guards g LEFT JOIN mercury_guard.guard_login l USING(guard_id) WHERE g.guard_id>$1 ORDER BY g.guard_id LIMIT 51'],
    sites:['site_id','SELECT site_id,active FROM mercury_guard.sites WHERE site_id>$1 ORDER BY site_id LIMIT 51'],
    devices:['device_id','SELECT device_id,mode,site_id,guard_id,thumbprint,active,revoked,revocation_version FROM mercury_guard.devices WHERE device_id>$1 ORDER BY device_id LIMIT 51'],
@@ -46,13 +55,21 @@ export class PostgresAdministration{
   if(!Object.hasOwn(catalog,kind)||(after!==''&&!stable(after)))throw Error('Bounded catalog required');
   return this.devices.transaction(async client=>{if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');const [key,sql]=catalog[kind],rows=(await client.query(sql,[after])).rows,items=rows.slice(0,50);return {kind,items,next_cursor:rows.length>50?items.at(-1)[key]:null};});
  }
- async apply(session,request){
-  exact(request,['request_id','action','reason','payload']);
-  request={...request,request_id:typeof request.request_id==='string'?request.request_id.toLowerCase():request.request_id,payload:structuredClone(request.payload)};
-  if(['guard.link','ops_binding.approve'].includes(request.action)&&typeof request.payload?.authSubject==='string')request.payload.authSubject=request.payload.authSubject.toLowerCase();
-  if(!uuid(request.request_id)||typeof request.reason!=='string'||!request.reason.trim()||request.reason.length>500||/[\u0000-\u001f]/.test(request.reason))throw Error('Audited administration request required');
-  validate(request.action,request.payload);if(!await this.member(session))throw new AdminDeniedError('Administrator unavailable');
-  const input={action:request.action,reason:request.reason.trim(),payload:request.payload},digest=createHash('sha256').update(JSON.stringify(canonical({actor:session.subject,...input}))).digest('hex');
+ async settle(session,value){
+  const {request,input,digest}=prepareRequest(value,session?.subject);
+  return this.devices.transaction(async client=>{
+   if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');
+   await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[requestLock(request.request_id)]);
+   const old=(await client.query('SELECT actor_subject,request_digest,receipt FROM mercury_guard.admin_audit WHERE request_id=$1',[request.request_id])).rows[0];
+   if(old){if(old.actor_subject!==session.subject||old.request_digest!==digest)throw new AdminConflictError('Request ID changed');return old.receipt;}
+   // Reserve an immutable not-applied receipt. A delayed apply of this same ID
+   // must observe it under the same lock and can never perform the mutation.
+   const receipt={request_id:request.request_id,action:request.action,status:'not_applied',result:{},server_time_ms:this.now()};
+   await client.query('INSERT INTO mercury_guard.admin_audit(request_id,actor_subject,action,request_digest,input,receipt) VALUES($1,$2,$3,$4,$5,$6)',[request.request_id,session.subject,request.action,digest,input,receipt]);return receipt;
+  });
+ }
+ async apply(session,value){
+  const {request,input,digest}=prepareRequest(value,session?.subject);if(!await this.member(session))throw new AdminDeniedError('Administrator unavailable');
   const prior=(await this.pool.query('SELECT request_id FROM mercury_guard.admin_audit WHERE request_id=$1',[request.request_id])).rows[0];
   let account=null,expectedGuard=null;
   if(!prior&&(request.action==='guard.link'||request.action==='guard.status'&&request.payload.active)){
@@ -64,7 +81,7 @@ export class PostgresAdministration{
   }
   return this.devices.transaction(async client=>{
    if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');
-   const lock=createHash('sha256').update('mercury-admin:'+request.request_id).digest().readBigInt64BE().toString();await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[lock]);
+   await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[requestLock(request.request_id)]);
    const old=(await client.query('SELECT actor_subject,request_digest,receipt FROM mercury_guard.admin_audit WHERE request_id=$1',[request.request_id])).rows[0];
    if(old){if(old.actor_subject!==session.subject||old.request_digest!==digest)throw new AdminConflictError('Request ID changed');return old.receipt;}
    const p=request.payload;let result;

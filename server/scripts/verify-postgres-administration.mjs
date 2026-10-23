@@ -15,6 +15,9 @@ export async function verifyPostgresAdministration(connectionString,owner){
   assert.equal(await admin.member({...session,subject:subjects[0],user_metadata:{admin:true}}),false);
   const create=action('vendor.create',{vendorId:'admin-vendor',kind:'company',active:true}),created=await Promise.all([admin.apply(session,create),admin.apply(session,create)]);assert.deepEqual(created[0],created[1]);
   await assert.rejects(admin.apply(session,{...create,payload:{...create.payload,active:false}}),AdminConflictError);
+  assert.deepEqual(await admin.settle(session,create),created[0]);
+  const closed=action('vendor.create',{vendorId:'admin-closed',kind:'company',active:true}),closedReceipt=await admin.settle(session,closed);assert.equal(closedReceipt.status,'not_applied');assert.deepEqual(await admin.apply(session,closed),closedReceipt);assert.equal((await pool.query("SELECT 1 FROM mercury_guard.vendors WHERE vendor_id='admin-closed'")).rowCount,0);
+  const racing=action('vendor.create',{vendorId:'admin-resolution-race',kind:'company',active:true}),race=await Promise.all([admin.apply(session,racing),admin.settle(session,racing)]);assert.deepEqual(race[0],race[1]);assert.equal((await pool.query("SELECT 1 FROM mercury_guard.vendors WHERE vendor_id='admin-resolution-race'")).rowCount,race[0].status==='applied'?1:0);
   await admin.apply(session,action('site.create',{siteId:'admin-site',active:true}));
   for(let i=0;i<2;i++)await admin.apply(session,action('guard.link',{guardId:'admin-guard-'+i,vendorId:'admin-vendor',authSubject:subjects[i].toUpperCase(),email:accounts.get(subjects[i]).email,active:true}));
   await admin.apply(session,action('guard.status',{guardId:'admin-guard-0',active:false}));accounts.get(subjects[0]).confirmed=false;
@@ -22,6 +25,7 @@ export async function verifyPostgresAdministration(connectionString,owner){
   accounts.get(subjects[0]).confirmed=true;await admin.apply(session,action('guard.status',{guardId:'admin-guard-0',active:true}));
   await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subjects[1],accounts.get(subjects[1]).email]);
   await assert.rejects(admin.apply({...session,subject:subjects[1]},create),AdminConflictError);
+  await assert.rejects(admin.settle({...session,subject:subjects[1]},closed),AdminConflictError);
   const page=await admin.catalog(session,'ops_bindings');assert.equal(page.items.length,50);assert.ok(page.next_cursor);const next=await admin.catalog(session,'ops_bindings',page.next_cursor);assert.ok(next.items.every(x=>x.source_id>page.next_cursor));
   assert.equal((await admin.catalog(session,'guards')).items.filter(g=>g.vendor_id==='admin-vendor').length,2);
   const key=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),enrollment={deviceId:'admin-phone',mode:'site',siteId:'admin-site',active:true,revoked:false,publicKeySpki:key.publicKey.export({type:'spki',format:'der'}).toString('base64url')};
@@ -40,7 +44,7 @@ export async function verifyPostgresAdministration(connectionString,owner){
   assert.equal(Number((await pool.query("SELECT revision FROM mercury_guard.dashboard_bindings WHERE assignment_id='admin-assignment'")).rows[0].revision),1);
   assert.equal((await pool.query("SELECT count(*)::int n FROM mercury_guard.dispatch_changes WHERE assignment_id='admin-assignment'")).rows[0].n,1);
   await assert.rejects(pool.query('UPDATE mercury_guard.admin_accounts SET active=true'),/permission denied/);await assert.rejects(pool.query('DELETE FROM mercury_guard.admin_audit'),/permission denied/);
-  await owner.query('UPDATE mercury_guard.admin_accounts SET active=false WHERE auth_subject=$1',[adminSubject]);assert.equal(await admin.member(session),false);await assert.rejects(admin.apply(session,create),AdminDeniedError);await assert.rejects(admin.catalog(session,'guards'),AdminDeniedError);
+  await owner.query('UPDATE mercury_guard.admin_accounts SET active=false WHERE auth_subject=$1',[adminSubject]);assert.equal(await admin.member(session),false);await assert.rejects(admin.apply(session,create),AdminDeniedError);await assert.rejects(admin.settle(session,closed),AdminDeniedError);await assert.rejects(admin.catalog(session,'guards'),AdminDeniedError);
   console.log('PASS: explicit admin membership, company-to-many guard linking, idempotent audited actions, nested rollback and revocation');
  }finally{await pool.end();}
 }

@@ -48,8 +48,11 @@ try{
  await admin.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subject,email]);
  assert.equal((await adminMe()).status,200);
  const adminLogin=await post('/v1/admin/login',{email,password});assert.equal(adminLogin.status,200);assert.equal('refresh_token' in await adminLogin.json(),false);
+ const consolePage=await fetch(origin+'/admin/');assert.equal(consolePage.status,200);assert.match(consolePage.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(await consolePage.text(),/Mercury One/);assert.equal((await fetch(origin+'/admin/model.mjs')).status,200);assert.equal((await fetch(origin+'/admin/.local-backend/admin-console-test.json')).status,404);
  const change=(action,payload)=>({request_id:randomUUID(),action,reason:'Synthetic HTTP administration test',payload});
  const suspended=change('guard.status',{guardId:guard,active:false}),firstChange=await post('/v1/admin/actions',suspended);assert.equal(firstChange.status,200);const savedChange=await firstChange.json();assert.deepEqual(await (await post('/v1/admin/actions',suspended)).json(),savedChange);
+ assert.deepEqual(await (await post('/v1/admin/resolve',suspended)).json(),savedChange);
+ const rejected=change('vendor.status',{vendorId:vendor+'-missing',active:false});assert.equal((await post('/v1/admin/actions',rejected)).status,400);const resolved=await post('/v1/admin/resolve',rejected);assert.equal(resolved.status,200);const closed=await resolved.json();assert.equal(closed.status,'not_applied');assert.deepEqual(await (await post('/v1/admin/actions',rejected)).json(),closed);
  assert.equal((await post('/v1/admin/actions',{...suspended,payload:{guardId:guard,active:true}})).status,409);assert.equal((await me()).status,403);
  assert.equal((await post('/v1/admin/actions',change('guard.status',{guardId:guard,active:true}))).status,200);
  const catalog=await fetch(origin+'/v1/admin/catalog?kind=guards',{headers:{authorization:'Bearer '+session.access_token}});assert.equal(catalog.status,200);assert.ok((await catalog.json()).items.some(g=>g.guard_id===guard));
