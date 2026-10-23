@@ -32,9 +32,10 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    if(path==='/v1/shift-transition'){
     if(!shiftLifecycle)return reply(503,{error:'shift_service_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof,transition'||typeof body.assignment_id!=='string')throw Error('Invalid transition request');
-    const at=now(),result=devices.list(identity,body.proof,at,{historical:true});
+    const at=now(),result=devices.list(identity,body.proof,at,{historical:true,includeCancelled:body.transition?.action==='end'});
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
+    if(assignment.assignmentActive===false&&shiftLifecycle.snapshot({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint}).state==='not_started')throw Error('No confirmed shift to close');
     return reply(200,shiftLifecycle.transition({identity,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at}));
    }
    if(path==='/v1/dispatch'){
@@ -57,9 +58,9 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
      allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at,{activeWindow:shiftLifecycle?.checkInWindow(assignment)}):null});
    }
-   const at=now(),result=devices.list(identity,body,at,{historical:!!shiftLifecycle});
+   const at=now(),result=devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle});
    if(shiftLifecycle){
-    result.assignments=result.assignments.map(a=>({...a,canStart:at>=a.startsAt&&at<a.endsAt,shift_state:shiftLifecycle.snapshot({...identity,siteId:a.siteId,assignmentId:a.assignmentId,deviceThumbprint:a.deviceThumbprint})})).filter(a=>at<a.endsAt||a.shift_state.state!=='not_started');
+    result.assignments=result.assignments.map(a=>({...a,canStart:a.assignmentActive!==false&&at>=a.startsAt&&at<a.endsAt,shift_state:shiftLifecycle.snapshot({...identity,siteId:a.siteId,assignmentId:a.assignmentId,deviceThumbprint:a.deviceThumbprint})})).filter(a=>(a.assignmentActive!==false&&at<a.endsAt)||a.shift_state.state!=='not_started');
     result.server_time_ms=at;
    }
    return reply(200,result);

@@ -92,7 +92,7 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
   const ordinary=db.list(identity,proof(k,db.challenge(identity,'phone',now)),now);assert.equal(ordinary.assignments.length,0);
   const ended=await send(body('a','end'));assert.equal(ended.status,200);assert.equal((await ended.json()).early_exit,false);
   assert.equal((await (await states()).json()).assignments[0].shift_state.state,'ended');
-  db.cancel('a');assert.equal((await send(body('a','end'))).status,400);
+  db.cancel('a');assert.equal((await send(body('a','end'))).status,200);
  }finally{shiftLifecycle.close();db.close();}
 });
 
@@ -108,5 +108,27 @@ test('configured lifecycle refuses capture grants before start and after confirm
   assert.equal((await send()).status,200);assert.equal(issued,1);
   now=300;shiftLifecycle.transition({...scope,request:{action:'end',request_id:'end',reason:'Synthetic early exit',confirmed:true},now});
   assert.equal((await send()).status,400);assert.equal(issued,1);
+ }finally{shiftLifecycle.close();db.close();}
+});
+
+test('cancelled confirmed shift remains closeable without reopening capture or new clock-in',async()=>{
+ const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
+ const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
+ const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,grantIssuer:{issue:()=>{throw Error('Must not issue');}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const call=async(path,extra)=>{const p=proof(k,db.challenge(identity,'phone',now));return handler(new Request('https://guard.test'+path,{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify(extra?{...extra,proof:p}:p)}));};
+ const transition=(action,request_id)=>call('/v1/shift-transition',{assignment_id:'a',transition:{action,request_id,reason:action==='end'?'Cancelled assignment':'',confirmed:true}});
+ try{
+  db.assign({assignmentId:'never-started',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'site-1',active:true,startsAt:100,endsAt:999999});db.cancel('never-started');
+  assert.equal((await call('/v1/shift-transition',{assignment_id:'never-started',transition:{action:'end',request_id:'invalid-close',reason:'Cancelled',confirmed:true}})).status,400);
+  assert.equal((await transition('start','start-cancel-test')).status,200);db.cancel('a');now=300;
+  const rows=(await (await call('/v1/assignments')).json()).assignments;
+  assert.equal(rows.length,1);assert.equal(rows[0].assignmentActive,false);assert.equal(rows[0].canStart,false);assert.equal(rows[0].shift_state.state,'active');
+  assert.equal((await transition('start','another-start')).status,400);
+  assert.equal((await call('/v1/shift-grant',{assignment_id:'a'})).status,400);
+  const ended=await transition('end','end-cancel-test');assert.equal(ended.status,200);const receipt=await ended.json();
+  assert.deepEqual(await (await transition('end','end-cancel-test')).json(),receipt);
+  assert.equal((await (await call('/v1/assignments')).json()).assignments[0].shift_state.state,'ended');
+  assert.equal(db.list(identity,proof(k,db.challenge(identity,'phone',now)),now).assignments.length,0);
+  db.revoke('phone');assert.throws(()=>db.challenge(identity,'phone',now));
  }finally{shiftLifecycle.close();db.close();}
 });

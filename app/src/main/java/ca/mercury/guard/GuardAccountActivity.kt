@@ -144,7 +144,7 @@ class GuardAccountActivity : Activity() {
     busy=false
     try{
      check(p!=null&&a!=null)
-     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active"}.map{it.getString("assignmentId")}.toSet())
+     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&(!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active")}.map{it.getString("assignmentId")}.toSet())
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service."
      button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
@@ -174,7 +174,7 @@ class GuardAccountActivity : Activity() {
      "active"->{
       val now=Math.addExact(item.getLong("status_server_time_ms"),Math.subtractExact(SystemClock.elapsedRealtime(),item.getLong("status_elapsed_ms")))
       if(now<item.getLong("endsAt")){
-       button("Continue shift"){verifyAssignment(item)}
+       if(item.optBoolean("assignmentActive",true))button("Continue shift"){verifyAssignment(item)} else status.text="Assignment cancelled. Capture is unavailable; confirm your shift end below."
        button("Escalate · end shift early"){
         val reason=EditText(this).apply{hint="Reason for leaving early";isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(2000))}
         val dialog=AlertDialog.Builder(this).setTitle("End shift early").setMessage("Give a reason, then confirm. This records an early exit; it does not notify dispatch yet.").setView(reason).setNegativeButton("Cancel",null).setPositiveButton("Confirm early exit",null).create()
@@ -184,7 +184,7 @@ class GuardAccountActivity : Activity() {
        AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->submitShift(item,scope,"end","")}.show()
       }
      }
-     "ended"->status.text="Shift ended. Saved records remain available for upload."
+     "ended"->status.text=if(item.optBoolean("assignmentActive",true))"Shift ended. Saved records remain available for upload." else "Cancelled assignment closed. Saved records are preserved; upload requires administrator review."
      else->error("Unknown shift state")
     }
    }

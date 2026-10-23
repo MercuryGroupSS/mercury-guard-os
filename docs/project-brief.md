@@ -320,3 +320,7 @@ Read-only inspection confirms Invoice Desk vendor IDs may be renamed and HR's em
 ### Preview 0.29 packaging — October 23
 
 Version 0.29 (code 29) gathers the configured account launcher, particle sign-in branding, installation-key enrollment details and encrypted shift rejection/recovery improvements since the immutable 0.28 package. The separate preview application remains unconfigured and debug-signed; live Auth and Ops activation are not implied. Physical testing remains deferred. See build-v0.29.md; artifact checksums and exact-source verification are recorded alongside the saved APK.
+
+### Cancelled assignment close-out — October 23
+
+A confirmed shift on a cancelled assignment now remains visible for close-out by its original guard on the same enrolled phone, within the existing historical window. New clock-in, capture grants, ordinary assignment reads and event uploads remain denied. Never-started cancelled assignments are hidden and cannot be closed. Repeated end requests return their original receipt. The account screen hides Continue shift for cancelled assignments and clears reminder eligibility. Revoked devices and disabled identities retain their denial rules. Pending start confirmations and administrative closure beyond the historical window still need a separate recovery path. All 114 server tests passed; targeted cancellation checks also cover never-started denial. This change is newer than the saved 0.29 APK.
