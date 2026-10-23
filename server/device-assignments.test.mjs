@@ -69,3 +69,22 @@ test('dispatch route needs a fresh proof and rejects other assignments and inval
   db.cancel('a');assert.equal((await send('a',null)).status,400);
  }finally{dispatch.close();db.close();}
 });
+
+test('shift route authenticates proofs and permits explicit scheduled end without reopening capture',async()=>{
+ const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
+ const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
+ const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,now:()=>now,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:999999}:null});
+ const body=(assignment,action,id=action)=>({assignment_id:assignment,transition:{action,request_id:id,reason:'',confirmed:true},proof:proof(k,db.challenge(identity,'phone',now))});
+ const send=(b,token='valid')=>handler(new Request('https://guard.test/v1/shift-transition',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(b)}));
+ try{
+  assert.equal((await send(body('a','start'),'invalid')).status,401);
+  assert.equal((await send(body('b','start'))).status,400);
+  const startBody=body('a','start');const start=await send(startBody);assert.equal(start.status,200);const original=await start.json();
+  assert.equal((await send(startBody)).status,400);
+  now=999999;
+  assert.deepEqual(await (await send(body('a','start'))).json(),original);
+  const ordinary=db.list(identity,proof(k,db.challenge(identity,'phone',now)),now);assert.equal(ordinary.assignments.length,0);
+  const ended=await send(body('a','end'));assert.equal(ended.status,200);assert.equal((await ended.json()).early_exit,false);
+  db.cancel('a');assert.equal((await send(body('a','end'))).status,400);
+ }finally{shiftLifecycle.close();db.close();}
+});

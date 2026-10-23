@@ -51,7 +51,7 @@ export class LocalDeviceAssignments {
   this.db.prepare('INSERT INTO challenges VALUES(?,?,?,?,?) ON CONFLICT(subject,device) DO UPDATE SET id=excluded.id,nonce=excluded.nonce,expires=excluded.expires').run(requestId,identity.subject,deviceId,nonce,expires);
   return {audience:this.audience,request_id:requestId,challenge:nonce,expires_at:expires};
  }
- list(identity,proof,now=Date.now()){
+ list(identity,proof,now=Date.now(),{historical=false}={}){
   const fields=['version','algorithm','audience','request_id','challenge','device_thumbprint','public_key_spki','signature_der'];
   if(!identity||!id(identity.subject)||!Number.isSafeInteger(now)||!proof||Object.keys(proof).sort().join()!==fields.sort().join()||proof.version!==1||proof.algorithm!=='SHA256withECDSA'||proof.audience!==this.audience||typeof proof.request_id!=='string')throw Error('Invalid proof');
   this.db.exec('BEGIN IMMEDIATE');
@@ -64,7 +64,7 @@ export class LocalDeviceAssignments {
    if(!verify('sha256',Buffer.from(message),key(d.publicKeySpki).key,decode(proof.signature_der,80)))throw Error('Invalid signature');
    this.db.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
    const assignments=this.db.prepare('SELECT body FROM assignments WHERE guard_id=?').all(identity.guardId)
-    .map(r=>{const original=JSON.parse(r.body),mapped=assignmentForGuard({identity,assignment:original,device:d,now});return mapped?{...mapped,...(original.checkInPolicy?{checkInPolicy:original.checkInPolicy}:{}),...(original.patrolRoute?{patrolRoute:original.patrolRoute}:{})}:null;}).filter(Boolean)
+    .map(r=>{const original=JSON.parse(r.body),mapped=historical&&now>original.endsAt+86400000?null:assignmentForGuard({identity,assignment:original,device:d,now:historical?Math.min(now,original.endsAt-1):now});return mapped?{...mapped,...(original.checkInPolicy?{checkInPolicy:original.checkInPolicy}:{}),...(original.patrolRoute?{patrolRoute:original.patrolRoute}:{})}:null;}).filter(Boolean)
     .map(a=>({...a,deviceThumbprint:d.thumbprint,revocationVersion:d.revocationVersion}));
    this.db.exec('COMMIT');return {assignments};
   }catch(e){this.db.exec('ROLLBACK');throw e;}

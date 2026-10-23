@@ -1,3 +1,4 @@
+import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
@@ -21,9 +22,10 @@ const dashboardBindings=new DashboardBindings(new URL('dashboard-bindings.sqlite
 // No send function is configured: explicit mappings can queue records locally only.
 const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox});
 const dispatch=new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
-const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch});
+const shiftLifecycle=new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
+const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
 try {console.log('Local synthetic-data ingestion service: '+await service.start());}
-catch(error){dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();directory.close();devices.close();grantIssuer.close();throw error;}
+catch(error){shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();directory.close();devices.close();grantIssuer.close();throw error;}
 let bridgeRun=null;
 function pumpBridge(){if(bridgeRun)return;bridgeRun=dashboardBridge.run().catch(()=>console.error('Local dashboard projection failed; source records retained.')).finally(()=>{bridgeRun=null;});}
 pumpBridge();const bridgeTimer=setInterval(pumpBridge,30000);bridgeTimer.unref();
@@ -32,5 +34,5 @@ let reportedFailures=0;
 const healthTimer=setInterval(()=>{const status=service.schedulerStatus();if(status&&status.totalFailures>reportedFailures){reportedFailures=status.totalFailures;console.error('Check-in scheduler recorded failures: '+JSON.stringify(status));}},60000);
 healthTimer.unref();
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await service.stop();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();directory.close();devices.close();grantIssuer.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await service.stop();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();directory.close();devices.close();grantIssuer.close();process.exit(0);}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);

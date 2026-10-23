@@ -2,12 +2,12 @@ import {DispatchCursorError} from './dispatch-feed.mjs';
 import {reconcileCheckIns} from './check-in-status.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
 import {strictJson} from './verify-batch.mjs';
-export function createAssignmentHandler({verifySession,directory,devices,grantIssuer,store,dispatch,now=Date.now}){
+export function createAssignmentHandler({verifySession,directory,devices,grantIssuer,store,dispatch,shiftLifecycle,now=Date.now}){
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  const reply=(status,body)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
  return async request=>{
   const path=new URL(request.url).pathname;
-  if(!['/v1/device-challenge','/v1/assignments','/v1/shift-grant','/v1/dispatch'].includes(path))return reply(404,{error:'not_found'});
+  if(!['/v1/device-challenge','/v1/assignments','/v1/shift-grant','/v1/dispatch','/v1/shift-transition'].includes(path))return reply(404,{error:'not_found'});
   if(request.method!=='POST')return reply(405,{error:'method_not_allowed'});
   if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return reply(415,{error:'json_required'});
   const auth=request.headers.get('authorization')??'';
@@ -27,6 +27,14 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    if(path==='/v1/device-challenge'){
     if(!body||Object.keys(body).join()!=='device_id')throw Error('Invalid request');
     return reply(200,devices.challenge(identity,body.device_id,now()));
+   }
+   if(path==='/v1/shift-transition'){
+    if(!shiftLifecycle)return reply(503,{error:'shift_service_unavailable'});
+    if(!body||Object.keys(body).sort().join()!=='assignment_id,proof,transition'||typeof body.assignment_id!=='string')throw Error('Invalid transition request');
+    const at=now(),result=devices.list(identity,body.proof,at,{historical:true});
+    const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
+    if(!assignment)throw Error('Assignment unavailable');
+    return reply(200,shiftLifecycle.transition({identity,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at}));
    }
    if(path==='/v1/dispatch'){
     if(!dispatch)return reply(503,{error:'dispatch_unavailable'});
