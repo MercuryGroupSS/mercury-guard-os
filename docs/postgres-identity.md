@@ -1,0 +1,11 @@
+# PostgreSQL identity persistence
+
+The private mercury_guard schema is the first PostgreSQL persistence layer for Mercury One. It has vendors, guards and guard_login tables. Vendor kind is company or individual; multiple guard rows may reference one vendor. Each guard has a unique real auth.users subject and a separate guard ID. Email login mappings are lowercase and unique. New vendor/guard entries default inactive.
+
+Foreign keys restrict deletion of referenced vendors, guards and Auth accounts. RLS is enabled on all three tables. PUBLIC, anon and authenticated have no schema/table access. The service role has schema usage and SELECT/INSERT/UPDATE only, with no DELETE or TRUNCATE grant. No client-facing RPC, public view or permissive policy is added. Server-side authorization must still check both vendor and guard activation and verify the password session against the guard's Auth subject.
+
+This schema is installed only in the isolated local Supabase instance. The existing runtime still uses the local SQLite directory; a PostgreSQL runtime adapter, authenticated administrative approvals and migration/deployment review are outstanding. The existence of tables does not make sign-in production-ready.
+
+Validation: supabase/tests/guard-identity.sql creates synthetic records inside a rolled-back transaction and checks role privileges, RLS, company-to-many-guards, unique Auth subjects/login emails, reference integrity and preservation of individually disabled guards. The local Supabase advisors reported no warnings or errors. The installed CLI's db query command rejects multi-statement files, so SQL execution used psql inside the fixed local database container; the migration is exported using db pull rather than handwritten migration naming.
+
+Generated migration: 20261023184633_guard_identity.sql. Local migration history is aligned. Explicit revokes were retained in the generated migration so a target with different default grants cannot accidentally broaden access. Migration replay and the same constraint/privilege tests passed in a separately created disposable PostgreSQL database with a minimal auth.users reference table; that verification database was removed. This is not a full production Auth migration test.

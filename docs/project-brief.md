@@ -356,3 +356,7 @@ Verified the source reader and refresh pipeline against the isolated local Supab
 ### Ops-to-phone authorization smoke — October 23
 
 Extended the real local REST smoke through temporary Supabase Auth login, enrolled-device proof and the actual assignment handler. The imported assignment is visible to the authenticated guard; replay is denied, and source cancellation removes assignment availability. Temporary account and table cleanup passed. This is local handler integration evidence, not physical-device testing or hosted activation.
+
+### Private PostgreSQL identity schema — October 23
+
+Created mercury_guard vendors/guards/guard_login in isolated local Supabase. Multiple individual guards can reference one company vendor; Auth subjects and lowercase login mappings are unique, activation defaults off, and referenced identities cannot be deleted. All tables have RLS and no anon/authenticated privileges; the server role has SELECT/INSERT/UPDATE only. Transactional fixtures rolled back, local advisors reported no issues, migration history is aligned, and generated migration replay passed in a disposable database that was then removed. Runtime remains on SQLite pending a PostgreSQL adapter. No hosted schema or application was changed.
