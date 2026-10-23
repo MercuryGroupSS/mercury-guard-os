@@ -36,3 +36,20 @@ test('confirmed attendance enters mapped queue once and preserves server times a
   assert.equal(store.count(),0);
  }finally{shiftLifecycle.close();store.close();outbox.close();bindings.close();}
 });
+
+test('missed-delivery notices retain confirmed attribution and queue once without claiming dispatch',async()=>{
+ const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const {reconcileCheckIns}=await import('./check-in-status.mjs');
+ const shiftLifecycle=new ShiftLifecycle(':memory:'),store=new DurableIngest(':memory:'),outbox=new DashboardOutbox(':memory:'),bindings=new DashboardBindings(':memory:');
+ try{
+  const assignment={assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',startsAt:1000,endsAt:121000,active:true,checkInPolicy:{revision:1,interval_ms:60000,window_ms:10000,max_evidence_age_ms:5000,max_accuracy_m:100}};
+  shiftLifecycle.transition({identity:{subject:'u',guardId:'g',vendorId:'v'},assignment,deviceThumbprint:'a'.repeat(64),request:{request_id:'start',action:'start',confirmed:true,reason:''},now:1000});
+  reconcileCheckIns(store,assignment,12000,{activeWindow:shiftLifecycle.checkInWindow(assignment)});
+  const bridge=createDashboardBridge({store,outbox,bindings,shiftLifecycle});await bridge.run();assert.equal(outbox.db.prepare('SELECT count(*) AS n FROM dashboard_outbox').get().n,0);
+  bindings.approve({assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',dashboardShiftId:'upstream',destination:'isolated',revision:1,active:true});
+  for(let i=0;i<3;i++)await bridge.run();
+  const messages=outbox.db.prepare('SELECT body FROM dashboard_outbox').all().map(r=>JSON.parse(r.body));
+  const notices=messages.filter(x=>x.observation.kind==='check_in_delivery_missing');assert.equal(notices.length,1);assert.equal(notices[0].vendor_id,'v');assert.equal(notices[0].observation.data.deadline_at,11000);assert.equal(notices[0].observation.data.detected_at,12000);
+  assert.equal(store.db.prepare('SELECT status FROM check_in_alert_outbox').get().status,'pending');assert.equal(bridge.status().delivery,'disabled');
+  assert.equal(shiftLifecycle.dashboardNotice({kind:'check_in_delivery_missing',assignment_id:'other',guard_id:'g',policy_revision:1,slot:0,deadline_at:11000,detected_at:12000}),null);
+ }finally{shiftLifecycle.close();store.close();outbox.close();bindings.close();}
+});

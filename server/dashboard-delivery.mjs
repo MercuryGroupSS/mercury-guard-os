@@ -12,6 +12,9 @@ export function projectDashboardObservation(record,mapping){
  if(!stable(record.vendor_id)||record.vendor_id!==mapping.vendorId||!/^[a-f0-9]{64}$/.test(scope.device_thumbprint)||typeof event.event_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(event.event_id)||!Number.isSafeInteger(event.at)||event.at<=0)throw Error('Original attribution required');
  const d=event.data;let data;
  switch(event.kind){
+  case 'check_in_delivery_missing':
+   if(!Number.isSafeInteger(d.policy_revision)||d.policy_revision<1||!Number.isSafeInteger(d.slot)||d.slot<0||!Number.isSafeInteger(d.deadline_at)||d.deadline_at<=0||d.detected_at!==event.at||event.at<d.deadline_at)throw Error('Invalid delivery deadline');
+   data={policy_revision:d.policy_revision,slot:d.slot,deadline_at:d.deadline_at,detected_at:d.detected_at};break;
   case 'dispatch_ack':if(!stable(d.message_id)||!Number.isSafeInteger(d.message_version)||d.message_version<1)throw Error('Invalid acknowledgement');data={message_id:d.message_id,message_version:d.message_version};break;
   case 'shift_start':case 'shift_end':
    if(!Number.isSafeInteger(d.clocked_in_at_ms)||d.clocked_in_at_ms<=0||typeof d.early_exit!=='boolean')throw Error('Invalid attendance times');

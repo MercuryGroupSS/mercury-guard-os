@@ -254,3 +254,9 @@ The real isolated local Supabase smoke test now supplies the lifecycle ledger. I
 ## v0.28 preview candidate packaging
 
 Version code 28 / 0.28.0 consolidates the account, authorized evidence/check-in, message acknowledgement and confirmed-shift work. The separate Preview package uses the existing local preview signer; the original installed application is untouched. See build-v0.28.md for verification boundaries and operational gaps. The default APK remains unconfigured and is not a production deployment. Physical testing remains deferred.
+
+## Missed-delivery notice bridge
+
+The dashboard bridge now also reads the durable missed-check outbox through its own bounded cursor. It derives original vendor/site/device attribution from the confirmed shift ledger, retains the original deadline and detection time, and generates a deterministic notice identity. Missing mappings are revisited; foreign or absent shift scope cannot be inferred from vendor/name matches. Repeated pumping queues one notice. Existing approved-mapping checks and receipt validation govern downstream delivery. The original miss remains preserved; queuing does not claim dispatch notification.
+
+105 server tests pass. Phone-screen source b5cc0e8 passed all jobs in run 39998713518: build, Android API 28/API 35, and HTTPS. The v0.28 package remains the immutable preview candidate from source 53fbbaa; this later server bridge change is not retroactively claimed as part of that bundle. No live sending or physical installation occurred.

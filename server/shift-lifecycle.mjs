@@ -31,6 +31,15 @@ export class ShiftLifecycle {
    this.db.prepare('INSERT INTO shift_transitions VALUES(?,?,?)').run(request.request_id,digest,JSON.stringify(receipt));this.db.exec('COMMIT');return receipt;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ dashboardNotice(notice){
+  if(!notice||notice.kind!=='check_in_delivery_missing'||!Number.isSafeInteger(notice.policy_revision)||notice.policy_revision<1||!Number.isSafeInteger(notice.slot)||notice.slot<0||!Number.isSafeInteger(notice.deadline_at)||!Number.isSafeInteger(notice.detected_at)||notice.deadline_at<=0||notice.detected_at<notice.deadline_at)throw Error('Invalid missed-delivery notice');
+  const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=? AND guard=?').get(notice.assignment_id,notice.guard_id);
+  if(!row)return null;
+  if(notice.deadline_at<=row.clocked_in||notice.deadline_at>Math.min(row.ends_at,row.clocked_out??row.ends_at))throw Error('Notice outside confirmed shift');
+  const h=createHash('sha256').update(JSON.stringify(['mercury-deadline-notice-v1',row.assignment,row.guard,row.vendor,row.device,notice.policy_revision,notice.slot])).digest('hex');
+  const eventId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`;
+  return {vendor_id:row.vendor,scope:{guard_id:row.guard,vendor_id:row.vendor,site_id:row.site,assignment_id:row.assignment,device_thumbprint:row.device},event:{event_id:eventId,at:notice.detected_at,kind:'check_in_delivery_missing',data:{policy_revision:notice.policy_revision,slot:notice.slot,deadline_at:notice.deadline_at,detected_at:notice.detected_at}}};
+ }
  dashboardAfter(cursor,limit){
   if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Bounded attendance page required');
   return this.db.prepare('SELECT rowid AS cursor,receipt FROM shift_transitions WHERE rowid>? ORDER BY rowid LIMIT ?').all(cursor,limit).map(row=>{
