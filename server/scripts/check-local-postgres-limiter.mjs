@@ -6,6 +6,8 @@ import {verifyPostgresAdministration} from './verify-postgres-administration.mjs
 import {verifyPostgresAuthSessions} from './verify-postgres-auth-sessions.mjs';
 import {verifyPostgresOwnerMembership} from './verify-postgres-owner-membership.mjs';
 import {verifyPostgresReceivedReports} from './verify-postgres-received-reports.mjs';
+import {verifyPostgresPatrolRounds} from './verify-postgres-patrol-rounds.mjs';
+import {verifyPostgresEscalations} from './verify-postgres-escalations.mjs';
 import {verifyPostgresDashboard} from './verify-postgres-dashboard.mjs';
 import {verifyPostgresDispatch} from './verify-postgres-dispatch.mjs';
 import {verifyPostgresCheckIns} from './verify-postgres-check-ins.mjs';
@@ -39,7 +41,7 @@ try{
  await admin.query('CREATE DATABASE '+name);created=true;url.pathname='/'+name;
  fixture=new Client({connectionString:url.toString()});await fixture.connect();
  await fixture.query('CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text);CREATE TABLE auth.sessions(id uuid PRIMARY KEY,user_id uuid NOT NULL REFERENCES auth.users(id),not_after timestamptz,test_secret text);');
- for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql','20261023185827_guard_device_assignments.sql','20261023191157_guard_ops_sync.sql','20261023191943_guard_ops_bindings.sql','20261023192541_guard_shifts.sql','20261023193010_guard_capture_grants.sql','20261023193609_guard_events.sql','20261023194505_guard_check_in_state.sql','20261023195129_guard_dispatch.sql','20261023200239_guard_dashboard_delivery.sql','20261023203534_guard_administration.sql','20261023211811_guard_auth_session_read.sql','20261023212252_guard_owner_membership.sql','20261023222717_guard_dashboard_receiver.sql','20261023224043_guard_dashboard_media.sql','20261023225230_guard_receiver_report_index.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql','20261023185827_guard_device_assignments.sql','20261023191157_guard_ops_sync.sql','20261023191943_guard_ops_bindings.sql','20261023192541_guard_shifts.sql','20261023193010_guard_capture_grants.sql','20261023193609_guard_events.sql','20261023194505_guard_check_in_state.sql','20261023195129_guard_dispatch.sql','20261023200239_guard_dashboard_delivery.sql','20261023203534_guard_administration.sql','20261023211811_guard_auth_session_read.sql','20261023212252_guard_owner_membership.sql','20261023222717_guard_dashboard_receiver.sql','20261023224043_guard_dashboard_media.sql','20261023225230_guard_receiver_report_index.sql','20261023231858_guard_patrol_rounds.sql','20261023233208_guard_escalations.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/tests/guard-identity.sql',import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/tests/guard-device-assignments.sql',import.meta.url),'utf8'));
  for(let i=0;i<2;i++){const c=new Client({connectionString:url.toString()});await c.connect();clients.push(c);await c.query('SET ROLE service_role');}
@@ -64,6 +66,8 @@ try{
  await verifyPostgresAuthSessions(url.toString(),fixture);
  await verifyPostgresOwnerMembership(url.toString(),fixture);
  await verifyPostgresReceivedReports(url.toString(),fixture);
+ await verifyPostgresPatrolRounds(url.toString(),fixture);
+ await verifyPostgresEscalations(url.toString(),fixture);
  console.log('PASS: migration replay, concurrent shared per-account/global limits, expiry and private function grants');
 }finally{
  for(const c of clients)await c.end();await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated limiter verification database removed');}await admin.end();

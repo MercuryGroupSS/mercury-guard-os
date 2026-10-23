@@ -17,8 +17,9 @@ export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
      AND d.device_id=$7 AND d.revocation_version=$8 AND h.clocked_out IS NULL
      AND a.starts_at_ms=$9 AND a.ends_at_ms=$10 AND h.starts_at=a.starts_at_ms AND h.ends_at=a.ends_at_ms
      AND h.clocked_in<=$11 AND $11<a.ends_at_ms
+     AND a.patrol_route IS NOT DISTINCT FROM $12::jsonb
      AND ((d.mode='site' AND d.site_id=a.site_id) OR (d.mode='personal' AND d.guard_id=g.guard_id))
-    FOR SHARE OF a,g,v,s,d,h`,[device.thumbprint,assignment.assignmentId,identity.subject,identity.guardId,identity.vendorId,assignment.siteId,device.deviceId,device.revocationVersion,assignment.startsAt,assignment.endsAt,now]);
+    FOR SHARE OF a,g,v,s,d,h`,[device.thumbprint,assignment.assignmentId,identity.subject,identity.guardId,identity.vendorId,assignment.siteId,device.deviceId,device.revocationVersion,assignment.startsAt,assignment.endsAt,now,policy.patrolRoute??null]);
    if(rows.length!==1)throw Error('Confirmed capture scope unavailable');
    await client.query('INSERT INTO mercury_guard.capture_grants(id,subject,vendor_id,assignment_id,device_thumbprint,payload,policy) VALUES($1,$2,$3,$4,$5,$6,$7)',[claims.grant_id,identity.subject,identity.vendorId,assignment.assignmentId,device.thumbprint,payload,policy]);
    return response;

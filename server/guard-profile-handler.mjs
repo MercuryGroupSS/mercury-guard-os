@@ -13,7 +13,7 @@ export function createGuardProfileHandler({verifySession,directory,now=()=>Math.
    if(!session||!Number.isSafeInteger(session.expiresAt)||session.expiresAt<=now())return reply(401,{error:'authentication_required'});
    const guard=await resolve(session);
    if(!guard)return reply(403,{error:'guard_access_unavailable'});
-   return reply(200,{guard_id:guard.guardId,vendor_id:guard.vendorId});
+   return reply(200,{guard_id:guard.guardId,vendor_id:guard.vendorId,auth_subject:guard.subject});
   }catch{return reply(503,{error:'identity_unavailable'});}
  };
 }

@@ -16,10 +16,15 @@ test('persistent individual roster, uniqueness and immediate access removal',asy
   db.close();db=new LocalGuardDirectory(join(dir,'roster.sqlite'));
   const handler=createGuardProfileHandler({directory:db,verifySession:async token=>token==='valid'?{subject:'u1',active:true,expiresAt:200}:null,now:()=>100});
   const get=(token='valid',method='GET')=>handler(new Request('https://guard.test/v1/me',{method,headers:{authorization:'Bearer '+token}}));
-  assert.deepEqual(await (await get()).json(),{guard_id:'g1',vendor_id:'MG001'});
+  assert.deepEqual(await (await get()).json(),{guard_id:'g1',vendor_id:'MG001',auth_subject:'u1'});
   assert.equal((await get('wrong')).status,401);assert.equal((await get('valid','POST')).status,405);
   db.setGuardActive('g1',false);assert.equal((await get()).status,403);
  }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('profile subject comes only from the verified individual and matching roster',async()=>{
+ const directory={loadGuardsForSubject:async subject=>[{guardId:'same-guard',vendorId:'company',authSubject:subject,active:true}],loadVendor:async()=>({vendorId:'company',kind:'company',active:true})};
+ const handler=createGuardProfileHandler({directory,verifySession:async token=>({subject:token==='new'?'second-person':'first-person',active:true,expiresAt:200,user_metadata:{auth_subject:'attacker'}}),now:()=>100});
+ for(const [token,subject]of [['old','first-person'],['new','second-person']]){const r=await handler(new Request('https://guard.test/v1/me?auth_subject=attacker',{headers:{authorization:'Bearer '+token}}));assert.equal(r.status,200);assert.deepEqual(await r.json(),{guard_id:'same-guard',vendor_id:'company',auth_subject:subject});}
 });
 test('expired sessions and unavailable directory fail closed',async()=>{
  const directory={loadGuardsForSubject(){throw Error('offline');},loadVendor(){throw Error('offline');}};

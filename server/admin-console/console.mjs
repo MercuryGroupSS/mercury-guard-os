@@ -9,7 +9,7 @@ const photoPreview=new ReportPhotoPreview({client});
 function clearReport(){
  reportVersion++;selectedReport=null;photoPreview.clear();$('report-image').removeAttribute('src');$('report-image').hidden=true;$('report-title').textContent='Select a report';$('report-state').replaceChildren(node('p','Choose a received report to review its details and private evidence.','muted'));$('report-observation').replaceChildren();$('report-attribution').replaceChildren();$('report-attribution').parentElement.hidden=true;$('report-photo').hidden=true;$('photo-status').textContent='';$('load-photo').disabled=false;$('report-panel').hidden=true;
 }
-function syncPanels(){const reports=kind==='received_reports';$('reports-help').hidden=!reports;$('records-title').textContent=reports?'Received reports':'Directory';$('report-panel').hidden=!reports;$('change-panel').hidden=reports||!!pending&&pending.owner!==client.session?.subject;}
+function syncPanels(){const reports=kind==='received_reports';$('reports-help').hidden=!reports;$('records-title').textContent=reports?'Received reports':kind==='escalations'?'Escalations':'Directory';$('report-panel').hidden=!reports;$('change-panel').hidden=reports||!!pending&&pending.owner!==client.session?.subject;}
 function reportRows(parent,rows){parent.replaceChildren();for(const [title,value]of rows)parent.append(node('dt',title),node('dd',value===undefined||value===null?'—':String(value)));}
 function selectReport(report){
  clearReport();selectedReport=report;const view=reportPresentation(report);syncPanels();$('report-title').textContent=view.title;$('report-state').replaceChildren(node('span','Report received','status'),node('span',view.photoLabel,'status'+(report.media.state==='pending'?' pending':'')));reportRows($('report-observation'),view.rows);
@@ -38,12 +38,13 @@ function optionalGroup(parent,key,title,fields,values,enabled){
  const sync=()=>{content.hidden=!toggle.checked;for(const input of content.querySelectorAll('input,textarea,select'))input.disabled=!toggle.checked;};toggle.addEventListener('change',sync);sync();
 }
 function renderFields(values={}){
- const schema=actions[$('action').value];$('action-help').textContent=schema.help;$('fields').replaceChildren();
+ const schema=actions[$('action').value],escalation=$('action').value==='escalation.acknowledge';$('action-help').textContent=schema.help;$('reason-label').textContent=escalation?'Response shown to guard':'Reason for change';$('reason').placeholder=escalation?'Confirm you received this request and describe the next step.':'Why is this change approved?';$('fields').replaceChildren();
  for(const field of schema.fields)textField(field,$('fields'),values);
  if(schema.route){const r=values.patrolRoute??{};optionalGroup($('fields'),'routeEnabled','Patrol route',[
   {key:'routeId',label:'Route ID',type:'text',max:200},{key:'routeRevision',label:'Route revision',type:'number',min:1,max:2147483647,value:1},
-  {key:'checkpoints',label:'Checkpoints',type:'textarea',max:26000,hint:'One per line: entrance | Main entrance. Use unique IDs. Guards may choose any order.'}
- ],{routeId:r.routeId,routeRevision:r.revision,checkpoints:r.checkpoints?.map(c=>c.id+' | '+c.label).join('\n')},!!values.patrolRoute);}
+  {key:'checkpoints',label:'Checkpoints',type:'textarea',max:26000,hint:'One per line: entrance | Main entrance. Use unique IDs. Guards may choose any order.'},
+  {key:'rounds',label:'Patrol rounds (optional)',type:'textarea',optional:true,max:26000,hint:'Leave empty for one pass. To repeat checkpoints, approve one round per line: opening | Opening patrol. Use unique IDs and labels. Guards select an approved round; rounds never reset automatically.'}
+ ],{routeId:r.routeId,routeRevision:r.revision,checkpoints:r.checkpoints?.map(c=>c.id+' | '+c.label).join('\n'),rounds:r.rounds?.map(round=>round.id+' | '+round.label).join('\n')},!!values.patrolRoute);}
  if(schema.policy){const p=values.checkInPolicy??{};optionalGroup($('fields'),'policyEnabled','Timed check-ins',[
   {key:'policyRevision',label:'Policy revision',type:'number',min:1,max:2147483647,value:1},{key:'interval',label:'Interval (minutes)',type:'number',min:1,max:1440,value:60},
   {key:'window',label:'Response window (seconds)',type:'number',min:1,max:86400,value:120},{key:'evidenceAge',label:'Evidence freshness (seconds)',type:'number',min:1,max:300,value:30},
@@ -68,11 +69,11 @@ function renderTable(){
   const list=node('div',undefined,'report-list');for(const report of shown){const view=reportPresentation(report),card=node('button',undefined,'report-card');card.type='button';card.setAttribute('aria-pressed',String(selectedReport?.delivery_id===report.delivery_id));card.setAttribute('aria-label',view.title+' from '+report.guard_id+' at '+report.site_id);const top=node('span',undefined,'report-card-top');top.append(node('strong',view.title),node('time','Received '+reportDate(report.received_at)));card.append(top,node('span',view.summary.length>180?view.summary.slice(0,177)+'…':view.summary,'report-summary'),node('span','Guard '+report.guard_id+' · Site '+report.site_id,'report-scope'));const states=node('span',undefined,'report-card-states');states.append(node('span','Report received','status'),node('span',view.photoLabel,'status'+(report.media?.state==='pending'?' pending':'')));card.append(states);card.addEventListener('click',()=>selectReport(report));list.append(card);}$('records').append(list);return;
  }
  const table=node('table'),head=node('thead'),header=node('tr');for(const key of config.columns)header.append(node('th',label(key)));if(config.action)header.append(node('th','Action'));head.append(header);table.append(head);const body=node('tbody');
- for(const row of shown){const tr=node('tr');for(const key of config.columns){const td=node('td'),value=row[key];
+ for(const row of shown){const tr=node('tr'),display=kind==='escalations'?{...row,urgency:row.intent?.urgency,description:row.intent?.description}:row;for(const key of config.columns){const td=node('td'),value=display[key];
    if(typeof value==='boolean')td.append(node('span',key==='active'?(value?'Active':'Inactive'):key==='revoked'?(value?'Revoked':'Valid'):(value?'Yes':'No'),'status'+(key==='revoked'?value?' off':'':value?'':' off')));
    else if(value&&typeof value==='object'){const d=node('details'),summary=node('summary','View details'),pre=node('pre',formatValue(key,value),'detail-text');d.append(summary,pre);td.append(d);}
    else td.textContent=formatValue(key,value);tr.append(td);}
-  if(config.action){const td=node('td'),button=node('button',kind==='assignments'?'Message':kind==='devices'?'Revoke':'Manage','quiet');button.type='button';button.disabled=!!pending||kind==='devices'&&row.revoked;button.addEventListener('click',()=>{startChange(config.action,valuesForRow(kind,row));$('change-panel').scrollIntoView({block:'start',behavior:'smooth'});$('action').focus();});td.append(button);tr.append(td);}body.append(tr);
+  if(config.action){const td=node('td'),button=node('button',kind==='assignments'?'Message':kind==='devices'?'Revoke':kind==='escalations'?'Acknowledge':'Manage','quiet');button.type='button';button.disabled=!!pending||kind==='devices'&&row.revoked||kind==='escalations'&&row.status==='operator_acknowledged';button.addEventListener('click',()=>{startChange(config.action,valuesForRow(kind,row));$('change-panel').scrollIntoView({block:'start',behavior:'smooth'});$('action').focus();});td.append(button);tr.append(td);}body.append(tr);
  }table.append(body);$('records').append(table);
 }
 async function loadPage(reset=false){

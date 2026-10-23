@@ -1,4 +1,5 @@
 import {photoMetadata} from './photo-metadata.mjs';
+import {patrolRoundKey} from './patrol-route.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { verifyScopedBatch } from './verify-batch.mjs';
@@ -11,12 +12,20 @@ export class DurableIngest {
       CREATE TABLE IF NOT EXISTS events(device TEXT, id TEXT, sequence INTEGER, digest TEXT, body TEXT,
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
       CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
-      CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));
+      CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,round TEXT NOT NULL DEFAULT '',PRIMARY KEY(guard,assignment,route,revision,round,checkpoint));
       CREATE TABLE IF NOT EXISTS check_in_alert_outbox(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending')),PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS missed_check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,deadline INTEGER,detected_at INTEGER,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,event_id TEXT,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS media(device TEXT,event_id TEXT,sha256 TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(device,event_id));`);
     this.db.exec('CREATE INDEX IF NOT EXISTS events_id ON events(id)');
+    if(!this.db.prepare('PRAGMA table_info(checkpoints)').all().some(column=>column.name==='round')){
+      try{this.db.exec(`BEGIN IMMEDIATE;
+       ALTER TABLE checkpoints RENAME TO checkpoints_before_rounds;
+       CREATE TABLE checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,round TEXT NOT NULL DEFAULT '',PRIMARY KEY(guard,assignment,route,revision,round,checkpoint));
+       INSERT INTO checkpoints(guard,assignment,route,revision,checkpoint,event_id) SELECT guard,assignment,route,revision,checkpoint,event_id FROM checkpoints_before_rounds;
+       DROP TABLE checkpoints_before_rounds;
+       COMMIT;`);}catch(error){this.db.exec('ROLLBACK');throw error;}
+    }
     for(const table of ['events','media'])if(!this.db.prepare(`PRAGMA table_info(${table})`).all().some(c=>c.name==='received_at'))this.db.exec(`ALTER TABLE ${table} ADD COLUMN received_at INTEGER NOT NULL DEFAULT 0`);
   }
   ingest(raw, trustedContext, now) {
@@ -47,7 +56,7 @@ export class DurableIngest {
           this.db.prepare('INSERT INTO check_ins VALUES(?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.policy_revision,event.data.slot,event.event_id);
         }
         if(event.kind==='patrol_checkpoint'&&trustedContext.allowHistoricalSequence===true){
-          this.db.prepare('INSERT INTO checkpoints VALUES(?,?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.route_id,event.data.route_revision,event.data.checkpoint_id,event.event_id);
+          this.db.prepare('INSERT INTO checkpoints(guard,assignment,route,revision,checkpoint,event_id,round) VALUES(?,?,?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.route_id,event.data.route_revision,event.data.checkpoint_id,event.event_id,patrolRoundKey(event.data));
         }
         this.db.prepare('INSERT INTO events(device,id,sequence,digest,body,received_at) VALUES(?,?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body,trustedContext.receivedAtMs??now*1000);
         last = event.sequence;

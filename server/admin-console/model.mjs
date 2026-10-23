@@ -4,6 +4,7 @@ const revision={key:'revision',label:'Approval revision',type:'number',min:1,max
 const guard=id('guardId','Guard ID'),vendor=id('vendorId','Vendor ID'),site=id('siteId','Site ID'),assignment=id('assignmentId','Assignment ID');
 const subject={key:'authSubject',label:'Individual account ID',type:'text',max:36,pattern:'[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}',hint:'The individual’s existing Auth account UUID. A company Vendor ID cannot identify a person.'};
 export const actions={
+ 'escalation.acknowledge':{label:'Acknowledge escalation',help:'Record that an operator has received this escalation. Your reason is shown to the guard. This acknowledgement does not resolve the event or confirm an external notification.',fields:[{key:'escalationId',label:'Escalation ID',type:'text',max:36,pattern:'[a-fA-F0-9]{8}(-[a-fA-F0-9]{4}){3}-[a-fA-F0-9]{12}'}]},
  'vendor.create':{label:'Add vendor',help:'A vendor can be a company or an individual. Company guards each need their own account.',fields:[vendor,{key:'kind',label:'Vendor type',type:'select',options:[['company','Company'],['individual','Individual']]},status]},
  'vendor.status':{label:'Change vendor access',help:'Deactivating a vendor blocks all guards linked to that vendor.',fields:[vendor,status]},
  'site.create':{label:'Add site',help:'Register a site before approving site phones and assignments.',fields:[site,status]},
@@ -17,6 +18,7 @@ export const actions={
  'dispatch.publish':{label:'Publish assignment message',help:'Publish or retract a versioned message for one assignment. The phone receives it on its next authorized refresh.',fields:[assignment,guard,vendor,site,id('messageId','Message ID'),{...revision,key:'version',label:'Message version'},{key:'state',label:'Message status',type:'select',options:[['active','Active'],['retracted','Retracted']]},{key:'title',label:'Title',type:'text',max:200,optional:true},{key:'body',label:'Message',type:'textarea',max:8000,optional:true},{key:'due',label:'Due at (your local time)',type:'datetime-local',optional:true}]}
 };
 export const catalogs={
+ escalations:{label:'Escalations',columns:['urgency','description','status','guard_id','site_id','received_at_ms','acknowledgement','escalation_id'],action:'escalation.acknowledge'},
  received_reports:{label:'Reports',columns:[]},
  administrators:{label:'Administrators',columns:['auth_subject','email','active']},access_audit:{label:'Access audit',columns:['request_id','email','active','operator_label','reason','recorded_at','receipt']},
  vendors:{label:'Vendors',columns:['vendor_id','kind','active'],action:'vendor.status'},guards:{label:'Guards',columns:['guard_id','vendor_id','email','active','auth_subject'],action:'guard.status'},
@@ -25,9 +27,9 @@ export const catalogs={
  ops_bindings:{label:'Ops links',columns:['source_id','revision','body'],action:'ops_binding.approve'},dashboard_bindings:{label:'Delivery links',columns:['assignment_id','dashboard_shift_id','destination','revision','active'],action:'dashboard_mapping.approve'},
   outbox:{label:'Delivery queue',columns:['id','status','attempts','next_at','lease_until','destination','assignment_id']},audit:{label:'Audit',columns:['request_id','actor_subject','action','status','recorded_at','reason','receipt']}
 };
-export const labels={vendor_id:'Vendor ID',guard_id:'Guard ID',site_id:'Site ID',auth_subject:'Account ID',actor_subject:'Administrator',device_id:'Device ID',assignment_id:'Assignment ID',source_id:'Ops shift ID',dashboard_shift_id:'Dashboard shift ID',starts_at_ms:'Starts',ends_at_ms:'Ends',next_at:'Next attempt',lease_until:'Lease ends',recorded_at:'Recorded',publicKeySpki:'Public enrollment key',opsShiftId:'Ops shift ID',authSubject:'Account ID',vendorId:'Vendor ID',guardId:'Guard ID',siteId:'Site ID',deviceId:'Device ID',assignmentId:'Assignment ID',dashboardShiftId:'Dashboard shift ID',patrol_route:'Patrol route',check_in_policy:'Check-in policy',revocation_version:'Revocation version',thumbprint:'Enrollment fingerprint',request_id:'Request ID'};
+export const labels={escalation_id:'Escalation ID',received_at_ms:'Received',acknowledgement:'Operator response',urgency:'Priority',description:'Request',vendor_id:'Vendor ID',guard_id:'Guard ID',site_id:'Site ID',auth_subject:'Account ID',actor_subject:'Administrator',device_id:'Device ID',assignment_id:'Assignment ID',source_id:'Ops shift ID',dashboard_shift_id:'Dashboard shift ID',starts_at_ms:'Starts',ends_at_ms:'Ends',next_at:'Next attempt',lease_until:'Lease ends',recorded_at:'Recorded',publicKeySpki:'Public enrollment key',opsShiftId:'Ops shift ID',authSubject:'Account ID',vendorId:'Vendor ID',guardId:'Guard ID',siteId:'Site ID',deviceId:'Device ID',assignmentId:'Assignment ID',dashboardShiftId:'Dashboard shift ID',patrol_route:'Patrol route',check_in_policy:'Check-in policy',revocation_version:'Revocation version',thumbprint:'Enrollment fingerprint',request_id:'Request ID'};
 export const label=key=>labels[key]??key.replaceAll('_',' ').replace(/^./,x=>x.toUpperCase());
-export const formatValue=(key,value)=>value===null||value===undefined?'—':typeof value==='boolean'?(value?'Yes':'No'):['starts_at_ms','ends_at_ms','next_at','lease_until'].includes(key)&&Number(value)>0?new Date(Number(value)).toLocaleString():typeof value==='object'?JSON.stringify(value,null,2):String(value);
+export const formatValue=(key,value)=>value===null||value===undefined?'—':typeof value==='boolean'?(value?'Yes':'No'):['starts_at_ms','ends_at_ms','next_at','lease_until','received_at_ms'].includes(key)&&Number(value)>0?new Date(Number(value)).toLocaleString():key==='status'&&value==='received_by_guard_service'?'Service received':key==='status'&&value==='operator_acknowledged'?'Operator acknowledged':typeof value==='object'?JSON.stringify(value,null,2):String(value);
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 const integer=(value,min,max,name)=>{const n=Number(value);if(!String(value).trim()||!Number.isSafeInteger(n)||n<min||n>max)throw Error(`${name} must be a whole number between ${min} and ${max}.`);return n;};
 export function buildPayload(action,values,now=Date.now()){
@@ -49,6 +51,12 @@ export function buildPayload(action,values,now=Date.now()){
    const routeId=String(values.routeId??'').trim(),checkpoints=String(values.checkpoints??'').trim().split('\n').map(line=>{const split=line.indexOf('|');if(split<1)throw Error('Use one “ID | Label” checkpoint per line.');return {id:line.slice(0,split).trim(),label:line.slice(split+1).trim()};});
    if(!stable(routeId)||!checkpoints.length||checkpoints.length>100||checkpoints.some(c=>!stable(c.id)||!c.label||c.label.length>200)||new Set(checkpoints.map(c=>c.id)).size!==checkpoints.length)throw Error('Use a route ID and unique checkpoints, one “ID | Label” per line.');
    p.patrolRoute={routeId,revision:integer(values.routeRevision,1,2147483647,'Route revision'),checkpoints};
+   const roundText=String(values.rounds??'').trim();
+   if(roundText){
+    const rounds=roundText.split('\n').map(line=>{const split=line.indexOf('|');if(split<1)throw Error('Use one “ID | Label” patrol round per line.');return {id:line.slice(0,split).trim(),label:line.slice(split+1).trim()};});
+    if(roundText.length>26000||rounds.length>100||rounds.some(round=>!stable(round.id)||!round.label||round.label.length>200)||new Set(rounds.map(round=>round.id)).size!==rounds.length||new Set(rounds.map(round=>round.label.toLowerCase())).size!==rounds.length)throw Error('Use up to 100 patrol rounds with unique IDs and labels, one “ID | Label” per line.');
+    p.patrolRoute.rounds=rounds;
+   }
   }
   if(values.policyEnabled==='on'){
    const interval=integer(values.interval,1,1440,'Check-in interval')*60000,window=integer(values.window,1,86400,'Check-in window')*1000,age=integer(values.evidenceAge,1,300,'Evidence freshness')*1000,accuracy=Number(values.accuracy);
@@ -63,7 +71,7 @@ export function buildPayload(action,values,now=Date.now()){
   const dueAt=due?new Date(due).getTime():null;if(dueAt!==null&&(!Number.isSafeInteger(dueAt)||dueAt<now))throw Error('Message due time must be in the future.');
   return {scope:{assignmentId,guardId,vendorId,siteId},message:{message_id:messageId,version,state,title,body,issued_at:now,due_at:dueAt}};
  }
- return p;
+ return action==='escalation.acknowledge'?{escalation_id:p.escalationId.toLowerCase()}:p;
 }
 export function valuesForRow(kind,row){
  const values=Object.fromEntries(Object.entries(row).map(([key,value])=>[key.replace(/_([a-z])/g,(_,c)=>c.toUpperCase()),value]));
@@ -162,7 +170,7 @@ export function reportPresentation(report){
  let summary='Observation received.';
  switch(observation.kind){
   case 'incident':summary=String(data.description??'');rows.push(['Description',summary]);break;
-  case 'patrol_checkpoint':summary='Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'');rows.push(['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision]);break;
+  case 'patrol_checkpoint':summary='Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'')+(data.round_id?' · Round '+String(data.round_id):'');rows.push(['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision],['Patrol round',data.round_id??'Single pass (no declared round)']);break;
   case 'check_in':summary='Slot '+String(data.slot??'')+' · GPS and local biometric recorded';rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Local biometric','Recorded on this device; individual identity comes from the signed-in guard account.'],['Biometric recorded',reportDate(data.biometric?.at)],['GPS recorded',reportDate(data.location?.at)],['Latitude',data.location?.latitude],['Longitude',data.location?.longitude],['GPS uncertainty',String(data.location?.accuracy_m??'—')+' metres'],['Evidence ID',data.evidence_id]);break;
   case 'shift_start':summary='Clocked in '+reportDate(data.clocked_in_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)]);break;
   case 'shift_end':summary=(data.early_exit?'Early clock-out':'Clocked out')+' · '+reportDate(data.clocked_out_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)],['Clocked out',reportDate(data.clocked_out_at_ms)],['Early exit',data.early_exit?'Yes':'No'],['Reason',data.reason||'No reason recorded']);break;

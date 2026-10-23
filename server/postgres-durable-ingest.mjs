@@ -4,6 +4,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {createHash} from 'node:crypto';
 import {verifyScopedBatch} from './verify-batch.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
+import {permitsCheckpoint,patrolRoundKey} from './patrol-route.mjs';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const actions={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location',dispatch_ack:'dispatch_ack'};
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
@@ -27,10 +28,11 @@ export class PostgresDurableIngest{
    if(!uuid(e.data.capture_grant_id))throw Error('Capture grant required');
   }
   const ids=[...new Set(batch.events.map(e=>e.data.capture_grant_id))].sort();
-  const grants=(await client.query('SELECT id,subject,vendor_id,payload FROM mercury_guard.capture_grants WHERE id=ANY($1::uuid[]) AND NOT revoked ORDER BY id FOR SHARE',[ids])).rows;
+  const grants=(await client.query('SELECT id,subject,vendor_id,payload,policy FROM mercury_guard.capture_grants WHERE id=ANY($1::uuid[]) AND NOT revoked ORDER BY id FOR SHARE',[ids])).rows;
   const lookup=new Map(grants.map(g=>[g.id,g]));
   for(const e of batch.events){const saved=lookup.get(e.data.capture_grant_id),g=saved?JSON.parse(Buffer.from(saved.payload,'base64url').toString('utf8')):null;
    if(!g||saved.subject!==c.subject||saved.vendor_id!==c.vendorId||g.guard_id!==c.guardId||g.site_id!==c.siteId||g.assignment_id!==c.assignmentId||g.device_thumbprint!==c.thumbprint||g.revocation_version!==c.revocationVersion||g.audience!==c.audience||!g.actions.includes(actions[e.kind])||e.at<g.not_before_ms||e.at>=g.expires_at_ms)throw Error('Capture grant unavailable');
+   if(e.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy?.patrolRoute,e.data))throw Error('Checkpoint round not authorized');
   }
  }
  async ingest(raw,c,now){
@@ -50,7 +52,7 @@ export class PostgresDurableIngest{
     if(e.sequence<=last&&c.allowHistoricalSequence!==true)throw Error('Device sequence rollback');
     await client.query('INSERT INTO mercury_guard.ingested_events(device,id,sequence,digest,body,received_at,guard_id,vendor_id,assignment_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',[c.thumbprint,e.event_id,e.sequence,eventHash,record,received,c.guardId,c.vendorId,c.assignmentId]);
     if(e.kind==='check_in'&&c.allowHistoricalSequence===true)await client.query('INSERT INTO mercury_guard.ingested_check_ins VALUES($1,$2,$3,$4,$5,$6)',[c.guardId,c.assignmentId,e.data.policy_revision,e.data.slot,c.thumbprint,e.event_id]);
-    if(e.kind==='patrol_checkpoint'&&c.allowHistoricalSequence===true)await client.query('INSERT INTO mercury_guard.ingested_checkpoints VALUES($1,$2,$3,$4,$5,$6,$7)',[c.guardId,c.assignmentId,e.data.route_id,e.data.route_revision,e.data.checkpoint_id,c.thumbprint,e.event_id]);
+    if(e.kind==='patrol_checkpoint'&&c.allowHistoricalSequence===true)await client.query('INSERT INTO mercury_guard.ingested_checkpoints(guard_id,assignment_id,route,revision,checkpoint,device,event_id,round_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[c.guardId,c.assignmentId,e.data.route_id,e.data.route_revision,e.data.checkpoint_id,c.thumbprint,e.event_id,patrolRoundKey(e.data)]);
     last=e.sequence;
    }
    const receipt={batch_id:batch.batch_id,event_ids:batch.events.map(e=>e.event_id),status:'accepted_local_only'};

@@ -4,6 +4,7 @@ import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 import {PostgresAdministration} from '../postgres-administration.mjs';
+import {PostgresEscalations} from '../postgres-escalations.mjs';
 import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
@@ -45,7 +46,8 @@ const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,ou
 const dashboardMedia=identityMode==='postgres'?new PostgresDashboardMedia(devices):null;
 async function sendMedia(job){const p=JSON.parse(job.body),mapping=await dashboardBindings.get({assignmentId:p.assignment_id,guardId:p.guard_id,vendorId:p.vendor_id,siteId:p.site_id});if(!mapping?.active||mapping.revision!==p.mapping_revision||mapping.destination!==p.destination||mapping.dashboardShiftId!==p.dashboard_shift_id)throw Error('Original photo destination no longer approved');return dashboardSend.media(job);}
 const admin=identityMode==='postgres'?new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})}):null;
-const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin});
+const escalations=identityMode==='postgres'?new PostgresEscalations({devices}):null;
+const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin,escalations});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}
 catch(error){await opsRefresh.close();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;

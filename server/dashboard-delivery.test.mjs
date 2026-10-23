@@ -107,3 +107,9 @@ test('acknowledgement projection carries only exact message ID and version',()=>
  assert.deepEqual(projected.observation.data,{message_id:'instruction',message_version:2});
  for(const patch of [{message_version:'2'},{message_version:0},{message_id:''}])assert.throws(()=>projectDashboardObservation({...record,event:{...record.event,data:{...record.event.data,...patch}}},mapping));
 });
+test('patrol delivery preserves explicit round identity without rewriting legacy event projections',()=>{
+ const {record,mapping}=fixture();record.event.kind='patrol_checkpoint';record.event.data={route_id:'route',route_revision:2,checkpoint_id:'entrance'};const legacy=projectDashboardObservation(record,mapping);assert.deepEqual(legacy.observation.data,record.event.data);
+ record.event.data.round_id='opening';const round=projectDashboardObservation(record,mapping);assert.equal(round.delivery_id,legacy.delivery_id);assert.deepEqual(round.observation.data,{route_id:'route',route_revision:2,checkpoint_id:'entrance',round_id:'opening'});
+ for(const round_id of ['',null,0,'bad/id'])assert.throws(()=>projectDashboardObservation({...record,event:{...record.event,data:{...record.event.data,round_id}}},mapping));
+ const outbox=new DashboardOutbox(':memory:');try{outbox.enqueue({...record,event:{...record.event,data:legacy.observation.data}},mapping);assert.throws(()=>outbox.enqueue(record,mapping));assert.deepEqual(JSON.parse(outbox.claim(1000).body).observation.data,legacy.observation.data);}finally{outbox.close();}
+});

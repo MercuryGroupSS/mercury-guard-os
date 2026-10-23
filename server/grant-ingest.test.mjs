@@ -90,6 +90,26 @@ test('patrol records must match issued route snapshot and cannot double-record a
   other.events[0].data.checkpoint_id='a';assert.equal((await f.send(other)).status,200);assert.equal(f.store.count(),2);
  }finally{f.close();}
 });
+test('repeated checkpoints require distinct issued rounds and retain original immutable event identity',async()=>{
+ const f=setup();try{
+  const route={routeId:'round-route',revision:4,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}],rounds:[{id:'opening',label:'Opening patrol'},{id:'closing',label:'Closing patrol'}]},issued=f.issuer.issue({identity:f.identity,device:f.device,assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,patrolRoute:route},allowedActions:['patrol'],sessionExpiresAt:100000,now:2000}),claims=JSON.parse(Buffer.from(issued.payload,'base64url'));
+  route.rounds[0].id='invented';route.checkpoints.length=0;
+  assert.deepEqual(issued.patrol_route.rounds.map(round=>round.id),['opening','closing']);
+  const b=structuredClone(f.batch);b.events[0].kind='patrol_checkpoint';b.events[0].data={capture_grant_id:claims.grant_id,route_id:'round-route',route_revision:4,checkpoint_id:'entrance',round_id:'closing'};
+  const receipt=await (await f.send(b)).json();assert.equal(receipt.status,'accepted_local_only');assert.deepEqual(await (await f.send(b)).json(),receipt);
+  const opening=structuredClone(b);opening.batch_id=randomUUID();opening.events[0].event_id=randomUUID();opening.events[0].sequence=2;opening.events[0].data.round_id='opening';assert.equal((await f.send(opening)).status,200);assert.equal(f.store.count(),2);
+  const refreshed=f.issuer.issue({identity:f.identity,device:f.device,assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,patrolRoute:issued.patrol_route},allowedActions:['patrol'],sessionExpiresAt:100000,now:2001}),refreshAttempt=structuredClone(b);refreshAttempt.batch_id=randomUUID();refreshAttempt.events[0].event_id=randomUUID();refreshAttempt.events[0].sequence=3;refreshAttempt.events[0].at=2001;refreshAttempt.events[0].data.capture_grant_id=JSON.parse(Buffer.from(refreshed.payload,'base64url')).grant_id;assert.equal((await f.send(refreshAttempt)).status,400);
+  const newAttempt=()=>{const value=structuredClone(opening);value.batch_id=randomUUID();value.events[0].event_id=randomUUID();value.events[0].sequence=3;return value;};
+  assert.equal((await f.send(newAttempt())).status,400);
+  for(const patch of [{round_id:'invented'},{round_id:''},{round_id:null},{route_revision:5},{route_id:'foreign'},{checkpoint_id:'foreign'}]){const invalid=newAttempt();Object.assign(invalid.events[0].data,patch);assert.equal((await f.send(invalid)).status,400);}
+  const missing=newAttempt();delete missing.events[0].data.round_id;assert.equal((await f.send(missing)).status,400);
+  for(const patch of [{guard_id:'other'},{assignment_id:'other'}]){const invalid=newAttempt();Object.assign(invalid.scope,patch);assert.equal((await f.send(invalid)).status,400);}
+  const altered=structuredClone(b);altered.batch_id=randomUUID();altered.events[0].data.round_id='opening';assert.equal((await f.send(altered)).status,400);
+  const nextCheckpoint=newAttempt();nextCheckpoint.events[0].data.checkpoint_id='perimeter';assert.equal((await f.send(nextCheckpoint)).status,200);assert.equal(f.store.count(),3);
+  const saved=f.store.db.prepare('SELECT body FROM events WHERE id=?').get(b.events[0].event_id);assert.equal(JSON.parse(saved.body).event.data.round_id,'closing');assert.equal(f.store.db.prepare('SELECT count(*) n FROM checkpoints').get().n,3);
+  const legacy=f.issuer.issue({identity:f.identity,device:f.device,assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,patrolRoute:{routeId:'legacy',revision:1,checkpoints:[{id:'entrance',label:'Entrance'}]}},allowedActions:['patrol'],sessionExpiresAt:100000,now:2000}),legacyId=JSON.parse(Buffer.from(legacy.payload,'base64url')).grant_id,invalid=newAttempt();invalid.events[0].data={capture_grant_id:legacyId,route_id:'legacy',route_revision:1,checkpoint_id:'entrance',round_id:'opening'};assert.equal((await f.send(invalid)).status,400);
+ }finally{f.close();}
+});
 
 
 test('check-in requires scheduled linked evidence and rejects duplicate slots atomically',async()=>{

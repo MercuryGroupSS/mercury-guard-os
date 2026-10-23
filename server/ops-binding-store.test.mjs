@@ -25,3 +25,9 @@ test('failed audit insertion cannot change current approval and unexpected crede
   assert.throws(()=>store.approve({...binding,password:'secret'},context));assert.throws(()=>store.approve(binding,{...context,reason:''}));
  }finally{store.close();}
 });
+test('patrol round authority must be explicitly approved and invalid rounds never enter binding history',()=>{
+ const store=new OpsBindingStore(':memory:'),route={routeId:'approved-route',revision:2,checkpoints:[{id:'entrance',label:'Entrance'}],rounds:[{id:'first',label:'First patrol'},{id:'second',label:'Second patrol'}]};try{
+  store.approve({...binding,patrolRoute:route},context);route.rounds[0].id='changed-after-approval';assert.equal(store.list()[0].patrolRoute.rounds[0].id,'first');
+  assert.throws(()=>store.approve({...binding,revision:2,patrolRoute:{...route,rounds:[{id:'same',label:'A'},{id:'same',label:'B'}]}},context));assert.equal(store.list()[0].revision,1);assert.equal(store.db.prepare('SELECT count(*) n FROM ops_binding_history').get().n,1);
+ }finally{store.close();}
+});

@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {DurableIngest} from './durable-ingest.mjs';
 import {createIngestHandler} from './ingest-handler.mjs';
 import {createAuthorization} from './authorization.mjs';
+import {DatabaseSync} from 'node:sqlite';
 function fixture(){
  const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
  const spki=publicKey.export({type:'spki',format:'der'});
@@ -74,4 +75,13 @@ test('grant-authorized out-of-order delivery retains uniqueness and rejects sequ
   assert.throws(()=>db.ingest(f.proof(f.batch([{...first,data:{note:'changed'}}])),ctx,1100));
   assert.equal(db.count(),2);
  }finally{db.close();}
+});
+test('checkpoint ledger upgrade preserves legacy entries while distinct rounds survive restart and reject duplicates',()=>{
+ const directory=mkdtempSync(join(tmpdir(),'mercury-round-ledger-')),path=join(directory,'events.sqlite'),legacy=new DatabaseSync(path);
+ legacy.exec('CREATE TABLE checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint))');legacy.prepare('INSERT INTO checkpoints VALUES(?,?,?,?,?,?)').run('old-guard','old-assignment','old-route',1,'entrance','old-event');legacy.close();
+ const f=fixture(),context={...f.ctx,allowedKinds:['patrol_checkpoint'],allowHistoricalSequence:true,vendorId:'company'},event=round=>({...f.event(round==='opening'?1:2,'patrol_checkpoint'),data:{route_id:'route',route_revision:2,checkpoint_id:'entrance',round_id:round}}),first=f.batch([event('opening')]),second=f.batch([event('closing')]);let store=new DurableIngest(path);
+ try{
+  assert.equal(store.db.prepare('SELECT round FROM checkpoints WHERE guard=?').get('old-guard').round,'');const receipt=store.ingest(f.proof(first),context,1100);store.ingest(f.proof(second),context,1100);store.close();store=new DurableIngest(path);assert.deepEqual(store.ingest(f.proof(first),context,1100),receipt);
+  const duplicate=f.batch([{...event('opening'),sequence:3}]);assert.throws(()=>store.ingest(f.proof(duplicate),context,1100));assert.equal(store.count(),2);assert.equal(store.db.prepare('SELECT count(*) n FROM checkpoints').get().n,3);assert.deepEqual(store.db.prepare('SELECT round FROM checkpoints WHERE guard=? ORDER BY round').all(context.guardId).map(row=>row.round),['closing','opening']);
+ }finally{store.close();rmSync(directory,{recursive:true,force:true});}
 });

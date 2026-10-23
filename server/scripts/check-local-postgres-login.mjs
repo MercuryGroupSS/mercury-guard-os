@@ -48,7 +48,7 @@ try{
  const login=()=>fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:guard,password})});
  const response=await login();assert.equal(response.status,200);const session=await response.json();assert.equal('refresh_token' in session,false);
  const me=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
- assert.deepEqual(await (await me()).json(),{guard_id:guard,vendor_id:vendor});
+ assert.deepEqual(await (await me()).json(),{guard_id:guard,vendor_id:vendor,auth_subject:subject});
  const post=(path,body)=>fetch(origin+path,{method:'POST',headers:{authorization:'Bearer '+session.access_token,'content-type':'application/json'},body:JSON.stringify(body)});
  const adminMe=()=>fetch(origin+'/v1/admin/me',{headers:{authorization:'Bearer '+session.access_token}});
  assert.equal((await adminMe()).status,403);

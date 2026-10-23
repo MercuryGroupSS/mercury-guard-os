@@ -5,6 +5,11 @@ import {adminConsoleResponse} from './admin-console-handler.mjs';
 import {buildPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,maxReportPhotoBytes} from './admin-console/model.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
 const session={access_token:'synthetic-access',expires_at:1000},member={subject:'individual-admin',role:'guard_os_admin',expires_at:1000};
+test('operator escalation review binds the original ID and preserves guard-visible response',()=>{
+ const id='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE',payload=buildPayload('escalation.acknowledge',valuesForRow('escalations',{escalation_id:id}));assert.deepEqual(payload,{escalation_id:id.toLowerCase()});
+ const pending=new PendingChange({owner:'operator',action:'escalation.acknowledge',payload,reason:'I have received your request and am reviewing it.',requestId:'unchanged-request'}),original=pending.body;payload.escalation_id='other';assert.equal(pending.body,original);assert.equal(pending.request('operator').payload.escalation_id,id.toLowerCase());assert.throws(()=>pending.request('another-operator'));
+ assert.throws(()=>buildPayload('escalation.acknowledge',{escalationId:'arbitrary-guard-id'}));
+});
 test('console serves only approved static assets with no framing, script injection or credential directory access',async()=>{
  const req=(path,method='GET')=>new Request('http://127.0.0.1:1234'+path,{method});
  for(const path of ['/admin/','/admin/console.css','/admin/console.mjs','/admin/model.mjs']){const r=adminConsoleResponse(req(path));assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(r.headers.get('x-content-type-options'),'nosniff');assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(r.headers.get('content-security-policy'),/script-src 'self'/);assert.doesNotMatch(r.headers.get('content-security-policy'),/unsafe-inline|unsafe-eval/);assert.ok((await r.text()).length>100);}
@@ -24,6 +29,13 @@ test('assignment policy forms reject ambiguous checkpoint IDs and inconsistent e
  for(const checkpoints of ['entrance','x | Entrance\nx | Duplicate','| Label'])assert.throws(()=>buildPayload('ops_binding.approve',{...v,checkpoints}));
  assert.throws(()=>buildPayload('ops_binding.approve',{...v,evidenceAge:'121'}),/freshness/);assert.throws(()=>buildPayload('ops_binding.approve',{...v,interval:'1'}),/window/);
  assert.equal(valuesForRow('ops_bindings',{body:p,revision:3}).revision,4);
+});
+test('optional patrol rounds preserve legacy omission, reject ambiguous authority and stay immutable through audited review',()=>{
+ const values={opsShiftId:'ops-1',guardId:'guard-1',vendorId:'company-1',siteId:'site-1',authSubject:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',revision:'3',active:'true',routeEnabled:'on',routeId:'route-1',routeRevision:'2',checkpoints:'entrance | Main entrance\nperimeter | Perimeter'};
+ assert.equal('rounds' in buildPayload('ops_binding.approve',values).patrolRoute,false);assert.equal('rounds' in buildPayload('ops_binding.approve',{...values,rounds:' \n '}).patrolRoute,false);
+ const payload=buildPayload('ops_binding.approve',{...values,rounds:'opening | Opening patrol\nclosing | Closing patrol'});assert.deepEqual(payload.patrolRoute.rounds,[{id:'opening',label:'Opening patrol'},{id:'closing',label:'Closing patrol'}]);const review=new PendingChange({owner:'admin',action:'ops_binding.approve',reason:'Approved two explicit patrol rounds',payload,requestId:'round-request'});payload.patrolRoute.rounds[0].id='edited-after-review';const request=review.request('admin');assert.equal(request.payload.patrolRoute.rounds[0].id,'opening');request.payload.patrolRoute.rounds.pop();assert.equal(review.request('admin').payload.patrolRoute.rounds.length,2);assert.equal(valuesForRow('ops_bindings',{body:request.payload,revision:3}).patrolRoute.rounds[0].id,'opening');
+ for(const rounds of ['opening','| Missing ID','a | First\na | Second','a | First\nb | first','a | ','bad/id | Bad',Array.from({length:101},(_,index)=>'round-'+index+' | Round '+index).join('\n')])assert.throws(()=>buildPayload('ops_binding.approve',{...values,rounds}));
+ const noRoute=buildPayload('ops_binding.approve',{...values,routeEnabled:undefined,rounds:'unapproved | Must not attach'});assert.equal('patrolRoute' in noRoute,false);
 });
 test('unconfirmed changes retry the identical request body and remain bound to the preparing administrator',()=>{
  const payload={vendorId:'company-1',kind:'company',active:true},change=new PendingChange({owner:'admin-1',action:'vendor.create',reason:' Supplier approved ',payload,requestId:'request-1'});payload.active=false;
@@ -100,4 +112,8 @@ test('report presentation preserves literal incident text and distinguishes deli
  const checkin=reportPresentation({observation:{kind:'check_in',data:{slot:2,policy_revision:1,biometric:{at:1000},location:{at:1001,latitude:45,longitude:-73,accuracy_m:12},evidence_id:'evidence-1'}},media:{state:'pending'}});assert.equal(checkin.photoLabel,'Photo pending');assert.ok(checkin.rows.some(([title,value])=>title==='Local biometric'&&/identity comes from the signed-in guard account/.test(value)));assert.ok(checkin.rows.some(([title,value])=>title==='GPS uncertainty'&&value==='12 metres'));
  assert.equal(reportPresentation({observation:{kind:'photo_evidence',data:{}},media:{state:'stored'}}).photoLabel,'Private photo stored');
  for(const [kind,title]of [['patrol_checkpoint','Patrol checkpoint'],['shift_start','Shift started'],['shift_end','Shift ended'],['dispatch_ack','Message acknowledged'],['check_in_delivery_missing','Check-in delivery overdue']])assert.equal(reportPresentation({observation:{kind,data:{}}}).title,title);
+});
+test('received patrol details preserve the recorded round ID and explicitly label legacy single passes',()=>{
+ const report={observation:{kind:'patrol_checkpoint',data:{route_id:'route',route_revision:2,checkpoint_id:'entrance',round_id:'closing'}}},view=reportPresentation(report);assert.match(view.summary,/Round closing/);assert.ok(view.rows.some(([title,value])=>title==='Patrol round'&&value==='closing'));
+ delete report.observation.data.round_id;const legacy=reportPresentation(report);assert.doesNotMatch(legacy.summary,/Round/);assert.ok(legacy.rows.some(([title,value])=>title==='Patrol round'&&value==='Single pass (no declared round)'));
 });

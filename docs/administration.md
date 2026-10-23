@@ -24,7 +24,7 @@ Local emails are captured in Mailpit only. Production SMTP, sender/domain verifi
 
 ## Console workflow
 
-Start the local service with `MERCURY_IDENTITY_STORE=postgres node server/scripts/start-local-service.mjs` and open `/admin/` at the printed loopback origin. The white/cyan console provides administrator sign-in, twelve paginated record catalogs, a filter for the current page, and forms for all supported actions. Row controls prefill the target IDs; revisioned mappings advance the previous approval revision. Patrol checkpoints can be approved independently of order. Timed check-in policy fields expose interval, response window, evidence freshness and GPS uncertainty. Administrators and their owner-controlled access history are visible as separate read-only catalogs.
+Start the local service with `MERCURY_IDENTITY_STORE=postgres node server/scripts/start-local-service.mjs` and open `/admin/` at the printed loopback origin. The white/cyan console provides administrator sign-in, thirteen paginated record catalogs, a filter for the current page, and forms for all supported actions. Row controls prefill the target IDs; revisioned mappings advance the previous approval revision. Patrol checkpoints can be approved independently of order. An optional patrol-round list approves repeated checkpoint passes using explicit IDs and labels; an empty list field retains the existing single pass. Timed check-in policy fields expose interval, response window, evidence freshness and GPS uncertainty. Administrators and their owner-controlled access history are visible as separate read-only catalogs. See [approved patrol rounds](patrol-rounds.md) for snapshot, duplicate and retry rules.
 
 Each change requires a reason and a review before submission. A confirmed receipt shows whether the request applied or closed without applying. After a connection failure or any response without a matching receipt, the console retains the exact request ID and body. It offers retry or resolution rather than silently submitting a second action. Resolution returns an existing receipt or saves a permanent not-applied receipt under the same transactional lock; a delayed apply cannot run after that closure.
 
@@ -62,7 +62,7 @@ An identical request ID returns its original historical receipt. It never reappl
 | --- | --- |
 | `POST /v1/admin/login` | Exchange an approved administrator email/password for an access token. No refresh token is returned. Shared per-account/global login limits apply. |
 | `GET /v1/admin/me` | Check current administrator membership. |
-| `GET /v1/admin/catalog?kind=guards&after=...` | Read a page of at most 50 records. Kinds: received_reports, administrators, access_audit, vendors, guards, sites, devices, assignments, ops_bindings, dashboard_bindings, outbox, audit. |
+| `GET /v1/admin/catalog?kind=guards&after=...` | Read a page of at most 50 records. Kinds: escalations, received_reports, administrators, access_audit, vendors, guards, sites, devices, assignments, ops_bindings, dashboard_bindings, outbox, audit. |
 | `POST /v1/admin/actions` | Apply a reasoned, idempotent, audited change. |
 | `POST /v1/admin/resolve` | Send the identical action envelope to retrieve its saved receipt or close its request ID without applying. |
 | `GET /v1/admin/media/<delivery_id>` | Read an integrity-checked private JPEG after current Auth/session and administrator rechecks. |
@@ -115,3 +115,13 @@ A linked check-in image must match the original guard/vendor/site/assignment, ma
 Explicit sign-out clears the tab immediately and posts the old bearer only to the fixed same-origin logout endpoint. The server verifies that exact session and forwards to its configured Auth provider with `scope=local`; it never follows a caller-supplied destination. Provider confirmation, an already-unavailable session and an unconfirmed result have distinct notices. An inactive administrator or guard can still sign out. Automatic background/expiry clearing is local only. A late logout response cannot clear a newer sign-in.
 
 Browser checks loaded and decoded a synthetic 192-by-108 JPEG, preserved literal untrusted report text, showed missing media as pending, and removed private views after administrator revocation. Explicit browser sign-out showed server confirmation and removed exactly its provider session (one to zero). Separate Auth tests proved an independent session remains valid. The temporary records, media, mapping approval and administrator were removed. These checks do not prove a real camera capture or live Ops integration.
+
+
+## Operational escalation inbox
+
+The Escalations catalog shows authenticated enrolled-device requests, including requests with no assignment. Service receipt and explicit operator acknowledgement are distinct. An operator uses **Acknowledge**, reviews the exact original escalation ID and writes a response labelled **Response shown to guard**. Viewing the queue does not acknowledge it. The first acknowledgement remains immutable; additional exact requests receive audited receipts without replacing that first response.
+
+Acknowledgements use the existing administration actions/resolve endpoints, current operator authorization, global request-ID namespace and append-only audit. A permanent not-applied resolution prevents a delayed request from acknowledging afterward. The reason is visible to the originating guard and must not imply an external notification or event resolution that did not happen. No phone number or contact is inferred from billing/vendor data. See [escalations](escalations.md) for protocol and transport limits.
+
+
+The real local Auth/HTTP escalation smoke passed proof replay/raw-intent and guard-spoof denial, guard/site/operator revocation, nonce rollback and scoped logout without losing an independent guard session. The rendered browser queue showed service receipt, reviewed the original escalation ID and guard-visible response, then confirmed operator acknowledgement and a matching append-only audit row. Literal script-like request text remained plain text. Server sign-out cleared the private view; exact fixture cleanup was verified. The native queue remains under integration and no external call, dispatch message or notification was sent.
