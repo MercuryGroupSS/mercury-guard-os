@@ -328,3 +328,7 @@ A confirmed shift on a cancelled assignment now remains visible for close-out by
 ### Lost clock-in receipt after cancellation — October 23
 
 Cancelled-assignment transition requests can now recover an exact previously committed clock-in receipt, allowing the phone's unresolved confirmation to clear before close-out. The server derives allowStart from the stored assignment state, never from request input. With start disabled, only the exact existing receipt is returned; a new request receives a durable shift_cannot_start rejection without creating a shift session. All 114 server tests pass, including original receipt equality after cancellation, new-request denial and no session for a never-started cancelled assignment. This supersedes the preceding pending-start recovery limitation within the existing historical window; longer-term administrative closure remains unfinished.
+
+### Local assignment synchronization — October 23
+
+Added transactional source-row refresh into the local assignment store with independent upstream timestamp and approved-binding revision checks. Material changes create new internal assignments and cancel earlier ones while preserving historical schedules. Stale/conflicting updates fail; missing rows do not imply cancellation. Cancellation, replacement and refresh history commit together. All 116 server tests pass, including failed replacement rollback. This administrative adapter remains disconnected from live transport and recurring synchronization pending source validation and approved mappings.
