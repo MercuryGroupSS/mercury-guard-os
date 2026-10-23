@@ -2,6 +2,7 @@ package ca.mercury.guard
 
 import android.app.AlertDialog
 import android.content.Intent
+import android.net.Uri
 import android.content.ClipData
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
@@ -74,7 +75,7 @@ class GuardAccountActivity : Activity() {
     screen("PHONE ENROLLMENT","Prepare this phone's signing identity, then have an administrator approve its public key. This does not enroll the phone or create a guard account.")
     button("Prepare phone identity"){
      try{DeviceIdentity(this).create();enrollmentDetails()}catch(_:Exception){status.text="Phone identity could not be prepared. Existing key material has not been replaced."}
-    };button("Close"){finish()};return
+    };button("Set up or reset password"){openAccountPage()};button("Close"){finish()};return
    }
   }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Close"){finish()};return}
   screen("GUARD SIGN-IN","Verify on this device, then enter your individual guard ID and password. Device biometrics do not identify your guard account.\nService: ${c.endpoint}")
@@ -85,7 +86,15 @@ class GuardAccountActivity : Activity() {
   }
   root.addView(loginParticles,2,LinearLayout.LayoutParams(-1,dp(280)))
   loginParticles?.startMotion()
-  button("Verify with biometrics") { biometric() };button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+  button("Verify with biometrics") { biometric() };button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+ }
+ private fun openAccountPage(){
+  val c=config?:return
+  try{
+   val uri=Uri.parse(GuardAccountClient(c.endpoint).accountPageUrl())
+   clearSession()
+   startActivity(Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE))
+  }catch(_:Exception){status.text="The account page could not be opened. Use your configured Mercury One service in a browser or contact your administrator."}
  }
  private fun enrollmentDetails(){
   try{
@@ -129,7 +138,7 @@ class GuardAccountActivity : Activity() {
     }
    }.start()
   }
-  button("Cancel"){startScreen()}
+  button("Set up or reset password"){openAccountPage()};button("Cancel"){startScreen()}
  }
  private fun loadAssignments(){
   val c=config?:return;val active=session?:return

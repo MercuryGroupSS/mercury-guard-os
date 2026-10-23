@@ -15,6 +15,7 @@ class GuardAccountClient(endpoint: String) {
   require(uri.path.isNullOrEmpty() || uri.path == "/")
  }
  class HttpFailure(val statusCode:Int):IllegalStateException("Request unavailable (HTTP $statusCode)")
+ fun accountPageUrl():String = origin+"/account/"
  class Session internal constructor(private var token: String?, private val expiresElapsed: Long) {
   internal fun bearer(): String {
    check(SystemClock.elapsedRealtime() < expiresElapsed) { "Sign in again" }

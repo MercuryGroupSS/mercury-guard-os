@@ -9,7 +9,10 @@ class GuardAccountClientTest {
   for (origin in listOf("http://example.com", "https://user:password@example.com", "https://example.com/path", "https://example.com?key=value", "https://example.com#fragment")) {
    try { GuardAccountClient(origin); fail("Unsafe origin accepted") } catch (_: IllegalArgumentException) { }
   }
-  GuardAccountClient("https://example.com")
+  assertEquals("https://example.com/account/",GuardAccountClient("https://example.com").accountPageUrl())
+  val page=java.net.URI(GuardAccountClient("https://example.com:8443/").accountPageUrl())
+  assertEquals("https",page.scheme);assertEquals("example.com",page.host);assertEquals(8443,page.port);assertEquals("/account/",page.path)
+  assertNull(page.rawQuery);assertNull(page.rawFragment);assertNull(page.rawUserInfo)
  }
  @Test fun expiredAndClearedSessionsCannotAuthorizeRequestsOrLeakThroughToString() {
   val active = GuardAccountClient.Session("private-token", SystemClock.elapsedRealtime()+60000)

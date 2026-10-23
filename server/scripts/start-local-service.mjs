@@ -21,7 +21,7 @@ const root=new URL('../../',import.meta.url);
 const lines=readFileSync(new URL('supabase-start.log',root),'utf8').split('\n');
 const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL')));
 const dir=new URL('.local-backend/',root);mkdirSync(dir,{recursive:true,mode:0o700});
-const identityMode=process.env.MERCURY_IDENTITY_STORE??'sqlite';
+const identityMode=process.env.MERCURY_IDENTITY_STORE??'postgres';
 const directory=await openLocalGuardDirectory({config,mode:identityMode,sqlitePath:new URL('directory.sqlite',dir).pathname});
 let assignmentStore;
 try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,sqlitePath:new URL('devices.sqlite',dir).pathname});}catch(error){await directory.close();throw error;}

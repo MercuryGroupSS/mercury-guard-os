@@ -1,12 +1,11 @@
 import {readFileSync} from 'node:fs';
+import {privatePageHeaders as headers} from './private-page-headers.mjs';
 const files=new Map([
  ['/admin/',['admin-console/index.html','text/html; charset=utf-8']],
  ['/admin/console.css',['admin-console/console.css','text/css; charset=utf-8']],
  ['/admin/console.mjs',['admin-console/console.mjs','text/javascript; charset=utf-8']],
  ['/admin/model.mjs',['admin-console/model.mjs','text/javascript; charset=utf-8']]
 ].map(([path,[file,type]])=>[path,{body:readFileSync(new URL(file,import.meta.url)),type}]));
-const headers={'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','permissions-policy':'camera=(), microphone=(), geolocation=()',
- 'content-security-policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"};
 // Only these public application assets are served. No directory or credential files.
 export function adminConsoleResponse(request){
  const url=new URL(request.url);

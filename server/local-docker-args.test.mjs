@@ -1,0 +1,5 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {localDockerArgs} from './local-docker-args.mjs';
+test('the Guard-only Docker helper narrows configured published ports without changing images, mounts or environment',()=>{
+ const args=['create','--name','supabase_studio_mercury-guard-os-local','--env-file','/private/synthetic-env','-p','55323:3000','-p','0.0.0.0:8083:8083/tcp','--mount','type=volume,src=guard-data,dst=/data','trusted-image'];const result=localDockerArgs(args,[55323,8083]);assert.deepEqual(result,args.map(a=>a==='55323:3000'?'127.0.0.1:55323:3000':a==='0.0.0.0:8083:8083/tcp'?'127.0.0.1:8083:8083/tcp':a));assert.equal(args[6],'55323:3000');
+ assert.throws(()=>localDockerArgs(['create','--name','another-project','-p','55323:3000'],[55323]));assert.throws(()=>localDockerArgs(['create','--name','supabase_db_mercury-guard-os-local','-P'],[55322]));assert.throws(()=>localDockerArgs(['create','--name','supabase_db_mercury-guard-os-local','-p','5432:5432'],[55322]));assert.deepEqual(localDockerArgs(['inspect','supabase_db_mercury-guard-os-local'],[]),['inspect','supabase_db_mercury-guard-os-local']);
+});

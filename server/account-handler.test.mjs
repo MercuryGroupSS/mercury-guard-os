@@ -1,0 +1,13 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {createAccountHandler} from './account-handler.mjs';import {AccountCodeError,AccountUnconfirmedError} from './account-credentials.mjs';
+const req=(path,body)=>new Request('https://guard.test/v1/account/'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}),email='person@example.invalid',password='Synthetic-password-123';
+test('account endpoints accept only bounded explicit fields and validate password/code before consuming ownership proof',async()=>{
+ let saved=0;const handler=createAccountHandler({consumeAttempt:async()=>true,credentials:{sendCode:async()=>{},setPassword:async()=>{saved++;return {subject:'person',email};}}});
+ for(const input of [{email,code:'123456',password},{email,code:'12345678',password:'short'},{email,code:'12345678',password,role:'admin'}])assert.equal((await handler(req('password',input))).status,400);assert.equal(saved,0);
+ assert.equal((await handler(new Request('https://guard.test/v1/account/code',{method:'POST',headers:{'content-type':'application/json'},body:'{"email":"a@example.invalid","email":"b@example.invalid","intent":"setup"}'}))).status,400);
+ assert.equal((await handler(req('code',{email:'a'.repeat(5000),intent:'setup'}))).status,400);assert.equal((await handler(req('code?redirect_to=https://untrusted.test',{email,intent:'setup'}))).status,400);
+});
+test('code and password requests share a normalized account limit and return no Auth session credentials',async()=>{
+ let allowed=true;const buckets=[];let failure;const handler=createAccountHandler({now:()=>1000,consumeAttempt:async b=>{buckets.push(b);return allowed;},credentials:{sendCode:async()=>{},setPassword:async()=>{if(failure)throw failure;return {subject:'person',email};}}});
+ const first=await handler(req('code',{email:email.toUpperCase(),intent:'recovery'}));assert.equal(first.status,202);const complete=await handler(req('password',{email,code:'12345678',password}));assert.equal(complete.status,200);assert.deepEqual(await complete.json(),{status:'password_set',account_id:'person',email,sign_in_required:true,server_time_ms:1000});assert.equal(buckets[0],buckets[1]);assert.match(buckets[0],/^[a-f0-9]{64}$/);
+ failure=new AccountCodeError();assert.equal((await handler(req('password',{email,code:'12345678',password}))).status,400);failure=new AccountUnconfirmedError();assert.equal((await (await handler(req('password',{email,code:'12345678',password}))).json()).error,'password_outcome_unconfirmed');allowed=false;assert.equal((await handler(req('code',{email,intent:'setup'}))).status,429);
+});

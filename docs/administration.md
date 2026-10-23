@@ -1,6 +1,26 @@
 # Mercury One administration
 
-The local PostgreSQL service exposes the Mercury One console at `/admin/` and authenticated administration at `/v1/admin/*`. An owner-only local command now provisions or revokes administrator membership for an existing verified individual account. A real owner email/account has not been selected. Account creation and credential recovery remain pending. No hosted membership has been created.
+The local PostgreSQL service exposes the Mercury One console at `/admin/`, personal account setup/recovery at `/account/`, and authenticated administration at `/v1/admin/*`. An owner-only local command provisions or revokes administrator membership for a verified individual account. A real owner email/account has not been selected. No hosted membership or email transport has been created.
+
+## Local startup
+
+Run `node server/scripts/start-local-stack.mjs --restart` to apply local Auth/template settings while preserving data. The helper checks the exact Guard project, uses a dedicated Docker network, and limits its child CLI's Docker create commands to Guard containers. Every configured published port is explicitly bound to `127.0.0.1`; the effective Docker bindings are checked afterward. An unsafe result stops only Guard's local stack with its volumes preserved. No global Docker or Mac network settings are changed. Use `--status` for read-only port verification and private credential refresh.
+
+The CLI's ordinary start output is a human-readable table even with JSON requested. The helper reads structured status separately and saves the normalized runtime configuration to owner-readable `supabase-start.log`; raw diagnostics and the scoped Docker helper stay inside ignored `.local-backend`. Runtime keys and passwords must never be committed or packaged. The local runner now defaults to PostgreSQL. `MERCURY_IDENTITY_STORE=sqlite` remains an explicit synthetic protocol mode without this account portal.
+
+## Personal account setup and recovery
+
+The account page requests an 8-digit email code, then accepts the code and a new 12–128-character password together. Codes expire after ten minutes and work once. Setup may create an unconfirmed Auth account; recovery uses `create_user=false` and gives the same generic response for an unknown email. Both routes share account/global throttling. The local service requires email confirmation to be enabled before exposing the flow.
+
+The server exchanges the code through the publishable Auth API, remotely verifies the resulting session and exact confirmed email, changes only that user's password, and signs out all sessions. No password, OTP or Auth token is stored in Guard's tables; no access or refresh token is returned to the page. The final result contains the individual's Account ID and email for approved roster linking. It grants no guard, vendor, device, assignment or administrator role. New owner activation remains a separate private command.
+
+The page clears credential inputs before sending and on backgrounding, uses same-origin no-store requests and rejects redirects. A password-write timeout or an unconfirmed sign-out is displayed as an unknown outcome, with guidance to try the new password or request a fresh code. It never automatically retries a password write with a consumed code. Shared-phone users are asked to decline browser password-saving prompts; browser password-manager behavior is outside the app's storage controls.
+
+Android's configured account screens expose **Set up or reset password**. This clears the foreground guard session before opening only the configured HTTPS origin's `/account/` path, with no account identifier, token, query or fragment in the URL. An unconfigured preview still cannot request credentials or open an invented service.
+
+Local emails are captured in Mailpit only. Production SMTP, sender/domain verification, hosted templates and real-user delivery have not been configured. Local account checks prove the flow, not delivery to a real person's mailbox. Supabase's free-tier template restrictions were reviewed; this continuation creates no paid service or hosted project.
+
+`node server/scripts/check-local-account-portal.mjs` verifies the real local email/code/password round trip and removes its exact fixtures. `node server/scripts/open-local-account-test.mjs` opens an attended page with a disposable email and cleans up its own account/email on SIGINT/SIGTERM. Neither tool changes existing apps.
 
 ## Console workflow
 
@@ -45,8 +65,10 @@ An identical request ID returns its original historical receipt. It never reappl
 | `GET /v1/admin/catalog?kind=guards&after=...` | Read a page of at most 50 records. Kinds: administrators, access_audit, vendors, guards, sites, devices, assignments, ops_bindings, dashboard_bindings, outbox, audit. |
 | `POST /v1/admin/actions` | Apply a reasoned, idempotent, audited change. |
 | `POST /v1/admin/resolve` | Send the identical action envelope to retrieve its saved receipt or close its request ID without applying. |
+| `POST /v1/account/code` | Request a setup/recovery code for an individual email; recovery does not disclose account existence. |
+| `POST /v1/account/password` | Verify the email code, set the personal password and sign out sessions; returns no tokens. |
 
-Protected requests use an Authorization bearer header. Responses use `Cache-Control: no-store`. There is no cookie-based authority or public self-enrollment route.
+Protected administrator requests use an Authorization bearer header. Responses use `Cache-Control: no-store`. There is no cookie-based authority or public administrator, guard-role, device or assignment self-enrollment route. Personal Auth account setup is separate from those approvals.
 
 Action shape:
 
@@ -59,7 +81,7 @@ Action shape:
 }
 ```
 
-Supported actions are `vendor.create`, `vendor.status`, `site.create`, `site.status`, `guard.link`, `guard.status`, `device.enroll`, `device.revoke`, `ops_binding.approve`, `dashboard_mapping.approve` and `dispatch.publish`. Payload fields match the existing server adapters; unexpected fields are rejected. Guard linking takes an existing Auth subject and matching email. Active linking/reactivation verifies the current Auth account and confirmed email. This does not yet create Auth accounts or implement password recovery.
+Supported actions are `vendor.create`, `vendor.status`, `site.create`, `site.status`, `guard.link`, `guard.status`, `device.enroll`, `device.revoke`, `ops_binding.approve`, `dashboard_mapping.approve` and `dispatch.publish`. Payload fields match the existing server adapters; unexpected fields are rejected. Guard linking takes an existing Auth subject and matching email, which the individual can obtain through the account page. Active linking/reactivation verifies the current Auth account and confirmed email.
 
 A company vendor can link to several individually authenticated guards. Guard IDs and Auth subjects remain separate from the company Vendor ID. Public installation keys may be approved through device enrollment; private keys remain on the handset.
 
@@ -71,10 +93,12 @@ Ops binding withdrawal also cancels its current imported assignment and records 
 
 ## Verification
 
-151 server tests passed. Real disposable PostgreSQL checks covered company-to-many guard linking, explicit membership, concurrent exact retries, apply-versus-resolution races, delayed apply after not-applied closure, immutable audit privileges, and nested rollback of vendor status, enrollment revocation, Ops mapping/cancellation, dashboard mapping and dispatch publication. They also verified current Auth-session subject/expiry/deletion checks and column-only privileges; owner-only setup, stale receipt isolation, Auth-state changes, audit rollback and access-audit read-only grants. Real local Auth/HTTP checks verified initially unconfirmed account denial, the owner CLI review/apply path, metadata-role denial, administrator password sign-in, guard activation against Auth, console asset isolation, catalogs, request resolution, mapping withdrawal and existing-session denial after owner revocation. Real provider sign-out denied the old token at Guard and admin APIs while an independent session remained valid. Migration/advisor verification passed locally.
+162 server tests passed. Real disposable PostgreSQL checks covered company-to-many guard linking, explicit membership, concurrent exact retries, apply-versus-resolution races, delayed apply after not-applied closure, immutable audit privileges, and nested rollback of vendor status, enrollment revocation, Ops mapping/cancellation, dashboard mapping and dispatch publication. They also verified current Auth-session subject/expiry/deletion checks and column-only privileges; owner-only setup, stale receipt isolation, Auth-state changes, audit rollback and access-audit read-only grants. Real local Auth/HTTP checks verified initially unconfirmed account denial, the owner CLI review/apply path, metadata-role denial, administrator password sign-in, guard activation against Auth, console asset isolation, catalogs, request resolution, mapping withdrawal and existing-session denial after owner revocation. Real provider sign-out denied the old token at Guard and admin APIs while an independent session remained valid. Migration/advisor verification passed locally.
+
+The real Mailpit/Auth/HTTP round trip verified an initially unconfirmed signup, wrong-code denial, code-only email templates, one-time code use, password setup, no implicit roles, approved owner linking, recovery, invalidation of old access tokens, failure of the previous password, success of the replacement password, retained approved membership, shared account throttling and a generic unknown-recovery response without account creation. Fixtures and exact messages were removed. Browser rendering/code-request checks passed with no console warnings. Local Android APK/test APK, unit checks and lint passed; the updated account-link instrumentation awaits CI/device execution.
 
 Rendered browser checks verified sign-in, company creation, individual Auth guard linking, review/receipt display, the audit catalog, rejected-target resolution and subsequent new changes, and active-session revocation with cleared private views and explicit feedback. The browser's native fetch receiver binding and stale success feedback on revocation were corrected. All temporary accounts, memberships and fixture rows were removed. This verifies the local console, not hosted owner access or physical-device behavior.
 
 The migrations for private application tables were exported after local advisory checks. The column-only cross-schema Auth grant was created with the CLI migration command because it is not emitted by the private-schema diff; it was applied locally, recorded and replay-tested explicitly.
 
-Production hosting, real owner activation, account creation/recovery, release-key distribution, retention and physical acceptance remain open. Supabase's session behavior and OTP/account recovery guidance were checked in the current official [session documentation](https://supabase.com/docs/guides/auth/sessions) and [email authentication documentation](https://supabase.com/docs/guides/auth/auth-email-passwordless).
+Production hosting, real email delivery and owner activation, release-key distribution, retention and physical acceptance remain open. References: Supabase [sessions](https://supabase.com/docs/guides/auth/sessions), [email authentication](https://supabase.com/docs/guides/auth/auth-email-passwordless), [local email templates](https://supabase.com/docs/guides/local-development/customizing-email-templates), Docker [published-port binding](https://docs.docker.com/engine/network/port-publishing/), and the [Mailpit API](https://mailpit.axllent.org/docs/api-v1/).

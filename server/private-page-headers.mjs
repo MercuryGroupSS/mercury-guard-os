@@ -1,0 +1,2 @@
+export const privatePageHeaders=Object.freeze({'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','permissions-policy':'camera=(), microphone=(), geolocation=()',
+ 'content-security-policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"});
