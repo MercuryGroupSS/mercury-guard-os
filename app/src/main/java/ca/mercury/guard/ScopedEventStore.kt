@@ -12,11 +12,12 @@ import java.util.UUID
 class ScopedEventStore internal constructor(context: Context, name: String = "mercury_scoped_events.db",
  private val elapsedNow: () -> Long = { android.os.SystemClock.elapsedRealtime() },
  private val bootNow: () -> Int = { android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1) }
-) : SQLiteOpenHelper(context,name,null,1) {
+) : SQLiteOpenHelper(context,name,null,2) {
  private val cipher = DeviceCipher()
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
   db.execSQL("CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
+  createGuardPending(db)
  }
  override fun onConfigure(db: SQLiteDatabase) {
   super.onConfigure(db)
@@ -27,8 +28,30 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   // Never append with a newly generated encryption key if existing ciphertext is unreadable.
   db.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence LIMIT 1",null).use {c->if(c.moveToFirst())decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")}
   db.rawQuery("SELECT body FROM pending WHERE id=1",null).use {c->if(c.moveToFirst())decrypt(c.getString(0),"mercury-scoped-pending")}
+  db.rawQuery("SELECT owner,body FROM pending_by_guard",null).use{c->while(c.moveToNext())decrypt(c.getString(1),"mercury-scoped-pending:${c.getString(0)}")}
  }
- override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) { error("Unsupported scoped store version") }
+ private fun createGuardPending(db:SQLiteDatabase){db.execSQL("CREATE TABLE pending_by_guard (owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
+ override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
+  check(oldVersion==1 && newVersion==2);createGuardPending(db)
+ }
+ private fun owner(guardId:String):String {
+  require(guardId.isNotBlank() && guardId.length<=200)
+  return java.security.MessageDigest.getInstance("SHA-256").digest(guardId.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ }
+ private fun readSnapshot(db:SQLiteDatabase,guardId:String?):JSONObject? {
+  if(guardId!=null){
+   val id=owner(guardId)
+   db.rawQuery("SELECT body FROM pending_by_guard WHERE owner=?",arrayOf(id)).use{c->if(c.moveToFirst())return decrypt(c.getString(0),"mercury-scoped-pending:$id")}
+  }
+  val legacy=db.rawQuery("SELECT body FROM pending WHERE id=1",null).use{c->if(c.moveToFirst())decrypt(c.getString(0),"mercury-scoped-pending") else null}?:return null
+  if(guardId==null)return legacy
+  if(binding(legacy.getJSONObject("scope")).guardId!=guardId)return null
+  writeSnapshot(db,guardId,legacy);db.delete("pending","id=1",null);return legacy
+ }
+ private fun writeSnapshot(db:SQLiteDatabase,guardId:String?,snapshot:JSONObject){
+  if(guardId==null)db.insertOrThrow("pending",null,ContentValues().apply{put("id",1);put("body",cipher.encrypt(snapshot.toString().toByteArray(Charsets.UTF_8),"mercury-scoped-pending"))})
+  else {val id=owner(guardId);db.insertOrThrow("pending_by_guard",null,ContentValues().apply{put("owner",id);put("body",cipher.encrypt(snapshot.toString().toByteArray(Charsets.UTF_8),"mercury-scoped-pending:$id"))})}
+ }
  private fun decrypt(body: String,aad: String)=JSONObject(String(cipher.decrypt(body,aad),Charsets.UTF_8))
  private fun binding(b: GrantBinding)=JSONObject().put("guard_id",b.guardId).put("site_id",b.siteId).put("assignment_id",b.assignmentId).put("device_thumbprint",b.deviceThumbprint).put("revocation_version",b.revocationVersion)
  private fun binding(j: JSONObject)=GrantBinding(j.getString("guard_id"),j.getString("site_id"),j.getString("assignment_id"),j.getString("device_thumbprint"),j.getLong("revocation_version"))
@@ -55,17 +78,18 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.setTransactionSuccessful();return eventId
   } finally {db.endTransaction()}
  }
- /** FIFO across scopes prevents a later assignment from overtaking older device sequences. */
- fun prepareSigned(identity: DeviceIdentity,audience: String): JSONObject? {
+ /** Preserve per-guard FIFO and immutable retry snapshots; other guards can upload independently. */
+ fun prepareSigned(identity: DeviceIdentity,audience: String,guardId:String?=null): JSONObject? {
   val db=writableDatabase;db.beginTransaction()
   try {
-   var snapshot: JSONObject?=db.rawQuery("SELECT body FROM pending WHERE id=1",null).use {c->if(c.moveToFirst())decrypt(c.getString(0),"mercury-scoped-pending") else null}
+   var snapshot: JSONObject?=readSnapshot(db,guardId)
    if(snapshot==null) {
     val events=JSONArray();var first: GrantBinding?=null;var size=0
-    db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0 ORDER BY sequence LIMIT 100",null).use {c->
+    db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0 ORDER BY sequence",null).use {c->
      while(c.moveToNext()) {
       val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
-      if(first!=null && first!=scope)break
+      if(guardId!=null && scope.guardId!=guardId)continue
+      if(events.length()>=100 || (first!=null && first!=scope))break
       val event=record.getJSONObject("event");check(event.getLong("sequence")==c.getLong(0))
       val bytes=event.toString().toByteArray(Charsets.UTF_8).size
       if(size+bytes>250000)break
@@ -74,17 +98,17 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
     }
     if(events.length()==0){db.setTransactionSuccessful();return null}
     snapshot=JSONObject().put("scope",binding(first!!)).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events))
-    db.insertOrThrow("pending",null,ContentValues().apply {put("id",1);put("body",cipher.encrypt(snapshot.toString().toByteArray(Charsets.UTF_8),"mercury-scoped-pending"))})
+    writeSnapshot(db,guardId,snapshot)
    }
    val proof=identity.signScopedEventBatch(audience,snapshot.getJSONObject("batch"),binding(snapshot.getJSONObject("scope")))
    db.setTransactionSuccessful();return proof
   } finally {db.endTransaction()}
  }
  /** Only records local-pilot acceptance. Does not mark operational audit records delivered. */
- fun recordPilotReceipt(receipt: JSONObject) {
+ fun recordPilotReceipt(receipt: JSONObject,guardId:String?=null) {
   val db=writableDatabase;db.beginTransaction()
   try {
-   val snapshot=db.rawQuery("SELECT body FROM pending WHERE id=1",null).use {c->check(c.moveToFirst());decrypt(c.getString(0),"mercury-scoped-pending")}
+   val snapshot=readSnapshot(db,guardId)?:error("No pending batch")
    val batch=snapshot.getJSONObject("batch");val events=batch.getJSONArray("events")
    val ids=(0 until events.length()).map {events.getJSONObject(it).getString("event_id")}.toSet()
    GuardTransport.validatePilotReceipt(receipt,batch.getString("batch_id"),ids)
@@ -94,8 +118,16 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
     check(stored.getJSONObject("event").toString()==e.toString())
     check(db.update("captured",ContentValues().apply {put("pilot_receipted",1)},"sequence=?",arrayOf(seq.toString()))==1)
    }
-   db.delete("pending","id=1",null);db.setTransactionSuccessful()
+   if(guardId==null)db.delete("pending","id=1",null) else db.delete("pending_by_guard","owner=?",arrayOf(owner(guardId)))
+   db.setTransactionSuccessful()
   } finally {db.endTransaction()}
  }
- fun pendingCount(): Int=readableDatabase.rawQuery("SELECT COUNT(*) FROM captured WHERE pilot_receipted=0",null).use {it.moveToFirst();it.getInt(0)}
+ fun pendingCount(guardId:String?=null):Int {
+  if(guardId==null)return readableDatabase.rawQuery("SELECT COUNT(*) FROM captured WHERE pilot_receipted=0",null).use{it.moveToFirst();it.getInt(0)}
+  var count=0
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0",null).use{c->while(c.moveToNext()){
+   if(binding(decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}").getJSONObject("scope")).guardId==guardId)count++
+  }}
+  return count
+ }
 }

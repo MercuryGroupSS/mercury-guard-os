@@ -27,7 +27,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    if(!first||first.subject!==identity.subject||first.vendorId!==identity.vendorId)throw Error('Grant unavailable');
    const c=first.claims,at=now(),seconds=Math.floor(at/1000);
    const context={enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
-    guardId:c.guard_id,siteId:c.site_id,assignmentId:c.assignment_id,revocationVersion:c.revocation_version,vendorId:first.vendorId,
+    guardId:c.guard_id,siteId:c.site_id,assignmentId:c.assignment_id,revocationVersion:c.revocation_version,vendorId:first.vendorId,allowHistoricalSequence:true,
     notBefore:seconds,expiresAt:Math.min(seconds+60,session.expiresAt),allowedKinds:Object.keys(required)};
    if(!devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
    const {batch}=verifyScopedBatch(raw,context,seconds);

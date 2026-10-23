@@ -166,7 +166,7 @@ class GuardAccountActivity : Activity() {
    try{
     val db=ScopedEventStore(this)
     try{
-     val proof=db.prepareSigned(DeviceIdentity(this),c.audience)
+     val proof=db.prepareSigned(DeviceIdentity(this),c.audience,guardId)
      if(proof==null)message="No records are waiting to be sent."
      else{
       val batch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
@@ -175,8 +175,8 @@ class GuardAccountActivity : Activity() {
       else{
        val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
        val receipt=GuardTransport(c.endpoint).sendPilotBatch(active.bearer(),proof,batch.getString("batch_id"),ids)
-       db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
-       message="Pilot service accepted ${ids.size} record(s). Dashboard delivery is not yet connected. ${db.pendingCount()} record(s) remain queued."
+       db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),guardId)
+       message="Pilot service accepted ${ids.size} record(s). Dashboard delivery is not yet connected. ${db.pendingCount(guardId)} of your record(s) remain queued."
       }
      }
     }finally{db.close()}

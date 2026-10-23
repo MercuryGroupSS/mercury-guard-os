@@ -61,4 +61,34 @@ class ScopedEventStoreTest {
   try { rejected{reopened.pendingCount()} } finally { reopened.close() }
  }}
 
+ @Test fun guardsUploadIndependentlyAndReceiptsCannotClearAnotherGuard(){isolated{store,identity,name->
+  val a=binding(identity).copy(guardId="guard-a");val b=binding(identity).copy(guardId="guard-b")
+  store.capture("incident",JSONObject().put("note","A"),a,grant(a),identity,10000)
+  store.capture("incident",JSONObject().put("note","B"),b,grant(b),identity,10001)
+  val firstA=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!)
+  val firstB=payload(store.prepareSigned(identity,"mercury-local",b.guardId)!!)
+  assertEquals("guard-b",firstB.getJSONObject("scope").getString("guard_id"))
+  rejected{store.recordPilotReceipt(receipt(firstA),b.guardId)}
+  store.close();val reopened=ScopedEventStore(context,name,{200},{1})
+  try{
+   assertEquals(firstB.toString(),payload(reopened.prepareSigned(identity,"mercury-local",b.guardId)!!).toString())
+   reopened.recordPilotReceipt(receipt(firstB),b.guardId)
+   assertEquals(1,reopened.pendingCount());assertNull(reopened.prepareSigned(identity,"mercury-local",b.guardId))
+   assertEquals(firstA.toString(),payload(reopened.prepareSigned(identity,"mercury-local",a.guardId)!!).toString())
+   reopened.recordPilotReceipt(receipt(firstA),a.guardId);assertEquals(0,reopened.pendingCount())
+  }finally{reopened.close()}
+ }}
+ @Test fun versionOnePendingBatchMigratesWithoutChangingRetryIdentity(){isolated{store,identity,name->
+  val a=binding(identity)
+  store.capture("incident",JSONObject(),a,grant(a),identity,10000)
+  val original=payload(store.prepareSigned(identity,"mercury-local")!!)
+  store.writableDatabase.execSQL("DROP TABLE pending_by_guard")
+  store.writableDatabase.version=1;store.close()
+  val reopened=ScopedEventStore(context,name,{200},{1})
+  try{
+   assertEquals(original.toString(),payload(reopened.prepareSigned(identity,"mercury-local",a.guardId)!!).toString())
+   reopened.recordPilotReceipt(receipt(original),a.guardId);assertEquals(0,reopened.pendingCount())
+  }finally{reopened.close()}
+ }}
+
 }

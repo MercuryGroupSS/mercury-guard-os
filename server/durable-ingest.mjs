@@ -34,7 +34,7 @@ export class DurableIngest {
           if (prior.digest !== hash) throw new Error('Event ID content or scope conflict');
           continue;
         }
-        if (event.sequence <= last) throw new Error('Device sequence rollback');
+        if (event.sequence <= last && trustedContext.allowHistoricalSequence !== true) throw new Error('Device sequence rollback');
         this.db.prepare('INSERT INTO events VALUES(?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body);
         last = event.sequence;
       }
