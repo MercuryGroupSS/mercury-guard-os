@@ -24,6 +24,7 @@ The local PostgreSQL service continues with sending off by default. To enable ex
   "destinations": [{
     "destination": "approved-ops",
     "endpoint": "https://receiver.example.invalid/v1/mercury-one/observations",
+    "mediaEndpoint": "https://receiver.example.invalid/v1/mercury-one/media",
     "token": "REPLACE_WITH_A_PRIVATE_DEDICATED_RECEIVER_TOKEN"
   }]
 }
@@ -33,7 +34,7 @@ This is an example, not an enabled destination. Configuration is bounded, exact 
 
 ## Verification
 
-`node --test server/*.test.mjs`: 166 tests passed. `node server/scripts/check-local-postgres-limiter.mjs` replays migrations and exercises a sender and receiver in separate disposable PostgreSQL databases over actual loopback HTTP. It verifies concurrent retries, receiver-pool restart, original receipts, changed-body conflict, independent approvals, revocation between the preliminary read and commit, forced-audit rollback, restricted grants and unchanged synthetic business-table sentinels. Both disposable databases are removed.
+`node --test server/*.test.mjs`: 170 tests passed. `node server/scripts/check-local-postgres-limiter.mjs` replays migrations and exercises a sender and receiver in separate disposable PostgreSQL databases over actual loopback HTTP. It verifies concurrent retries, receiver-pool restart, original receipts, changed-body conflict, independent approvals, revocation between the preliminary read and commit, forced-audit rollback, restricted grants and unchanged synthetic business-table sentinels. Both disposable databases are removed.
 
 `node server/scripts/check-local-dashboard-receiver.mjs` runs the actual local receiver process and owner CLI, tests review/apply, receipt recovery after process restart, revocation and stale approval retry, then removes only its unique synthetic rows and private temporary input. It passed. Migration `20261023222717_guard_dashboard_receiver.sql` was exported from the local database, reviewed, replayed in disposable databases and aligned with local migration history. Final advisors reported no warning/error findings; private-schema RLS without public policies and unused test indexes remain intentional informational notices.
 
@@ -41,4 +42,14 @@ Current official references used: [Supabase role separation](https://supabase.co
 
 ## Still required
 
-Private media transfer and its own durable byte receipt, protected Ops presentation, approved real source/destination credentials and mappings, production TLS/deployment and physical acceptance remain open. No hosted database, application, existing repository or phone was changed by this receiver work.
+Protected Ops presentation, approved real source/destination credentials and mappings, production TLS/deployment and physical acceptance remain open. No hosted database, application, existing repository or phone was changed by this receiver work.
+
+## Private photo delivery
+
+Photo observations retain their original immutable `media_delivery: not_transferred` snapshot. Current delivery state is held separately. A PostgreSQL media worker claims only photo observations whose metadata was accepted by the receiver, whose original sender mapping remains active, and whose exact source bytes have arrived. It validates the original body/hash and image byte hash/length. Exclusive expiring leases, backoff and a separate receipt survive worker restarts; a stale attempt cannot acknowledge or release a newer lease. The runtime rechecks the mapping immediately before selecting the configured media route. Missing `mediaEndpoint` configuration leaves media sending disabled.
+
+`POST /v1/mercury-one/media/<delivery_id>` uses the dedicated destination credential and `image/jpeg`, accepts at most the approved metadata's byte count (maximum 20 MiB), and requires the prior stored photo observation. It independently rechecks its current mapping within the byte-storage transaction, including retries. Exact retries return the original `media_stored_in_integration_inbox` receipt, bound to delivery/destination/event/evidence IDs, SHA-256 and length. Wrong bytes and revoked mappings are rejected. Bytes and their receipt commit together in a private PostgreSQL table. There is no public download URL or anonymous read route. This verifies byte identity and storage; image decoding/display and physical capture acceptance remain separate checks.
+
+Migration `20261023224043_guard_dashboard_media.sql` adds independent media retry/receipt fields and the private receiver media table. Its marked receiver-only section can be reviewed without applying the sender schema. Complete replay passed. The projected-photo validator now restores the fixed local capture discriminator internally; it preserves the wire format and accepts valid queued photo metadata without exposing capture-grant fields.
+
+Integration checks used a signed source photo-byte fixture, transferred it over HTTP between independent PostgreSQL databases, compared the stored bytes, retried concurrently across receiver restart, rejected incorrect/false receipts and stale leases, and denied both observation and byte retries after a revocation committed during upload. The actual local receiver process/owner CLI smoke also passed separate photo receipts across process restart and removed its own fixtures. These synthetic byte fixtures do not replace viewing real camera images on the Fold and in the protected operations interface.

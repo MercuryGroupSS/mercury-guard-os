@@ -8,6 +8,8 @@ import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
 import {openDashboardDelivery} from '../dashboard-delivery-config.mjs';
+import {PostgresDashboardMedia} from '../postgres-dashboard-media.mjs';
+import {deliverDashboardMediaOnce} from '../dashboard-media.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
 import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
 import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
@@ -39,13 +41,15 @@ const dashboardOutbox=identityMode==='postgres'?new PostgresDashboardOutbox(devi
 const dashboardBindings=identityMode==='postgres'?new PostgresDashboardBindings(devices):new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
 const dispatch=identityMode==='postgres'?new PostgresDispatchFeed(devices):new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=identityMode==='postgres'?new PostgresShiftLifecycle(devices):new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
-const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle,send:dashboardSend});
+const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle,send:dashboardSend?.observations});
+const dashboardMedia=identityMode==='postgres'?new PostgresDashboardMedia(devices):null;
+async function sendMedia(job){const p=JSON.parse(job.body),mapping=await dashboardBindings.get({assignmentId:p.assignment_id,guardId:p.guard_id,vendorId:p.vendor_id,siteId:p.site_id});if(!mapping?.active||mapping.revision!==p.mapping_revision||mapping.destination!==p.destination||mapping.dashboardShiftId!==p.dashboard_shift_id)throw Error('Original photo destination no longer approved');return dashboardSend.media(job);}
 const admin=identityMode==='postgres'?new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})}):null;
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}
 catch(error){await opsRefresh.close();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;
-function pumpBridge(){if(bridgeRun)return;bridgeRun=dashboardBridge.run().catch(()=>console.error('Local dashboard projection failed; source records retained.')).finally(()=>{bridgeRun=null;});}
+function pumpBridge(){if(bridgeRun)return;bridgeRun=(async()=>{await dashboardBridge.run();if(dashboardMedia&&dashboardSend?.media)await deliverDashboardMediaOnce(dashboardMedia,sendMedia);})().catch(()=>console.error('Local dashboard projection/delivery failed; source records retained.')).finally(()=>{bridgeRun=null;});}
 pumpBridge();const bridgeTimer=setInterval(pumpBridge,30000);bridgeTimer.unref();
 // Report aggregate scheduler failures without printing guard identities or credentials.
 let reportedFailures=0;

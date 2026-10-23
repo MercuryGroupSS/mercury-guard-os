@@ -1,6 +1,6 @@
 # Offline server protocol reference
 
-Current state: see the [project brief](../docs/project-brief.md). This file preserves earlier protocol milestones below. The PostgreSQL service, account and administration paths are now implemented and locally verified; the suite has 166 passing tests. The new [receiver guide](../docs/dashboard-receiver.md) describes durable observations, independent approvals and opt-in HTTPS routing. Live integration, media transfer, release and physical acceptance remain open.
+Current state: see the [project brief](../docs/project-brief.md). This file preserves earlier protocol milestones below. The PostgreSQL service, account and administration paths are now implemented and locally verified; the suite has 170 passing tests. The [receiver guide](../docs/dashboard-receiver.md) describes durable observations, independent approvals, private photo byte receipts and opt-in HTTPS routing. Live integration, protected rendering, release and physical acceptance remain open.
 
 Run `node --test server/*.test.mjs` with Node 24.19.0. No packages, credentials or cloud connection are required. Seventeen tests currently pass locally. CI runs independently from Android builds. The current Android continuation is v0.13; no network connection is enabled.
 

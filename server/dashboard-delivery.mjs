@@ -36,7 +36,10 @@ export function projectDashboardObservation(record,mapping){
 }
 export function validateProjectedDashboardObservation(value,mapping){
  if(!value||typeof value!=='object')throw Error('Observation required');
- const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data:value.observation?.data}},mapping);
+ // The public projection deliberately omits the local capture marker. Restore
+ // that fixed input discriminator when validating projected photo metadata.
+ const data=value.observation?.kind==='photo_evidence'?{...value.observation.data,capture:'camera_intent'}:value.observation?.data;
+ const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data}},mapping);
  if(JSON.stringify(expected)!==JSON.stringify(value))throw Error('Observation projection or mapping changed');
  return value;
 }

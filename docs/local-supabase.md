@@ -8,11 +8,11 @@ Isolated project: mercury-guard-os-local. No cloud project link, production chan
 - Local test mail: http://127.0.0.1:55324
 - CLI pinned to 2.122.0 in server/package.json and package-lock.json.
 
-From the work directory, use server/node_modules/.bin/supabase start --exclude logflare,vector to start. Docker Desktop must be running. The generated supabase-start.log contains local development credentials; it is ignored and must never be committed or included in review bundles. Use synthetic data only. No production credentials are installed.
+From the work directory, use `node server/scripts/start-local-stack.mjs` to start the isolated stack. This helper applies and verifies loopback-only Docker port bindings. Use `--status` for a read-only check or `--restart` to apply local settings while preserving volumes. Docker Desktop must be running. Do not substitute a bare Supabase start: the CLI default can publish ports on every interface. The generated supabase-start.log contains local development credentials; it is ignored and must never be committed or included in review bundles. Use synthetic data only. No production credentials are installed.
 
 Verification: database query confirmed auth.users; Auth health endpoint responded; server/scripts/check-local-auth.mjs creates a synthetic account, signs in, verifies identity, checks invalid-token rejection, and deletes the account. This verifies local Supabase Auth, not the Android integration or a hosted dashboard login.
 
-Still pending: Guard-specific database schema and authorization providers, enrollment/grant persistence, Android transport, and dashboard delivery. Existing local ingestion remains SQLite-backed. Physical phone testing is deferred.
+Current PostgreSQL mode includes shared identities, enrollment/assignments/grants, scoped observations and evidence, administration, account setup/recovery and opt-in dashboard observation/private-media delivery. See the [current brief](project-brief.md) and [receiver guide](dashboard-receiver.md). The runner defaults to PostgreSQL; explicit SQLite mode remains a synthetic fixture. Live source/destination configuration, release and physical acceptance remain open. Historical v0.24 details follow.
 
 ## Connected local pilot service (v0.24)
 

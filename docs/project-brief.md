@@ -30,9 +30,11 @@ Recurring Ops reads are opt-in and use only explicitly approved shift IDs. Live 
 
 The [PostgreSQL observation receiver](dashboard-receiver.md) now has an independent private schema, owner-approved mapping ledger, immutable observations and receipts. It rechecks receiver authorization inside the storage transaction, including exact retries. The HTTP handler awaits commit before acknowledging. The sender now supports opt-in destination-specific HTTPS endpoints/credentials; default sending stays off, unknown destinations are rejected before transmission, and synthetic SQLite mode cannot enable delivery. Separate-database and actual process/CLI tests passed. No live destination was enabled.
 
+Private photo bytes now have their own durable receiver receipt and sender retry/lease state. Transfer waits for accepted photo metadata, available source bytes and the original active mapping. The destination rechecks its approval at byte commit and preserves exact retries without replacement. Separate-database and actual receiver-process HTTP checks verified stored bytes, restart recovery, false-receipt/stale-lease denial and revocation during upload. Protected rendering and real camera-image acceptance remain open; sending is still disabled without explicit HTTPS destination configuration.
+
 ## Verification checkpoint
 
-- 166 server tests pass.
+- 170 server tests pass.
 - Disposable PostgreSQL migration replay and real concurrency/revocation/rollback/receipt tests pass, including audited administrator actions.
 - Real local Supabase Auth and HTTP checks pass for sign-in, scoped assignments, confirmed shifts/grants, incident ingestion, dispatch acknowledgement, queue projection, administrator actions and revocation.
 - Rendered console checks passed for sign-in, company creation, individual guard linking, reviewed changes, receipts/audit, failed-request resolution and revoked-session feedback. Temporary accounts and fixture rows were removed.
@@ -40,7 +42,7 @@ The [PostgreSQL observation receiver](dashboard-receiver.md) now has an independ
 - Real local email signup and password recovery passed, including wrong/replayed codes, no implicit roles, replacement credentials, old-token denial, preserved approved access, throttling, unknown-email privacy and fixture cleanup. Browser page/code-request checks and the existing full guard/assignment/report HTTP flow passed after the Auth changes. Effective local published ports were checked as loopback-only.
 - Updated Android APK/test APK compilation, JVM checks and lint passed. Account-page commit `1b01fcf731c36d5e5252b92983a663e466d4edc8` passed GitHub Android run 40032338395, including API 28/API 35 device jobs and HTTPS integration. Current physical Fold testing remains deferred.
 - Local database advisors report no issues. Exported migrations retain explicit private grants and RLS.
-- GitHub backend and Android workflows for account-page commit `1b01fcf731c36d5e5252b92983a663e466d4edc8` passed (server run 40032338221, Android run 40032338395). The receiver continuation has passed local verification and requires its own CI result after commit.
+- GitHub backend and Android workflows for receiver commit `508860e1a5be746ca96eb3719208a0f7e61e6e9b` passed (server run 40034678639, Android run 40034678568). The private media continuation has passed local verification and requires its own CI result after commit.
 - PostgreSQL sender-to-receiver delivery passed across separate disposable databases over HTTP, including restart/concurrent exact retries, altered-body rejection, independent receiver approvals, transactional revocation and audit rollback. Actual receiver process and owner CLI review/apply/restart/revocation tests passed, with synthetic fixture cleanup. Migration replay passed and final local advisors found no warning/error findings.
 
 Detailed backend evidence and limits are in [PostgreSQL implementation notes](postgres-devices.md).
@@ -48,7 +50,7 @@ Detailed backend evidence and limits are in [PostgreSQL implementation notes](po
 ## Work still required for a finished product
 
 1. Configure real email delivery and approved owner activation, then provision real guard/site/device approvals through the console. Verify setup/recovery through the chosen hosted origin and native browser handoff.
-2. Configure real approved Ops bindings, source credentials, live receiver rendering and private media transfer. Verify end-to-end exchange against the actual connected apps without changing their existing data unexpectedly.
+2. Configure real approved Ops bindings, source/destination credentials and protected receiver rendering. Verify report/photo exchange against the actual connected apps without changing their existing data unexpectedly. Durable private byte transfer is implemented and locally verified; live configuration and image-display acceptance remain open.
 3. Complete production deployment, signing-key distribution/rotation, release signing/update recovery, retention/backups and capacity/security acceptance. Current global commit locks need throughput measurement before scaling.
 4. Resolve operational acceptance for geofence/GPS behavior, background delivery/recovery, repeated patrol rounds, escalation/emergency delivery and dedicated-device controls.
 5. Produce a current configured APK/source bundle and verify the full flow on the Fold6 when physical testing resumes. Preserve the existing app/data during installation and testing.

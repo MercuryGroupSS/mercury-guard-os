@@ -29,6 +29,10 @@ export async function verifyPostgresEvents(connectionString,admin){
   await store.ingest(raw({...batch,batch_id:randomUUID(),events:[photo]}),c,Math.floor(now/1000));
   const record=await other.photoForGuard(c.guardId,photo.event_id);assert.ok(record);assert.equal(await other.photoForGuard('other-guard',photo.event_id),null);
   const media=await Promise.all([store.retainPhoto(record,bytes,now+1000),other.retainPhoto(record,bytes,now+1000)]);assert.deepEqual(media[0],media[1]);
+  // A second real signed fixture remains available for independent dashboard
+  // media-delivery tests without changing the first observation's attribution.
+  const secondPhoto={...photo,event_id:randomUUID(),sequence:4,data:{...photo.data,evidence_id:randomUUID()}};
+  await store.ingest(raw({...batch,batch_id:randomUUID(),events:[secondPhoto]}),c,Math.floor(now/1000));await store.retainPhoto(await store.photoForGuard(c.guardId,secondPhoto.event_id),bytes,now+1000);
   await assert.rejects(other.retainPhoto(record,Buffer.from('wrong'),now+1000));
   assert.equal((await other.eventsAfter(0,1)).length,1);
   await assert.rejects(pool.query('UPDATE mercury_guard.ingested_events SET digest=repeat(\'0\',64)'),/permission denied/);
