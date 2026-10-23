@@ -336,3 +336,7 @@ Added transactional source-row refresh into the local assignment store with inde
 ### Bounded Ops source reader — October 23
 
 Added a server-only GET adapter for explicitly mapped Ops shift IDs and schedule fields. It bounds IDs, time and body size, rejects redirects/partial or out-of-scope results, excludes roster display names and reports missing IDs without cancelling assignments. Synthetic contract coverage and the full server suite pass (118 tests). No hosted read or credential retrieval occurred; actual Data API connectivity and recurring sync activation remain unverified.
+
+### Ops refresh worker — October 23
+
+Added opt-in bounded refresh orchestration connecting approved mappings, source reads, trusted roster checks and transactional assignment updates. It rechecks mapping approval after network/directory reads, preserves missing-source assignments, coalesces overlapping runs and stops in-flight activation when stopped. All 120 server tests pass. The worker is not enabled in the service runner and no hosted application or data was changed; credential provisioning and persistent approved mappings remain deployment requirements.
