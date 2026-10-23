@@ -24,3 +24,6 @@ supabase/.temp/
 supabase/.branches/
 supabase-start.log
 .local-backend/
+
+# Installation-specific public trust config is provisioned into controlled builds only.
+app/src/main/assets/guard-service.json

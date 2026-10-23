@@ -300,6 +300,7 @@ class MainActivity : Activity() {
     .setMessage("Creates an eight-hour test schedule starting now on this phone. It is not a real assigned shift or payroll record. Biometrics, precise location, enabled GPS and notifications are required to start the demo; location accuracy and real schedule eligibility are not verified.")
     .setNegativeButton("Cancel", null).setPositiveButton("Create demo") { _, _ -> assignment.create(); showDashboard(); authenticateForShift() }.show()
   }
+  action("Guard account connection") { startActivity(Intent(this,GuardAccountActivity::class.java)) }
   action("Device readiness") { showDeviceReadiness() }
   action("Device information") { showInfo() }
   action("Review local audit events") { showAudit() }
@@ -368,6 +369,7 @@ class MainActivity : Activity() {
    if (!assignment.canClockOut()) action("End shift early") { showEarlyEnd() }
    else action("Clock out") { confirmClockOut() }
   }
+  action("Guard account connection") { startActivity(Intent(this,GuardAccountActivity::class.java)) }
   action("Device readiness") { showDeviceReadiness() }
   action("Return") { showDashboard() }
  }

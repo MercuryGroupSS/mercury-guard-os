@@ -59,7 +59,8 @@ export class LocalDeviceAssignments {
    if(!verify('sha256',Buffer.from(message),key(d.publicKeySpki).key,decode(proof.signature_der,80)))throw Error('Invalid signature');
    this.db.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
    const assignments=this.db.prepare('SELECT body FROM assignments WHERE guard_id=?').all(identity.guardId)
-    .map(r=>assignmentForGuard({identity,assignment:JSON.parse(r.body),device:d,now})).filter(Boolean);
+    .map(r=>assignmentForGuard({identity,assignment:JSON.parse(r.body),device:d,now})).filter(Boolean)
+    .map(a=>({...a,deviceThumbprint:d.thumbprint,revocationVersion:d.revocationVersion}));
    this.db.exec('COMMIT');return {assignments};
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
