@@ -14,6 +14,7 @@ class GuardAccountClient(endpoint: String) {
   require(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null)
   require(uri.path.isNullOrEmpty() || uri.path == "/")
  }
+ class HttpFailure(val statusCode:Int):IllegalStateException("Request unavailable (HTTP $statusCode)")
  class Session internal constructor(private var token: String?, private val expiresElapsed: Long) {
   internal fun bearer(): String {
    check(SystemClock.elapsedRealtime() < expiresElapsed) { "Sign in again" }
@@ -64,7 +65,7 @@ class GuardAccountClient(endpoint: String) {
     connection.doOutput = true; connection.setRequestProperty("Content-Type","application/json"); connection.setFixedLengthStreamingMode(bytes.size)
     connection.outputStream.use { it.write(bytes) }
    }
-   check(connection.responseCode == 200) { "Request unavailable (HTTP ${connection.responseCode})" }
+   val status=connection.responseCode;if(status!=200)throw HttpFailure(status)
    val raw = connection.inputStream.use { input ->
     val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(4096)
     while(true) { val count = input.read(buffer); if(count < 0) break; check(out.size()+count <= 262144); out.write(buffer,0,count) }

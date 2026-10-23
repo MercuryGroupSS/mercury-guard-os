@@ -53,6 +53,21 @@ class HttpsAccountIntegrationTest {
    val binding=GrantBinding("fixture-guard","fixture-site","fixture-shift",public.thumbprint,item.getLong("revocationVersion"))
    val grant=ShiftGrantVerifier("mercury-local","mercury-local",mapOf("https-fixture" to key)).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,ServerTimeAnchor(response.getLong("server_time_ms"),started,boot),SystemClock.elapsedRealtime(),boot)
    assertNotNull(grant)
+   val inboxName="https-inbox-${UUID.randomUUID()}.db"
+   try {
+    DispatchInbox(context,inboxName).use { inbox ->
+     val scope=DispatchScope(binding,item.getString("vendorId"))
+     assertFalse(inbox.apply(scope,null,dispatch))
+     assertEquals("fixture-message",inbox.list(scope).single().getJSONObject("message").getString("message_id"))
+     inbox.markRead(scope,"fixture-message",1,response.getLong("server_time_ms"))
+     inbox.apply(scope,dispatch.getString("next_cursor"),unchanged)
+    }
+    DispatchInbox(context,inboxName).use { inbox ->
+     val scope=DispatchScope(binding,item.getString("vendorId"))
+     assertEquals(unchanged.getString("next_cursor"),inbox.cursor(scope))
+     assertFalse(inbox.list(scope).single().isNull("read_at"))
+    }
+   } finally { context.deleteDatabase(inboxName) }
    db.capture("incident",JSONObject().put("description","HTTPS integration synthetic incident"),binding,grant!!,identity,response.getLong("server_time_ms"))
    val route=response.getJSONObject("patrol_route");assertEquals("fixture-route",route.getString("routeId"))
    db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"))

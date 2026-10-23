@@ -170,6 +170,7 @@ class GuardAccountActivity : Activity() {
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
   button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
+  button("Assignment messages"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening messages." else loadDispatch(item,true)}
   if(item.has("checkInPolicy"))button("Check-in reminder settings"){reminderSettings(item)}
   if(item.has("checkInStatus"))button("Review check-in delivery"){checkInStatusScreen(item)}
   if(item.has("checkInPolicy"))button("Complete scheduled check-in"){if(note.text.toString().isNotBlank())status.text="Save your incident description before starting a check-in." else beginCheckIn(item)}
@@ -178,6 +179,63 @@ class GuardAccountActivity : Activity() {
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
   button("Sign out"){startScreen()}
+ }
+ private fun loadDispatch(item:JSONObject,refresh:Boolean,offset:Int=0){
+  val c=config?:return;val active=session?:return;val binding=captureBinding?:return
+  if(binding.assignmentId!=item.getString("assignmentId"))return
+  val scope=DispatchScope(binding,item.getString("vendorId"));val stamp=generation
+  screen("ASSIGNMENT MESSAGES",if(refresh)"Checking assignment messages…" else "Opening encrypted inbox…");busy=true
+  Thread{
+   var rows:List<JSONObject>?=null;var message="Cached messages · reading does not acknowledge them.";var deny=false
+   val db=DispatchInbox(this)
+   try{
+    active.bearer()
+    if(refresh){
+     val client=GuardAccountClient(c.endpoint);var more=true;var pages=0
+     while(more&&pages<4){
+      var cursor=db.cursor(scope)
+      val page=try{client.dispatch(active,c.deviceId,binding.assignmentId,DeviceIdentity(this),c.audience,cursor)}catch(e:GuardAccountClient.HttpFailure){
+       if(e.statusCode!=409)throw e
+       db.resetCursor(scope,cursor);cursor=null
+       client.dispatch(active,c.deviceId,binding.assignmentId,DeviceIdentity(this),c.audience,null)
+      }
+      more=db.apply(scope,cursor,page);pages++
+     }
+     message=if(more)"More updates remain. Refresh again to continue. These messages are not acknowledged." else "Inbox refreshed. Opening a message marks it viewed on this phone only."
+    }
+    rows=db.list(scope,offset)
+   }catch(_:GuardAccountClient.HttpFailure){deny=true;message="Message access could not be authorized. Sign in again and refresh assignments."}
+   catch(_:Exception){
+    message="Refresh unavailable. Cached messages may be out of date; no acknowledgement was sent."
+    try{active.bearer();rows=db.list(scope,offset)}catch(_:Exception){deny=true;message="Messages unavailable. Sign in again; encrypted records remain preserved."}
+   }finally{db.close()}
+   val result=rows;val summary=message;val blocked=deny
+   runOnUiThread{
+    if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
+    busy=false;status.text=summary
+    if(!blocked&&result!=null){
+     if(result.isEmpty())root.addView(TextView(this).apply{text="No active messages on this page.";textSize=16f})
+     for(wrapped in result){val m=wrapped.getJSONObject("message");button("${m.getString("title")} · v${m.getLong("version")}"){viewDispatch(item,scope,m)}}
+     if(offset>0)button("Previous messages"){loadDispatch(item,false,maxOf(0,offset-30))}
+     if(result.size==30)button("Next messages"){loadDispatch(item,false,offset+30)}
+     button("Refresh messages"){loadDispatch(item,true)}
+    }
+    button("Back to assignment"){captureScreen(item)};button("Sign out"){startScreen()}
+   }
+  }.start()
+ }
+ private fun viewDispatch(item:JSONObject,scope:DispatchScope,message:JSONObject){
+  try{
+   session?.bearer()?:error("Sign in again");check(captureBinding==scope.binding)
+   val anchor=captureAnchor?:error("Refresh authorization")
+   val at=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+   val db=DispatchInbox(this);val wrapped=try{db.markRead(scope,message.getString("message_id"),message.getLong("version"),at)}finally{db.close()}
+   val current=wrapped.getJSONObject("message")
+   screen(current.getString("title"),"Version ${current.getLong("version")} · viewed on this phone. No acknowledgement has been sent.")
+   root.addView(TextView(this).apply{text=current.getString("body");textSize=18f;setPadding(0,dp(16),0,dp(16));setTextIsSelectable(true)})
+   if(!current.isNull("due_at"))root.addView(TextView(this).apply{text="Due: ${java.util.Date(current.getLong("due_at"))}";textSize=16f})
+   button("Back to messages"){loadDispatch(item,false)};button("Refresh messages"){loadDispatch(item,true)}
+  }catch(_:Exception){status.text="This message changed or access expired. Refresh messages before opening it again."}
  }
  private fun reminderSettings(item:JSONObject){
   val reminders=AuthorizedReminders(this)
