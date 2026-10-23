@@ -1,3 +1,4 @@
+import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
 import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
 // Local-only smoke check. Reads startup credentials without printing them.
@@ -8,7 +9,7 @@ import {DurableIngest} from '../durable-ingest.mjs';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {createHash,generateKeyPairSync,sign,randomUUID,randomBytes} from 'node:crypto';
+import {createHash,generateKeyPairSync,sign,verify,randomUUID,randomBytes} from 'node:crypto';
 const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').trim().split('\n');
 const config=JSON.parse(lines.findLast(line=>line.startsWith('{')&&line.includes('API_URL')));
 if(config.API_URL!=='http://127.0.0.1:55321') throw Error('Local environment required');
@@ -47,9 +48,11 @@ try {
  directory.addVendor({vendorId:'synthetic-vendor',kind:'company',active:true});
  directory.addGuard({guardId:'synthetic-guard',authSubject:id,vendorId:'synthetic-vendor',active:true});
  const devices=new LocalDeviceAssignments(join(dir,'devices.sqlite'));
+ const issuerKeys=generateKeyPairSync('rsa',{modulusLength:2048});
+ const grantIssuer=new ShiftGrantIssuer({path:join(dir,'grants.sqlite'),privateKey:issuerKeys.privateKey,keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
  devices.enroll({deviceId:'synthetic-phone',mode:'site',siteId:'synthetic-site',active:true,revoked:false,publicKeySpki:authority.public_key_spki});
  devices.assign({assignmentId:'synthetic-shift',guardId:'synthetic-guard',vendorId:'synthetic-vendor',siteId:'synthetic-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000});
- let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices}),started=false;
+ let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices,grantIssuer}),started=false;
  try {
   let origin=await service.start();started=true;
   const profile=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
@@ -68,6 +71,16 @@ try {
   const assigned=await assignmentResponse.json();if(assigned.assignments.length!==1||assigned.assignments[0].assignmentId!=='synthetic-shift')throw Error('Assignment scope incorrect');
   if((await post('/v1/assignments',deviceProof)).status!==400)throw Error('Device proof replay accepted');
   console.log('PASS: enrolled device proof + scoped assignment delivery + replay denial');
+  const grantChallenge=await post('/v1/device-challenge',{device_id:'synthetic-phone'});
+  const gc=await grantChallenge.json();
+  const gp={...deviceProof,request_id:gc.request_id,challenge:gc.challenge,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${gc.audience}\n${gc.request_id}\n${gc.challenge}\n${thumbprint}`),privateKey).toString('base64url')};
+  const grantResponse=await post('/v1/shift-grant',{assignment_id:'synthetic-shift',proof:gp});
+  if(grantResponse.status!==200)throw Error('Shift grant issuance failed');
+  const grant=await grantResponse.json(),claims=JSON.parse(Buffer.from(grant.payload,'base64url'));
+  if(!verify('sha256',Buffer.from(`mercury-shift-grant-v1.${grant.key_id}.${grant.payload}`),issuerKeys.publicKey,Buffer.from(grant.signature,'base64url'))||claims.guard_id!=='synthetic-guard'||claims.device_thumbprint!==thumbprint||claims.expires_at_ms-claims.issued_at_ms>900000)throw Error('Invalid issued grant');
+  if((await post('/v1/shift-grant',{assignment_id:'synthetic-shift',proof:gp})).status!==400)throw Error('Grant proof replay accepted');
+  console.log('PASS: authenticated shift grant issuance, RSA signature and replay denial');
+
 
   const send=()=>fetch(origin+'/v2/batches',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+session.access_token},body:proof});
   let response=await send();if(response.status!==200)throw Error('Signed network ingestion failed: '+response.status);
@@ -75,12 +88,12 @@ try {
   directory.setGuardActive('synthetic-guard',false);if((await send()).status!==401)throw Error('Disabled guard uploaded');
   directory.setGuardActive('synthetic-guard',true);
   console.log('PASS: disabled roster identity denies batch retries');
-  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices});origin=await service.start();started=true;
+  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices,grantIssuer});origin=await service.start();started=true;
   response=await send();if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Restart retry failed');
   const revoke=await fetch(authorityUrl+'?subject=eq.'+id,{method:'PATCH',headers:admin,body:JSON.stringify({revoked:true})});if(!revoke.ok)throw Error('Revocation update failed');
   if((await send()).status!==401)throw Error('Revoked device accepted');
   console.log('PASS: real local Auth + protected authority + signed HTTP ingestion + restart deduplication + revocation');
- } finally {if(started)await service.stop();store.close();directory.close();devices.close();rmSync(dir,{recursive:true,force:true});}
+ } finally {if(started)await service.stop();store.close();directory.close();devices.close();grantIssuer.close();rmSync(dir,{recursive:true,force:true});}
 
 } finally {
  if(id){await call('/admin/users/'+id,{method:'DELETE',headers:admin});console.log('PASS: synthetic account removed');}

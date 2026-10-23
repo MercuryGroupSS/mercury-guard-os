@@ -1,19 +1,19 @@
 import {createGuardResolver} from './guard-directory.mjs';
 import {strictJson} from './verify-batch.mjs';
-export function createAssignmentHandler({verifySession,directory,devices,now=Date.now}){
+export function createAssignmentHandler({verifySession,directory,devices,grantIssuer,now=Date.now}){
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  const reply=(status,body)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
  return async request=>{
   const path=new URL(request.url).pathname;
-  if(!['/v1/device-challenge','/v1/assignments'].includes(path))return reply(404,{error:'not_found'});
+  if(!['/v1/device-challenge','/v1/assignments','/v1/shift-grant'].includes(path))return reply(404,{error:'not_found'});
   if(request.method!=='POST')return reply(405,{error:'method_not_allowed'});
   if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')return reply(415,{error:'json_required'});
   const auth=request.headers.get('authorization')??'';
   const match=auth.length<=16384?/^Bearer ([^\s]+)$/.exec(auth):null;
   if(!match)return reply(401,{error:'authentication_required'});
-  let identity;
+  let identity,session;
   try{
-   const session=await verifySession(match[1]);
+   session=await verifySession(match[1]);
    if(!session||!Number.isSafeInteger(session.expiresAt)||session.expiresAt*1000<=now())return reply(401,{error:'authentication_required'});
    identity=await resolve(session);if(!identity)return reply(403,{error:'guard_access_unavailable'});
   }catch{return reply(503,{error:'identity_unavailable'});}
@@ -25,6 +25,17 @@ export function createAssignmentHandler({verifySession,directory,devices,now=Dat
    if(path==='/v1/device-challenge'){
     if(!body||Object.keys(body).join()!=='device_id')throw Error('Invalid request');
     return reply(200,devices.challenge(identity,body.device_id,now()));
+   }
+   if(path==='/v1/shift-grant'){
+    if(!grantIssuer)return reply(503,{error:'issuer_unavailable'});
+    if(!body||Object.keys(body).sort().join()!=='assignment_id,proof'||typeof body.assignment_id!=='string')throw Error('Invalid grant request');
+    const at=now();
+    const result=devices.list(identity,body.proof,at);
+    const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id&&a.canStart);
+    if(!assignment)throw Error('Assignment unavailable');
+    const device=devices.device(assignment.deviceId);
+    return reply(200,grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
+     allowedActions:['patrol','incident','photo','check_in','location'],now:at}));
    }
    return reply(200,devices.list(identity,body,now()));
   }catch{return reply(400,{error:'device_request_rejected'});}

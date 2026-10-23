@@ -26,11 +26,11 @@ export class LocalDeviceAssignments {
    !(device.mode==='site'&&id(device.siteId)||device.mode==='personal'&&id(device.guardId)))throw Error('Approved enrollment required');
   const k=key(device.publicKeySpki);
   const stored={deviceId:device.deviceId,mode:device.mode,siteId:device.mode==='site'?device.siteId:null,
-   guardId:device.mode==='personal'?device.guardId:null,active:true,revoked:false,publicKeySpki:device.publicKeySpki,thumbprint:k.thumbprint};
+   guardId:device.mode==='personal'?device.guardId:null,active:true,revoked:false,revocationVersion:1,publicKeySpki:device.publicKeySpki,thumbprint:k.thumbprint};
   this.db.prepare('INSERT INTO devices VALUES(?,?,?)').run(stored.deviceId,k.thumbprint,JSON.stringify(stored));
  }
  device(deviceId){const row=this.db.prepare('SELECT body FROM devices WHERE id=?').get(deviceId);return row?JSON.parse(row.body):null;}
- revoke(deviceId){const d=this.device(deviceId);if(!d)throw Error('Unknown device');d.revoked=true;this.db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify(d),deviceId);}
+ revoke(deviceId){const d=this.device(deviceId);if(!d)throw Error('Unknown device');d.revoked=true;d.revocationVersion=(d.revocationVersion??1)+1;this.db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify(d),deviceId);}
  assign(a){
   if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const row=Object.fromEntries(['assignmentId','guardId','vendorId','siteId','startsAt','endsAt','active'].map(k=>[k,a[k]]));

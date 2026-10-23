@@ -1,3 +1,5 @@
+import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
+import {localIssuerKey} from '../local-issuer-key.mjs';
 import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
 import {readFileSync,mkdirSync} from 'node:fs';
@@ -10,9 +12,10 @@ const dir=new URL('.local-backend/',root);mkdirSync(dir,{recursive:true,mode:0o7
 const store=new DurableIngest(new URL('events.sqlite',dir).pathname);
 const directory=new LocalGuardDirectory(new URL('directory.sqlite',dir).pathname);
 const devices=new LocalDeviceAssignments(new URL('devices.sqlite',dir).pathname);
-const service=createLocalService({config,store,directory,devices});
+const grantIssuer=new ShiftGrantIssuer({path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
+const service=createLocalService({config,store,directory,devices,grantIssuer});
 try {console.log('Local synthetic-data ingestion service: '+await service.start());}
-catch(error){store.close();directory.close();devices.close();throw error;}
+catch(error){store.close();directory.close();devices.close();grantIssuer.close();throw error;}
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;await service.stop();store.close();directory.close();devices.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;await service.stop();store.close();directory.close();devices.close();grantIssuer.close();process.exit(0);}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);
