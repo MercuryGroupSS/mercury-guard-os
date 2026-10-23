@@ -1,41 +1,31 @@
-# Mercury One — Android prototype v0.22
+# Mercury One — Mercury Guard OS Android prototype
 
-Native Kotlin Android prototype for Samsung Galaxy Z Fold6, with portable Pixel-compatible APIs. This is **not** an actual replacement operating system, production guard tracking system, or production-ready deployment. See GitHub Actions for the current build/test result.
+A native Android local pilot for Mercury guard workflows. The current build combines the white Mercury One interface and particle-face sign-in surface with encrypted offline records, explicit demo assignments, native secure biometrics, patrols in any order, incident/photo capture, timed readiness/check-ins and calm alerts. Escalate is available off shift; scheduled clock-out and confirmed reasoned early exit control local tracking.
 
-## Current functionality
-- Mercury-branded native UI: standby, simulated shift, active shift, ordered persistent demo patrol, readiness challenge, incident note, dispatch acknowledgement, check-in, end shift
-- Opt-in visible foreground-service GPS during a simulated shift; 30-second / 15-metre requests (Android may throttle); stops at end/expiry and never resumes after reboot
-- Encrypted local SQLite event payloads using a per-install Android Keystore key; user-confirmed JSON file export
-- Durable encrypted outbox with stable event IDs and local receipt validation; network sync remains disabled
-- User-confirmed camera photo capture with encrypted local retention and hashed event metadata
-- Encrypted incoming assignment/dispatch cache with atomic cursor, version/conflict checks and tombstones; no live receiver
-- Signed durable outbox batch preparation preserves retry/event IDs; no transport or acknowledgements from signing
-- Explicit local installation signing key/fingerprint and scoped enrollment challenge signer; no live enrollment
-- Transport-neutral signed-grant verifier and scoped monotonic action gate; not connected to demo operations or a production issuer
-- Device readiness shows permissions, GPS availability and process-local request/fix observations; explicit Android 13+ notification permission flow
-- Read-only paged local audit viewer and event details; no delivery-state changes
-- Encrypted durable incident drafts survive app reopen; transactional submission and confirmed discard
-- Readiness choices preserved through activity recreation
-- Device-owner and kiosk capability inspection (read-only)
-- Resizable scrolling layout with system-bar insets; physical Fold6 folding tests pending
+The face animation is decorative; native Android biometrics authenticate an enrolled device user, not a named Mercury guard. Assignments and site schematic are synthetic. GPS observations do not establish checkpoint presence. No emergency, dispatch, payroll or live backend message is sent.
 
-## Not yet implemented
-Production server-side shift authorization; secure authentication; biometric/liveness confirmation; verified uniforms; evidence review and upload; automated randomized patrols; background alerts; messaging; backend synchronization; role permissions; MDM enrollment; tamper detection; proper credential-based export; remote management; financial and schedule integration.
+See [v0.23 local pilot closeout and physical acceptance](docs/local-pilot-closeout.md), [combined interface/workflows](docs/build-v0.22.md), [development brief](docs/project-brief.md) and [Fold6 guide](docs/fold6-test-guide.md).
 
-**Test-only release:** Demo shifts remain locally simulated and no server verifies authorization. Retained event payloads/photos are encrypted; IDs/counts remain visible and the audit history is not immutable. Old plaintext remnants, temporary camera/export copies, key-loss recovery and production retention remain unresolved. Use synthetic data only. See [local data security](docs/local-data-security.md). Do not enroll real devices as device owner using this test build.
+## Data and integration boundaries
 
-## Build
+Retained event payloads, drafts and photos are encrypted locally; IDs/counts remain visible and history is not immutable. Camera output is temporarily plaintext in private cache. Key-loss recovery, retention and crash recovery require production work. Use harmless synthetic data. See [local data security](docs/local-data-security.md).
 
-The original v0.1 source was recovered unchanged in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Current changes add compilation fixes, bounded demo sessions, local encryption, photo capture and automated tests. See [combined v0.22 interface and workflow](docs/build-v0.22.md). See [development brief](docs/project-brief.md) and [Fold6 test guide](docs/fold6-test-guide.md).
+Signed batches, installation keys, scoped grant verification, an encrypted incoming cache and offline Node reference tests provide integration foundations. Demo records are disconnected from production authority. No live transport, authenticated guard identity, authoritative schedules, real site geometry, durable production ingest or existing-app integration is enabled. No new hosted project or charge is required for this local pilot.
 
-Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`. APK appears in `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions build workflow provided. Android developer installation: enable permitted app sideloading, install debug APK; **no root, flash, factory reset, or system takeover**.
+Timed local alerts depend on execution and Android settings; background/doze/process-death delivery is not guaranteed. The isolated Preview variant omits full-screen notification special access. The default developer variant retains a separately opt-in pathway. Device-owner/kiosk management is not enabled.
 
-## Roadmap
-1. Validate camera, GPS, folding, battery and permission behavior on the physical Fold6.
-2. Authenticated server shift grants (short TTL, signed), role/site rules, location policy, media review/upload and offline sync.
-3. Patrol routes/checkpoint proof, randomized prompts, tamper indicators, incidents, dispatch, push notifications.
-4. Add Android Enterprise management / dedicated-device kiosk for company-owned phones; separate administrator-controlled provisioning using factory-reset test unit.
-5. Production diagnostics, audit logging, privacy notices, battery impact tests, staging API integration with Mercury Operations Dashboard.
-6. Optional **Pixel-only** custom Android firmware feasibility track. Never flash the Galaxy Fold6 with an unverified image; bootloader unlock support depends on precise model/region.
+## Build and install
 
-Server-side integration work: [offline signature verifier and pending deployment gates](server/README.md).
+Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`; APK output is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions compiles, tests, lints and verifies the APK, then runs instrumented suites on API 28 and 35.
+
+For a separate review app, build with `-PlocalPreview=true -PlocalDebugKeystore=/absolute/path/to/your/debug.keystore`. The application ID becomes `ca.mercury.guard.preview`, labelled Mercury One Preview. Keep signing material private and stable for updates; never commit it. These are debug APKs, not production release signing.
+
+Preserve the original installed application if signing certificates differ. Uninstalling it destroys access to its Keystore-protected local data. Preview data/permissions are separate; no automatic migration is performed. No root, reset, flashing or device enrollment is needed for APK testing.
+
+The original v0.1 source was recovered in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Subsequent design history and protocol work remain documented under docs.
+
+## After physical acceptance
+
+Connect authoritative identity/schedules through approved restricted adapters, persist capture-time scope and implement authenticated durable two-way sync. Complete privacy/retention/revocation, operational authorization, production distribution, background/battery testing and monitoring. Existing apps/data remain unchanged until a separately reviewed integration is authorized.
+
+Dedicated-device management and [flashable OS feasibility](docs/firmware-track.md) are separate tracks after APK acceptance. No compatible Fold6 system image or bootloader/recovery route has been validated.

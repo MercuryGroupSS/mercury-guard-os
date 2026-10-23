@@ -31,3 +31,8 @@ Any future image requires a supported unlockable dedicated device, matched kerne
 ### Next evidence needed
 
 Exact Fold6 SKU and Android/One UI version for physical APK testing; exact proposed Pixel and unlock policy; management vendor/cost comparison; staging authorization contract; fleet update and recovery ownership. These are later-stage inputs and do not block building the current test APK.
+
+
+## Physical device identified — 22 October 2026
+
+The APK test handset has now been identified over USB as Samsung SM-F956W (Galaxy Z Fold6), Android 15. This resolves the earlier unknown-SKU note for APK testing only. Bootloader unlock feasibility, compatible system image, recovery and managed-device enrollment remain unvalidated. Mercury One Preview is a separate removable app; no reset, flashing or device-owner enrollment was performed. Dedicated-device evaluation follows APK physical acceptance.
