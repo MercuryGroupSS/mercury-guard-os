@@ -120,10 +120,13 @@ test('cancelled confirmed shift remains closeable without reopening capture or n
  try{
   db.assign({assignmentId:'never-started',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'site-1',active:true,startsAt:100,endsAt:999999});db.cancel('never-started');
   assert.equal((await call('/v1/shift-transition',{assignment_id:'never-started',transition:{action:'end',request_id:'invalid-close',reason:'Cancelled',confirmed:true}})).status,400);
-  assert.equal((await transition('start','start-cancel-test')).status,200);db.cancel('a');now=300;
+  const started=await transition('start','start-cancel-test');assert.equal(started.status,200);const startReceipt=await started.json();db.cancel('a');now=300;
+  assert.deepEqual(await (await transition('start','start-cancel-test')).json(),startReceipt);
   const rows=(await (await call('/v1/assignments')).json()).assignments;
   assert.equal(rows.length,1);assert.equal(rows[0].assignmentActive,false);assert.equal(rows[0].canStart,false);assert.equal(rows[0].shift_state.state,'active');
-  assert.equal((await transition('start','another-start')).status,400);
+  assert.equal((await transition('start','another-start')).status,409);
+  const never=await call('/v1/shift-transition',{assignment_id:'never-started',transition:{action:'start',request_id:'never-clock-in',reason:'',confirmed:true}});assert.equal(never.status,409);assert.equal((await never.json()).code,'shift_cannot_start');
+  assert.equal(shiftLifecycle.db.prepare("SELECT count(*) n FROM shift_sessions WHERE assignment='never-started'").get().n,0);
   assert.equal((await call('/v1/shift-grant',{assignment_id:'a'})).status,400);
   const ended=await transition('end','end-cancel-test');assert.equal(ended.status,200);const receipt=await ended.json();
   assert.deepEqual(await (await transition('end','end-cancel-test')).json(),receipt);

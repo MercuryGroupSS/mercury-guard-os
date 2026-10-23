@@ -11,8 +11,8 @@ export class ShiftLifecycle {
  CREATE UNIQUE INDEX IF NOT EXISTS one_active_phone ON shift_sessions(device) WHERE clocked_out IS NULL;
  CREATE TABLE IF NOT EXISTS shift_transitions(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS shift_rejections(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);`);}
- transition({identity,assignment,deviceThumbprint,request,now}){
-  if(!identity||!assignment||['guardId','vendorId'].some(k=>!stable(identity[k])||identity[k]!==assignment[k])||!stable(identity.subject)||!stable(assignment.assignmentId)||!stable(assignment.siteId)||assignment.active!==true||!/^[a-f0-9]{64}$/.test(deviceThumbprint)||!Number.isSafeInteger(now)||now<=0||!Number.isSafeInteger(assignment.startsAt)||!Number.isSafeInteger(assignment.endsAt)||assignment.startsAt>=assignment.endsAt)throw Error('Authorized shift scope required');
+ transition({identity,assignment,deviceThumbprint,request,now,allowStart=true}){
+  if(typeof allowStart!=='boolean'||!identity||!assignment||['guardId','vendorId'].some(k=>!stable(identity[k])||identity[k]!==assignment[k])||!stable(identity.subject)||!stable(assignment.assignmentId)||!stable(assignment.siteId)||assignment.active!==true||!/^[a-f0-9]{64}$/.test(deviceThumbprint)||!Number.isSafeInteger(now)||now<=0||!Number.isSafeInteger(assignment.startsAt)||!Number.isSafeInteger(assignment.endsAt)||assignment.startsAt>=assignment.endsAt)throw Error('Authorized shift scope required');
   if(!request||Object.keys(request).sort().join()!=='action,confirmed,reason,request_id'||!stable(request.request_id)||!['start','end'].includes(request.action)||request.confirmed!==true||typeof request.reason!=='string'||request.reason.length>2000)throw Error('Explicit shift confirmation required');
   const scope={guard_id:identity.guardId,vendor_id:identity.vendorId,site_id:assignment.siteId,assignment_id:assignment.assignmentId,device_thumbprint:deviceThumbprint};
   const digest=createHash('sha256').update(JSON.stringify({scope,subject:identity.subject,request,starts_at:assignment.startsAt,ends_at:assignment.endsAt})).digest('hex');
@@ -25,6 +25,7 @@ export class ShiftLifecycle {
    };
    const retry=this.db.prepare('SELECT digest,receipt FROM shift_transitions WHERE request=?').get(request.request_id);
    if(retry){if(retry.digest!==digest)throw Error('Transition request changed');this.db.exec('COMMIT');return JSON.parse(retry.receipt);}
+   if(request.action==='start'&&!allowStart)reject('shift_cannot_start');
    const old=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(assignment.assignmentId);
    if(request.action==='start'){
     if(old||request.reason!==''||now<assignment.startsAt||now>=assignment.endsAt)reject('shift_cannot_start');

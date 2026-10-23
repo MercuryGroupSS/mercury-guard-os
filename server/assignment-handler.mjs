@@ -32,11 +32,11 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    if(path==='/v1/shift-transition'){
     if(!shiftLifecycle)return reply(503,{error:'shift_service_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof,transition'||typeof body.assignment_id!=='string')throw Error('Invalid transition request');
-    const at=now(),result=devices.list(identity,body.proof,at,{historical:true,includeCancelled:body.transition?.action==='end'});
+    const at=now(),result=devices.list(identity,body.proof,at,{historical:true,includeCancelled:true});
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
-    if(assignment.assignmentActive===false&&shiftLifecycle.snapshot({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint}).state==='not_started')throw Error('No confirmed shift to close');
-    return reply(200,shiftLifecycle.transition({identity,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at}));
+    if(assignment.assignmentActive===false&&body.transition?.action==='end'&&shiftLifecycle.snapshot({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint}).state==='not_started')throw Error('No confirmed shift to close');
+    return reply(200,shiftLifecycle.transition({identity,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at,allowStart:assignment.assignmentActive!==false}));
    }
    if(path==='/v1/dispatch'){
     if(!dispatch)return reply(503,{error:'dispatch_unavailable'});
