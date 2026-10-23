@@ -19,6 +19,8 @@ export async function verifyPostgresDevices(connectionString,admin){
   await devices.enroll({deviceId:'site-phone',mode:'site',siteId:'device-site',active:true,revoked:false,publicKeySpki:spki});
   const assignment={assignmentId:'device-assignment',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'device-site',startsAt:now-1000,endsAt:now+60000,active:true};
   await devices.assign(assignment);
+  await assert.rejects(admin.query("UPDATE mercury_guard.assignments SET ends_at_ms=starts_at_ms WHERE assignment_id='device-assignment'"),/check constraint/);
+  await assert.rejects(admin.query("UPDATE mercury_guard.assignments SET ends_at_ms=9007199254740992 WHERE assignment_id='device-assignment'"),/check constraint/);
   await devices.assign({...assignment,assignmentId:'different-site',siteId:'other-site'});
   const proof=c=>({version:1,algorithm:'SHA256withECDSA',audience:c.audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:thumb,public_key_spki:spki,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${thumb}`),keys.privateKey).toString('base64url')});
   const first=proof(await devices.challenge(identity,'site-phone',now));

@@ -1,3 +1,5 @@
+import {PostgresGuardDirectory} from './postgres-guard-directory.mjs';
+import {PostgresOpsBindingStore} from './postgres-ops-binding-store.mjs';
 import {OpsBindingStore} from './ops-binding-store.mjs';
 import {createOpsShiftReader} from './ops-shift-reader.mjs';
 import {createOpsRefreshWorker} from './ops-refresh-worker.mjs';
@@ -13,7 +15,7 @@ export function openLocalOpsRefresh({mode='off',config,source,bindingsPath,sync,
   if(!source||new URL(source.url).protocol!=='https:')throw Error('Explicit HTTPS Ops source required');
   readShifts=createOpsShiftReader({url:source.url,serverKey:source.serverKey,fetchImpl});
  }
- const bindings=new OpsBindingStore(bindingsPath);
+ const bindings=directory instanceof PostgresGuardDirectory?new PostgresOpsBindingStore(directory.client):new OpsBindingStore(bindingsPath);
  try{
   const worker=createOpsRefreshWorker({loadBindings:()=>bindings.list(),readShifts,sync,directory,intervalMs,schedule,cancel});
   let closed=false;

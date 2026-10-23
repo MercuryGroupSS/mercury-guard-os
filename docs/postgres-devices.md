@@ -41,3 +41,11 @@ The local runner now accepts `MERCURY_OPS_REFRESH=off` (default), `local`, or `r
 Both modes load the existing local `ops-bindings.sqlite` approval store and use the selected assignment adapter. No approval is inferred from names or vendor IDs. An empty approval store imports nothing. Refresh runs immediately and every 30 seconds, reports aggregate failures, and drains before database shutdown. Outbound dashboard delivery remains disabled. Hosted approval administration and moving the approval store itself into PostgreSQL remain outstanding.
 
 Verification: 132 server tests passed. A separate real local REST/Auth smoke started the recurring composition with a one-second test interval and verified that an upstream synthetic cancellation reached the assignment endpoint without an explicit refresh call. The timer was drained and temporary local table/Auth records removed. Hosted Ops was untouched.
+
+## Shared Ops approvals
+
+PostgreSQL mode now loads approvals from private `mercury_guard.ops_bindings` and append-only `ops_binding_history`; SQLite mode retains its local approval file. Both adapters share canonical input validation, reject unexpected fields, require explicit guard/vendor/site/Auth bindings and retain exact-retry/revision rules. PostgreSQL serializes approval writes to enforce the 1,000-mapping bound across instances and commits current state with its audit record. Operator labels remain audit context, not administrator authentication; no public approval endpoint has been exposed.
+
+The exported `20261023191943_guard_ops_bindings.sql` migration was replayed successfully. Tests cover concurrent exact retries, restart visibility, immutable audit permissions, audit-failure rollback, competing inserts at capacity, and refresh composition using PostgreSQL approvals and assignments together. Advisors found no issues; 132 server tests pass.
+
+Migration review also found a stray constraint drop in the prior Ops-sync export: the intended removal of an equivalent drop/re-add pair had removed only the add. The un-deployed migration source is corrected to preserve `assignments_check`. Replay now explicitly attempts invalid end times against the database and confirms rejection. The running local schema retained the original constraint; no hosted schema was changed.

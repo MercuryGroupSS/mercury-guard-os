@@ -1,6 +1,3 @@
-ALTER TABLE "mercury_guard"."assignments"
-  DROP CONSTRAINT "assignments_check";
-
 CREATE TABLE "mercury_guard"."ops_assignment_history" (
   "sequence"               bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   "source_id"              text   NOT NULL,

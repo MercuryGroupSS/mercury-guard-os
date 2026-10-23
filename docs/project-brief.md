@@ -404,3 +404,7 @@ The local runner can now select PostgreSQL identity/device/assignment/sync compo
 ### Recurring Ops refresh composition
 
 Added explicit off/local/remote Ops refresh modes to the local runner, default off. Refresh uses persisted approvals, scoped read-only GET requests, the selected assignment adapter, immediate/30-second polling and shutdown draining. No remote source enabled. 132 server tests passed, plus a real local REST/Auth test confirmed timer-driven cancellation became unavailable at the assignment endpoint. Fixtures cleaned up. Remote credentials/approved real mappings, hosted approval administration and outbound integration remain outstanding.
+
+### Shared PostgreSQL Ops approvals
+
+Added private centralized mapping approvals with revisioned audit history and shared input validation. PostgreSQL refresh now reads this store rather than a local approval file. Real database tests verified concurrent retries, capacity enforcement, audit rollback, and approval-to-refresh composition. 132 server tests pass; advisors clear. Corrected an unintended constraint drop in the prior, not-hosted Ops-sync migration and added direct database schedule-constraint checks to replay verification. Local running schema was unaffected. Authenticated administrator provisioning/UI and remaining shift/event persistence are still outstanding.
