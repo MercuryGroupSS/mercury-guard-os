@@ -134,3 +134,13 @@ The local service now runs a check-in worker at startup and every 30 seconds whi
 Each missed delivery deadline creates one durable pending alert-outbox row in the same transaction as the miss. Repeated ticks, service restarts and later evidence do not duplicate or delete it. These are pending local notices, not sent dispatch messages. No notification adapter, hosted worker or phone background-alert service has been activated. Host sleep/process shutdown can delay detection; durable catch-up runs when the service resumes.
 
 77 server tests pass, including an actual timer firing, cursor recovery, cancellation, finalized schedules, failure isolation and alert deduplication. The real isolated local Supabase round trip also passes. Existing hosted projects and applications remain unchanged.
+
+## Authorized phone reminders
+
+The assignment screen can enable one reminder schedule on the phone after grant verification and notification permission. It persists only an encrypted schedule, binding and boot-bound time anchor, never account credentials or capture authority. Notifications contain no guard or site name and open ordinary sign-in. A different authenticated guard, an assignment no longer returned by the service, assignment end, or reboot invalidates the reminders. Check-in completion suppresses the current cue; attempts persist before notification to prevent replay bursts. Stopping reminders does not remove records or alter server deadlines.
+
+The app now declares SCHEDULE_EXACT_ALARM and offers the owner-controlled Alarms & reminders settings page. If access is available, it uses exact one-shot alarms; otherwise it uses an explicitly labelled inexact fallback. Permission settings, Doze, force-stop, restart and vendor power management can affect delivery. This is not a guaranteed safety channel. No full-screen activity or background sign-in is launched by this feature. Exact-alarm access is separate from notification permission. Reference: https://developer.android.com/develop/background-work/services/alarms
+
+The encrypted event database upgrades to schema 4 with a hashed check-in lookup and validation against its original encrypted record. This avoids decrypting the full captured-event history during an alarm callback. Migration preserves existing events and queued receipts. Local APK/test APK compilation, JVM timing-boundary tests and lint pass; the newest instrumentation migration checks compile successfully and await execution on API 28/API 35 in CI. Physical notification timing on the Fold remains deferred.
+
+The preceding server-worker commit 9a59bb3 passed build, HTTPS integration and API 28/API 35 in run 39992013384.

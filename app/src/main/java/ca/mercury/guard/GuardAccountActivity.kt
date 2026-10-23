@@ -43,7 +43,7 @@ class GuardAccountActivity : Activity() {
   window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
   // A recreated process has no verified capture authority. Discard abandoned temporary output.
   File(cacheDir,"capture/account").listFiles()?.forEach{it.delete()}
-  try { config=GuardServiceConfig.load(this); startScreen() }
+  try { AuthorizedReminders(this).refresh();config=GuardServiceConfig.load(this); startScreen() }
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Return"){finish()} }
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
@@ -116,7 +116,7 @@ class GuardAccountActivity : Activity() {
     busy=false
     try{
      check(p!=null&&a!=null)
-     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments")
+     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it).getString("assignmentId")}.toSet())
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} eligible assignment(s). No clock-in has been recorded."
      button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
@@ -170,6 +170,7 @@ class GuardAccountActivity : Activity() {
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
   button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
+  if(item.has("checkInPolicy"))button("Check-in reminder settings"){reminderSettings(item)}
   if(item.has("checkInStatus"))button("Review check-in delivery"){checkInStatusScreen(item)}
   if(item.has("checkInPolicy"))button("Complete scheduled check-in"){if(note.text.toString().isNotBlank())status.text="Save your incident description before starting a check-in." else beginCheckIn(item)}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
@@ -177,6 +178,25 @@ class GuardAccountActivity : Activity() {
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
   button("Sign out"){startScreen()}
+ }
+ private fun reminderSettings(item:JSONObject){
+  val reminders=AuthorizedReminders(this)
+  reminders.refresh()
+  screen("CHECK-IN REMINDERS",reminders.status()+"\nReminders on this phone contain no guard or site name. They do not sign you in or complete a check. Android power settings can delay delivery; enable again after a phone restart.")
+  button("Enable for this assignment"){
+   if(!reminders.notificationsAvailable()){
+    if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),405)
+    else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,packageName))
+    status.text="Allow notifications, then return and enable reminders.";return@button
+   }
+   try{reminders.enable(item.getJSONObject("checkInPolicy"),captureBinding?:error("Sign in"),captureGrant?:error("Refresh authorization"),captureAnchor?:error("Refresh authorization"));status.text=reminders.status()}
+   catch(_:Exception){status.text="Reminders were not enabled. Refresh authorization and check notification settings."}
+  }
+  if(Build.VERSION.SDK_INT>=31&&!reminders.exactAvailable())button("Allow precise reminder timing"){
+   startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,android.net.Uri.parse("package:$packageName")))
+  }
+  button("Stop this phone's reminders"){reminders.stop();status.text="Reminders stopped. Saved checks and service deadlines remain unchanged."}
+  button("Back to assignment"){captureScreen(item)}
  }
  private fun checkInStatusScreen(item:JSONObject){
   screen("CHECK-IN DELIVERY","Service receipt is separate from local capture. A missed delivery deadline does not prove that an offline guard missed the check. Dispatch delivery is not connected.")
@@ -290,7 +310,7 @@ class GuardAccountActivity : Activity() {
     val observed=Math.addExact(pending.anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),pending.anchor.elapsedMillis))
     val db=ScopedEventStore(this)
     try{if(pending.checkIn==null)db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed) else db.captureCheckIn(pending.binding,pending.grant,DeviceIdentity(this),pending.checkIn,metadata,observed)}finally{db.close()}
-    committed=true;message=if(pending.checkIn==null) "Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records." else "Check-in and photo saved locally. Sign in again to send them; service delivery is pending."
+    committed=true;AuthorizedReminders(this).refresh();message=if(pending.checkIn==null) "Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records." else "Check-in and photo saved locally. Sign in again to send them; service delivery is pending."
    }
   }catch(_:Exception){message="Photo not saved. Authorization may have expired or the camera output was invalid. Sign in and try again."}
   finally{

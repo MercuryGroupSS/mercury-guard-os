@@ -115,7 +115,7 @@ class ScopedEventStoreTest {
   try{assertTrue(reopened.pendingPhotos(a.guardId).isEmpty())}finally{reopened.close()}
  }}
 
- @Test fun checkInAndPhotoCommitTogetherAndDuplicateSlotDoesNotAddPhoto(){isolated{store,identity,_->
+ @Test fun checkInAndPhotoCommitTogetherAndDuplicateSlotDoesNotAddPhoto(){isolated{store,identity,name->
   val a=binding(identity)
   val policy=AuthorizedCheckInPolicy.parse(JSONObject().put("revision",1).put("starts_at",1000).put("ends_at",100000).put("interval_ms",60000).put("window_ms",10000).put("max_evidence_age_ms",5000).put("max_accuracy_m",100))
   val evidence=AuthorizedCheckInEvidence(policy,0,2000,JSONObject().put("at",3000).put("latitude",45).put("longitude",-73).put("accuracy_m",5).put("mock",false))
@@ -130,6 +130,13 @@ class ScopedEventStoreTest {
   assertEquals(2,store.pendingCount())
   val batch=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!);val events=batch.getJSONArray("events")
   assertEquals(events.getJSONObject(0).getString("event_id"),events.getJSONObject(1).getJSONObject("data").getString("photo_event_id"))
+  store.writableDatabase.execSQL("DROP TABLE check_in_keys");store.writableDatabase.version=3;store.close()
+  val reopened=ScopedEventStore(context,name,{200},{1})
+  try{
+   assertTrue(reopened.checkInRecorded(a,1,0))
+   reopened.writableDatabase.execSQL("UPDATE check_in_keys SET sequence=(SELECT MIN(sequence) FROM captured)")
+   rejected{reopened.checkInRecorded(a,1,0)}
+  }finally{reopened.close()}
  }}
  @Test fun checkInRejectsStaleMockAndOutOfWindowEvidenceBeforeSaving(){isolated{store,identity,_->
   val a=binding(identity);val both=VerifiedShiftGrant("both",a,setOf("photo","check_in"),100,1000,1)

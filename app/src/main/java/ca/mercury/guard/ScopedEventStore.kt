@@ -12,13 +12,14 @@ import java.util.UUID
 class ScopedEventStore internal constructor(context: Context, name: String = "mercury_scoped_events.db",
  private val elapsedNow: () -> Long = { android.os.SystemClock.elapsedRealtime() },
  private val bootNow: () -> Int = { android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1) }
-) : SQLiteOpenHelper(context,name,null,3) {
+) : SQLiteOpenHelper(context,name,null,4) {
  private val cipher = DeviceCipher()
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
   db.execSQL("CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
   createGuardPending(db)
   createMediaReceipts(db)
+  createCheckInIndex(db)
  }
  override fun onConfigure(db: SQLiteDatabase) {
   super.onConfigure(db)
@@ -33,9 +34,25 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  }
  private fun createGuardPending(db:SQLiteDatabase){db.execSQL("CREATE TABLE pending_by_guard (owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
-  check(oldVersion in 1..2 && newVersion==3)
+  check(oldVersion in 1..3 && newVersion==4)
   if(oldVersion==1)createGuardPending(db)
   createMediaReceipts(db)
+  createCheckInIndex(db)
+  db.rawQuery("SELECT sequence,body FROM captured",null).use{c->while(c.moveToNext()){
+   val seq=c.getLong(0);val record=decrypt(c.getString(1),"mercury-scoped-event:$seq");val event=record.getJSONObject("event")
+   if(event.getString("kind")=="check_in")indexCheckIn(db,binding(record.getJSONObject("scope")),event.getJSONObject("data"),seq)
+  }}
+ }
+ private fun createCheckInIndex(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS check_in_keys (lookup TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE)")}
+ private fun checkInKey(binding:GrantBinding,revision:Long,slot:Long):String {
+  require(revision>0&&slot>=0)
+  val source=JSONArray(listOf(binding.guardId,binding.assignmentId,revision,slot)).toString()
+  return java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ }
+ private fun indexCheckIn(db:SQLiteDatabase,binding:GrantBinding,data:JSONObject,sequence:Long){
+  val key=checkInKey(binding,data.getLong("policy_revision"),data.getLong("slot"))
+  db.insertWithOnConflict("check_in_keys",null,ContentValues().apply{put("lookup",key);put("sequence",sequence)},SQLiteDatabase.CONFLICT_IGNORE)
+  db.rawQuery("SELECT sequence FROM check_in_keys WHERE lookup=?",arrayOf(key)).use{check(it.moveToFirst()&&it.getLong(0)==sequence){"Duplicate check-in slot"}}
  }
  private fun createMediaReceipts(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS media_receipts (event_id TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  private fun owner(guardId:String):String {
@@ -79,16 +96,17 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    check(seq in 1..9007199254740991L)
    event.put("sequence",seq)
    check(db.update("captured",ContentValues().apply {put("body",cipher.encrypt(record.toString().toByteArray(Charsets.UTF_8),"mercury-scoped-event:$seq"))},"sequence=?",arrayOf(seq.toString()))==1)
+   if(kind=="check_in")indexCheckIn(db,original,event.getJSONObject("data"),seq)
    db.setTransactionSuccessful();return eventId
   } finally {db.endTransaction()}
  }
  fun checkInRecorded(original:GrantBinding,revision:Long,slot:Long):Boolean {
-  readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
-   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
-   val event=record.getJSONObject("event");val data=event.getJSONObject("data")
-   if(scope.guardId==original.guardId && scope.assignmentId==original.assignmentId && event.getString("kind")=="check_in" && data.optLong("policy_revision")==revision && data.optLong("slot",-1)==slot)return true
-  }}
-  return false
+  readableDatabase.rawQuery("SELECT k.sequence,c.body FROM check_in_keys k LEFT JOIN captured c ON c.sequence=k.sequence WHERE k.lookup=?",arrayOf(checkInKey(original,revision,slot))).use{c->
+   if(!c.moveToFirst())return false
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"));val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+   check(scope.guardId==original.guardId&&scope.assignmentId==original.assignmentId&&event.getString("kind")=="check_in"&&data.getLong("policy_revision")==revision&&data.getLong("slot")==slot){"Check-in index mismatch"}
+   return true
+  }
  }
  fun captureCheckIn(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,evidence:AuthorizedCheckInEvidence,photo:JSONObject,observedAt:Long):String {
   evidence.policy.validate(evidence.slot,evidence.biometricAt,evidence.location,observedAt,observedAt)
