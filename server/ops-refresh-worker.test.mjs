@@ -41,3 +41,28 @@ test('approved revocation works without upstream access and stale snapshots cann
   assert.throws(()=>f.sync.revokeBinding(approved[0]),/Stale/);
  }finally{f.close();}
 });
+
+test('async synchronization failures are counted and not reported as successful',async()=>{
+ const f=fixture();let approved=[binding],rejectApply=true;
+ const sync={apply:async(...args)=>{if(rejectApply)throw Error('Database unavailable');return f.sync.apply(...args);},revokeBinding:async()=>{throw Error('Database unavailable');}};
+ const worker=createOpsRefreshWorker({...f,sync,loadBindings:async()=>approved,readShifts:async()=>({rows:[shift]})});
+ try{
+  let result=await worker.run();assert.equal(result.failed,1);assert.equal(result.processed,0);
+  rejectApply=false;result=await worker.run();assert.equal(result.processed,1);assert.equal(result.failed,0);
+  approved=[{...binding,revision:2,active:false}];result=await worker.run();assert.equal(result.failed,1);assert.equal(result.processed,0);
+ }finally{await worker.stop();f.close();}
+});
+
+test('shutdown drains an in-flight synchronization and does not begin the next item',async()=>{
+ const f=fixture();let release,applied=0,callback,cancelled=false;
+ const other={...binding,opsShiftId:'upstream-two'};
+ const sync={revokeBinding:async()=>{},apply:()=>{applied++;return new Promise(resolve=>{release=resolve;});}};
+ const worker=createOpsRefreshWorker({...f,sync,loadBindings:async()=>[binding,other],readShifts:async()=>({rows:[shift,{...shift,id:other.opsShiftId}]}),schedule:fn=>{callback=fn;return 1;},cancel:()=>{cancelled=true;}});
+ try{
+  worker.start();const pending=worker.run();await new Promise(resolve=>setImmediate(resolve));assert.equal(applied,1);
+  let stopped=false;const stopping=worker.stop().then(()=>{stopped=true;});await Promise.resolve();assert.equal(stopped,false);assert.equal(cancelled,true);
+  release({status:'assignment_created'});await stopping;const result=await pending;
+  assert.equal(result.processed,1);assert.equal(applied,1);assert.equal(worker.status().inflight,false);
+  await callback();assert.equal(applied,1);
+ }finally{await worker.stop();f.close();}
+});

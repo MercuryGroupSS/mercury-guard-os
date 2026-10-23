@@ -388,3 +388,7 @@ Implemented the PostgreSQL device/assignment adapter and verified one-time signe
 ### Asynchronous check-in scheduler
 
 Updated schedule reads for PostgreSQL compatibility. Concurrent sweeps share one operation; read failures retain the cursor for retry. Shutdown cancels future ticks, drains pending reads, and prevents stale results from creating alerts or advancing state. Verified recovery, stop-during-read, queued callback, existing deadline behavior and confirmed-shift bounds. 127 server tests pass locally. Runtime device-store selection and PostgreSQL Ops synchronization are still pending; no hosted deployment or handset changes.
+
+### Ops refresh asynchronous persistence boundary
+
+Ops refresh now awaits assignment writes and approval revocations, reports rejected database operations accurately, and drains in-flight work before shutdown completes. Stop prevents the next batch item; a transaction already started is allowed to finish. Verified asynchronous failure/retry and delayed-write shutdown behavior; 129 server tests pass. The existing SQLite synchronization ledger remains in use pending the PostgreSQL ledger implementation. No live Ops data changed.

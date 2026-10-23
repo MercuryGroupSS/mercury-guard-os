@@ -24,7 +24,7 @@ export function createOpsRefreshWorker({loadBindings,readShifts,sync,directory,i
      const latest=snapshot(await loadBindings()).find(b=>b.opsShiftId===binding.opsShiftId);
      if(epoch!==generation)break;
      if(JSON.stringify(latest)!==JSON.stringify(binding)){result.changedMappings++;continue;}
-     try{sync.revokeBinding(binding);result.processed++;}catch{result.failed++;}
+     try{await sync.revokeBinding(binding);result.processed++;}catch{result.failed++;}
     }
     const active=approved.filter(b=>b.active);
     for(let offset=0;offset<active.length;offset+=25){
@@ -46,7 +46,7 @@ export function createOpsRefreshWorker({loadBindings,readShifts,sync,directory,i
        const latest=snapshot(await loadBindings()).find(b=>b.opsShiftId===binding.opsShiftId);
        if(epoch!==generation)break;
        if(JSON.stringify(latest)!==JSON.stringify(binding)){result.changedMappings++;continue;}
-       sync.apply(row,binding);result.processed++;
+       await sync.apply(row,binding);result.processed++;
       }catch{result.failed++;}
      }
     }
@@ -55,5 +55,5 @@ export function createOpsRefreshWorker({loadBindings,readShifts,sync,directory,i
   })().finally(()=>{inflight=null;});
   return inflight;
  }
- return {run,status:()=>({...last,scheduled:timer!==null,inflight:inflight!==null}),start(){if(timer!==null)return;timer=schedule(()=>{void run();},intervalMs);timer?.unref?.();void run();},stop(){generation++;if(timer!==null){cancel(timer);timer=null;}}};
+ return {run,status:()=>({...last,scheduled:timer!==null,inflight:inflight!==null}),start(){if(timer!==null)return;timer=schedule(()=>{if(timer!==null)return run();},intervalMs);timer?.unref?.();void run();},async stop(){generation++;if(timer!==null){cancel(timer);timer=null;}await inflight;}};
 }
