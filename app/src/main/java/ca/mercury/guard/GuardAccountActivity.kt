@@ -65,8 +65,24 @@ class GuardAccountActivity : Activity() {
   clearSession()
   val c=config
   if(c==null){screen("ACCOUNT CONNECTION","No trusted service is configured for this build. Your local demo records remain on this phone.");button("Return"){finish()};return}
+  try{
+   if(DeviceIdentity(this).publicIdentity()==null){
+    screen("PHONE ENROLLMENT","Prepare this phone's signing identity, then have an administrator approve its public key. This does not enroll the phone or create a guard account.")
+    button("Prepare phone identity"){
+     try{DeviceIdentity(this).create();enrollmentDetails()}catch(_:Exception){status.text="Phone identity could not be prepared. Existing key material has not been replaced."}
+    };button("Close"){finish()};return
+   }
+  }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Close"){finish()};return}
   screen("GUARD SIGN-IN","Verify on this device, then enter your individual guard ID and password. Device biometrics do not identify your guard account.\nService: ${c.endpoint}")
-  button("Verify with biometrics") { biometric() };button("Return"){finish()}
+  button("Verify with biometrics") { biometric() };button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+ }
+ private fun enrollmentDetails(){
+  try{
+   val identity=DeviceIdentity(this).publicIdentity()?:error("Identity required")
+   screen("ENROLLMENT DETAILS","These are public enrollment details. The private signing key stays on this phone. Approval must bind this installation to the intended site or individual guard.")
+   root.addView(TextView(this).apply{text="Device ID: ${config?.deviceId}\nKey fingerprint: ${identity.thumbprint}\nPublic key: ${identity.publicKeySpki}";textSize=14f;setTextIsSelectable(true)})
+   button("Continue to sign-in"){startScreen()}
+  }catch(_:Exception){status.text="Enrollment details could not be read. Existing identity remains preserved."}
  }
  private fun biometric(){
   val stamp=generation

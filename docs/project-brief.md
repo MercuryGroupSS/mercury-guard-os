@@ -270,3 +270,11 @@ An operator CLI now validates a complete synthetic vendor/individual-guard/devic
 ## Dedicated-device review after v0.28
 
 Refreshed official Android/Samsung documentation and inspected current camera/device-policy source. The dedicated-device acceptance matrix now explicitly includes external camera allowlisting or embedded-camera work, reboot/escape paths, shared guard identity, fold transitions, notification policy, emergency access and production update/recovery. Samsung platform support does not establish acceptance on the exact Fold. Direct Android Management API use cannot be assumed available for an internal-only fleet. Flashable OS support remains unvalidated; no phone changes were made. See firmware-track.md for sources and exact evidence boundaries.
+
+## Operational entry and phone enrollment details
+
+LauncherActivity now selects the account workflow when valid administrator-packaged trust configuration is present. A missing configuration opens the existing clearly labelled preview/demo; invalid configuration shows a setup error and cannot silently fall back. Intent extras cannot choose the destination. MainActivity and GuardAccountActivity are no longer exported entry points; the launcher is the sole external app entry.
+
+The configured account flow can prepare a new installation signing identity and display its public key/fingerprint and configured device ID for administrator review. The private key remains in Android Keystore. Preparation does not enroll the device or create a guard account; signed server challenge/enrollment checks still gate access. An unreadable existing identity is preserved rather than replaced. Public enrollment details remain accessible from sign-in.
+
+Local APK/test APK build, JVM tests and lint pass. Added instrumentation checks cover valid/missing/invalid trust routing and exported-component boundaries; full emulator validation remains pending. This source follows the saved v0.28 candidate and is not yet installed on the Fold. Dedicated-device policy, production enrollment and physical acceptance remain outstanding.
