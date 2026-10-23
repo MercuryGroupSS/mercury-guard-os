@@ -1,18 +1,10 @@
 import {checkInPolicy} from './check-in-policy.mjs';
 import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
-import {createPublicKey,createHash,randomBytes,randomUUID,verify} from 'node:crypto';
+import {randomBytes,randomUUID,verify} from 'node:crypto';
+import {parseEnrollmentKey as key,decodeEnrollmentValue as decode} from './enrollment-key.mjs';
 import {assignmentForGuard} from './guard-directory.mjs';
 const id=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
-function decode(x,max){
- if(typeof x!=='string'||x.length>max*2||!/^[A-Za-z0-9_-]+$/.test(x))throw Error('Invalid encoding');
- const b=Buffer.from(x,'base64url');if(b.length>max||b.toString('base64url')!==x)throw Error('Invalid encoding');return b;
-}
-function key(spki){
- const bytes=decode(spki,256),k=createPublicKey({key:bytes,type:'spki',format:'der'});
- if(k.asymmetricKeyType!=='ec'||k.asymmetricKeyDetails?.namedCurve!=='prime256v1')throw Error('P256 required');
- return {key:k,thumbprint:createHash('sha256').update(bytes).digest('hex')};
-}
 // Local synthetic pilot. Administrative methods are deliberately not HTTP routes.
 export class LocalDeviceAssignments {
  constructor(path,audience='mercury-local'){

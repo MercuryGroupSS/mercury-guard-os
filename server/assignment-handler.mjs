@@ -27,12 +27,12 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    const body=strictJson(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));
    if(path==='/v1/device-challenge'){
     if(!body||Object.keys(body).join()!=='device_id')throw Error('Invalid request');
-    return reply(200,devices.challenge(identity,body.device_id,now()));
+    return reply(200,await devices.challenge(identity,body.device_id,now()));
    }
    if(path==='/v1/shift-transition'){
     if(!shiftLifecycle)return reply(503,{error:'shift_service_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof,transition'||typeof body.assignment_id!=='string')throw Error('Invalid transition request');
-    const at=now(),result=devices.list(identity,body.proof,at,{historical:true,includeCancelled:true});
+    const at=now(),result=await devices.list(identity,body.proof,at,{historical:true,includeCancelled:true});
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
     if(assignment.assignmentActive===false&&body.transition?.action==='end'&&shiftLifecycle.snapshot({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint}).state==='not_started')throw Error('No confirmed shift to close');
@@ -41,7 +41,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    if(path==='/v1/dispatch'){
     if(!dispatch)return reply(503,{error:'dispatch_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,cursor,proof'||typeof body.assignment_id!=='string'||body.cursor!==null&&typeof body.cursor!=='string')throw Error('Invalid dispatch request');
-    const at=now(),result=devices.list(identity,body.proof,at),assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
+    const at=now(),result=await devices.list(identity,body.proof,at),assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
     return reply(200,dispatch.read({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint,revocationVersion:assignment.revocationVersion},body.cursor,at));
    }
@@ -49,16 +49,16 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(!grantIssuer)return reply(503,{error:'issuer_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof'||typeof body.assignment_id!=='string')throw Error('Invalid grant request');
     const at=now();
-    const result=devices.list(identity,body.proof,at);
+    const result=await devices.list(identity,body.proof,at);
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id&&a.canStart);
     if(!assignment)throw Error('Assignment unavailable');
     if(shiftLifecycle&&!shiftLifecycle.permitsCapture({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint},at,{live:true}))throw Error('Active shift required');
-    const device=devices.device(assignment.deviceId);
+    const device=await devices.device(assignment.deviceId);
     const grant=grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
      allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at,{activeWindow:shiftLifecycle?.checkInWindow(assignment)}):null});
    }
-   const at=now(),result=devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle});
+   const at=now(),result=await devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle});
    if(shiftLifecycle){
     result.assignments=result.assignments.map(a=>({...a,canStart:a.assignmentActive!==false&&at>=a.startsAt&&at<a.endsAt,shift_state:shiftLifecycle.snapshot({...identity,siteId:a.siteId,assignmentId:a.assignmentId,deviceThumbprint:a.deviceThumbprint})})).filter(a=>(a.assignmentActive!==false&&at<a.endsAt)||a.shift_state.state!=='not_started');
     result.server_time_ms=at;

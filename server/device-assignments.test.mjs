@@ -1,3 +1,4 @@
+const asyncDevices=db=>new Proxy(db,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}});
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,sign,createHash} from 'node:crypto';
@@ -35,7 +36,7 @@ test('wrong key, subject, expiry, revocation and cancelled assignment deny acces
 test('assignment route enforces authentication, identity, payload limits and signed proof',async()=>{
  const db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:db,now:()=>200,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:1000}:null});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),now:()=>200,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:1000}:null});
  const send=(path,body,token='valid')=>handler(new Request('https://guard.test'+path,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(body)}));
  try{
   assert.equal((await send('/v1/device-challenge',{device_id:'phone'},'bad')).status,401);
@@ -60,7 +61,7 @@ test('ingestion authority must match active enrollment and current assignment',(
 test('dispatch route needs a fresh proof and rejects other assignments and invalid cursors',async()=>{
  const {DispatchFeed}=await import('./dispatch-feed.mjs');const dispatch=new DispatchFeed(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:db,dispatch,now:()=>2000,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:1000})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),dispatch,now:()=>2000,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:1000})});
  const send=async(assignment,cursor)=>handler(new Request('https://guard.test/v1/dispatch',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:assignment,cursor,proof:proof(k,db.challenge(identity,'phone',2000))})}));
  try{
   dispatch.publish({...identity,siteId:'site-1',assignmentId:'a'},{message_id:'m',version:1,state:'active',title:'Test',body:'Synthetic',issued_at:1000,due_at:null});
@@ -73,7 +74,7 @@ test('dispatch route needs a fresh proof and rejects other assignments and inval
 test('shift route authenticates proofs and permits explicit scheduled end without reopening capture',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,now:()=>now,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:999999}:null});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,now:()=>now,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:999999}:null});
  const body=(assignment,action,id=action)=>({assignment_id:assignment,transition:{action,request_id:id,reason:'',confirmed:true},proof:proof(k,db.challenge(identity,'phone',now))});
  const send=(b,token='valid')=>handler(new Request('https://guard.test/v1/shift-transition',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(b)}));
  try{
@@ -99,7 +100,7 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
 test('configured lifecycle refuses capture grants before start and after confirmed end',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200,issued=0;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,grantIssuer:{issue:()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,grantIssuer:{issue:()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
  const send=()=>handler(new Request('https://guard.test/v1/shift-grant',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:'a',proof:proof(k,db.challenge(identity,'phone',now))})}));
  const scope={identity,assignment:{assignmentId:'a',guardId:'guard-1',vendorId:'MG001',siteId:'site-1',startsAt:100,endsAt:999999,active:true},deviceThumbprint:db.device('phone').thumbprint};
  try{
@@ -114,7 +115,7 @@ test('configured lifecycle refuses capture grants before start and after confirm
 test('cancelled confirmed shift remains closeable without reopening capture or new clock-in',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:db,shiftLifecycle,grantIssuer:{issue:()=>{throw Error('Must not issue');}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,grantIssuer:{issue:()=>{throw Error('Must not issue');}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
  const call=async(path,extra)=>{const p=proof(k,db.challenge(identity,'phone',now));return handler(new Request('https://guard.test'+path,{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify(extra?{...extra,proof:p}:p)}));};
  const transition=(action,request_id)=>call('/v1/shift-transition',{assignment_id:'a',transition:{action,request_id,reason:action==='end'?'Cancelled assignment':'',confirmed:true}});
  try{

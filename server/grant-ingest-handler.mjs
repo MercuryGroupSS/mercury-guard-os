@@ -33,7 +33,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    const context={enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
     guardId:c.guard_id,siteId:c.site_id,assignmentId:c.assignment_id,revocationVersion:c.revocation_version,vendorId:first.vendorId,allowHistoricalSequence:true,receivedAtMs:at,
     notBefore:seconds,expiresAt:Math.min(seconds+60,session.expiresAt),allowedKinds:Object.keys(required)};
-   if(!devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
+   if(!await devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
    const {batch}=verifyScopedBatch(raw,context,seconds);
    for(const event of batch.events){
     const saved=grantIssuer.lookup(event.data.capture_grant_id),g=saved?.claims;

@@ -2,6 +2,7 @@ import {Client} from 'pg';
 import {readFileSync} from 'node:fs';
 import {randomUUID,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
+import {verifyPostgresDevices} from './verify-postgres-devices.mjs';
 import {createPostgresLoginLimiter} from '../postgres-login-limiter.mjs';
 let databaseUrl;
 if(process.env.MERCURY_POSTGRES_TEST_URL){
@@ -38,6 +39,7 @@ try{
  const global=await concurrent(105,i=>'guard-'+i);assert.equal(global.filter(Boolean).length,100);
  assert.equal((await fixture.query('SELECT count(*)::integer n FROM mercury_guard.login_attempts')).rows[0].n,101);
  const privileges=(await fixture.query("SELECT has_function_privilege('anon','mercury_guard.consume_login_attempt(text)','EXECUTE') AS anon,has_function_privilege('authenticated','mercury_guard.consume_login_attempt(text)','EXECUTE') AS authenticated")).rows[0];assert.equal(privileges.anon,false);assert.equal(privileges.authenticated,false);
+ await verifyPostgresDevices(url.toString(),fixture);
  console.log('PASS: migration replay, concurrent shared per-account/global limits, expiry and private function grants');
 }finally{
  for(const c of clients)await c.end();await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated limiter verification database removed');}await admin.end();

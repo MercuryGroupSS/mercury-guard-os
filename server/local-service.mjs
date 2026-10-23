@@ -21,7 +21,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
   verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true}),
   loadAuthorization:async subject=>{
    const a=await authority(subject);
-   if(resolve){const guard=await resolve({subject,active:true});if(!guard||a?.guardId!==guard.guardId||(devices&&!devices.authorizes(guard,a)))return null;}
+   if(resolve){const guard=await resolve({subject,active:true});if(!guard||a?.guardId!==guard.guardId||(devices&&!await devices.authorizes(guard,a)))return null;}
    return a;
   },
   audience:'mercury-local'});
