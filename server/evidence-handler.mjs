@@ -33,7 +33,7 @@ export function createEvidenceHandler({verifySession,directory,devices,grantIssu
    // Access can change during upload. Recheck both roster and grant/device state.
    const current=await resolve({subject:identity.subject,active:true});
    if(!current||current.guardId!==identity.guardId||current.vendorId!==identity.vendorId||expires<=now()||!authorized())return reply(403,{error:'evidence_unavailable'});
-   return reply(200,store.retainPhoto(record,Buffer.concat(chunks)));
+   return reply(200,store.retainPhoto(record,Buffer.concat(chunks),now()));
   }catch{return reply(400,{error:'evidence_rejected'});}
   finally{reader.releaseLock();}
  };

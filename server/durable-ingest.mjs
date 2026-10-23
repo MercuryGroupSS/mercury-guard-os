@@ -12,8 +12,11 @@ export class DurableIngest {
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
       CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
       CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));
+      CREATE TABLE IF NOT EXISTS missed_check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,deadline INTEGER,detected_at INTEGER,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,event_id TEXT,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS media(device TEXT,event_id TEXT,sha256 TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(device,event_id));`);
+    this.db.exec('CREATE INDEX IF NOT EXISTS events_id ON events(id)');
+    for(const table of ['events','media'])if(!this.db.prepare(`PRAGMA table_info(${table})`).all().some(c=>c.name==='received_at'))this.db.exec(`ALTER TABLE ${table} ADD COLUMN received_at INTEGER NOT NULL DEFAULT 0`);
   }
   ingest(raw, trustedContext, now) {
     // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
@@ -45,7 +48,7 @@ export class DurableIngest {
         if(event.kind==='patrol_checkpoint'&&trustedContext.allowHistoricalSequence===true){
           this.db.prepare('INSERT INTO checkpoints VALUES(?,?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.route_id,event.data.route_revision,event.data.checkpoint_id,event.event_id);
         }
-        this.db.prepare('INSERT INTO events VALUES(?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body);
+        this.db.prepare('INSERT INTO events(device,id,sequence,digest,body,received_at) VALUES(?,?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body,trustedContext.receivedAtMs??now*1000);
         last = event.sequence;
       }
       const receipt = {batch_id:batch.batch_id,event_ids:batch.events.map(e=>e.event_id),status:'accepted_local_only'};
@@ -58,13 +61,14 @@ export class DurableIngest {
     if(rows.length!==1)return null;
     const record=JSON.parse(rows[0].body);return record.event.kind==='photo_evidence'?record:null;
   }
-  retainPhoto(record,bytes){
+  retainPhoto(record,bytes,receivedAt=Date.now()){
+    if(!Number.isSafeInteger(receivedAt)||receivedAt<=0)throw Error('Trusted receipt time required');
     const meta=photoMetadata(record.event.data);
     if(bytes.length!==meta.bytes||createHash('sha256').update(bytes).digest('hex')!==meta.sha256)throw Error('Evidence mismatch');
     const device=record.scope.device_thumbprint,eventId=record.event.event_id;
     const prior=this.db.prepare('SELECT sha256,length(bytes) AS size FROM media WHERE device=? AND event_id=?').get(device,eventId);
     if(prior){if(prior.sha256!==meta.sha256||prior.size!==bytes.length)throw Error('Evidence conflict');}
-    else this.db.prepare('INSERT INTO media VALUES(?,?,?,?)').run(device,eventId,meta.sha256,bytes);
+    else this.db.prepare('INSERT INTO media(device,event_id,sha256,bytes,received_at) VALUES(?,?,?,?,?)').run(device,eventId,meta.sha256,bytes,receivedAt);
     return {event_id:eventId,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};
   }
   count() { return this.db.prepare('SELECT COUNT(*) AS n FROM events').get().n; }

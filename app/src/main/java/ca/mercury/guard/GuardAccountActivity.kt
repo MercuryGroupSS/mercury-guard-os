@@ -136,6 +136,7 @@ class GuardAccountActivity : Activity() {
    var verifiedAnchor:ServerTimeAnchor?=null
    var verifiedRoute:JSONObject?=null
    var verifiedCheckIn:JSONObject?=null
+   var verifiedStatus:JSONObject?=null
    try{
     val identity=DeviceIdentity(this);val fingerprint=identity.publicIdentity()?.thumbprint?:error("Missing key")
     check(item.getString("deviceThumbprint")==fingerprint)
@@ -144,18 +145,18 @@ class GuardAccountActivity : Activity() {
     val response=GuardAccountClient(c.endpoint).grant(active,c.deviceId,binding.assignmentId,identity,c.audience)
     val anchor=ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot)
     verified=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,anchor,SystemClock.elapsedRealtime(),boot)
-    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime());verifiedRoute=response.optJSONObject("patrol_route");verifiedCheckIn=response.optJSONObject("check_in_policy")
+    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime());verifiedRoute=response.optJSONObject("patrol_route");verifiedCheckIn=response.optJSONObject("check_in_policy");verifiedStatus=response.optJSONObject("check_in_status")
    }catch(_:Exception){}
    val grant=verified;val binding=verifiedBinding;val anchor=verifiedAnchor
    runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){
     busy=false
-    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;val current=JSONObject(item.toString());current.remove("patrolRoute");verifiedRoute?.let{current.put("patrolRoute",it)};current.remove("checkInPolicy");verifiedCheckIn?.let{current.put("checkInPolicy",it)};captureScreen(current)}
+    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;val current=JSONObject(item.toString());current.remove("patrolRoute");verifiedRoute?.let{current.put("patrolRoute",it)};current.remove("checkInPolicy");verifiedCheckIn?.let{current.put("checkInPolicy",it)};current.remove("checkInStatus");verifiedStatus?.let{current.put("checkInStatus",it)};captureScreen(current)}
     else status.text="Shift authorization could not be verified. The assignment may not have started, may have changed, or the connection may be unavailable."
    }}
   }.start()
  }
  private fun captureScreen(item:JSONObject){
-  screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nIncident pilot · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
+  screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nAuthorized capture · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
   val note=EditText(this).apply{hint="Describe the incident";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;minLines=3;isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(8000))}
   root.addView(note)
   button("Save authorized incident"){
@@ -169,12 +170,47 @@ class GuardAccountActivity : Activity() {
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
   button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
+  if(item.has("checkInStatus"))button("Review check-in delivery"){checkInStatusScreen(item)}
   if(item.has("checkInPolicy"))button("Complete scheduled check-in"){if(note.text.toString().isNotBlank())status.text="Save your incident description before starting a check-in." else beginCheckIn(item)}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
   button("Sign out"){startScreen()}
+ }
+ private fun checkInStatusScreen(item:JSONObject){
+  screen("CHECK-IN DELIVERY","Service receipt is separate from local capture. A missed delivery deadline does not prove that an offline guard missed the check. Dispatch delivery is not connected.")
+  try{
+   val report=item.getJSONObject("checkInStatus");check(report.getString("assignment_id")==item.getString("assignmentId"))
+   val slots=report.getJSONArray("slots")
+   root.addView(TextView(this).apply{text="Service snapshot: ${java.util.Date(report.getLong("server_time_ms"))}\n${report.getInt("total_deadlines_missed")} delivery deadline(s) missed. Refresh authorization for current status.";textSize=16f;setPadding(0,dp(12),0,dp(12))})
+   for(i in maxOf(0,slots.length()-10) until slots.length()){
+    val slot=slots.getJSONObject(i)
+    val label=when(slot.getString("status")){"due"->"Due · not received";"delivery_missing"->"Delivery missing";"photo_delivery_pending"->"Photo delivery pending";"evidence_received"->"Evidence received by pilot service";"evidence_received_after_deadline"->"Evidence received after deadline";else->"Status unavailable"}
+    root.addView(TextView(this).apply{text="Check ${slot.getLong("slot")+1} · $label\nDue ${java.util.Date(slot.getLong("due_at"))}"+(if(slot.getBoolean("delivery_deadline_missed"))"\nOriginal missed deadline retained." else "");textSize=16f;setPadding(0,dp(12),0,dp(12))})
+    if(slot.getBoolean("delivery_deadline_missed"))button("Add reason for check ${slot.getLong("slot")+1}"){missReason(item,report.getLong("policy_revision"),slot.getLong("slot"))}
+    if(slot.optInt("reason_count")>0)root.addView(TextView(this).apply{text="${slot.getInt("reason_count")} reason note(s) received. Original deadline retained."})
+   }
+   if(slots.length()>10||report.optInt("earlier_slots_omitted")>0)root.addView(TextView(this).apply{text="Showing the latest 10 due checks. The service retains earlier deadlines."})
+  }catch(_:Exception){status.text="Check-in delivery status could not be verified. Refresh authorization to retrieve it again."}
+  button("Refresh authorization"){verifyAssignment(item)}
+  button("Send my queued records"){captureBinding?.let{sendScoped(it.guardId)}}
+  button("Back to assignment"){captureScreen(item)}
+ }
+ private fun missReason(item:JSONObject,revision:Long,slot:Long){
+  val input=EditText(this).apply{hint="Explain the missed delivery";minLines=3;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;filters=arrayOf(android.text.InputFilter.LengthFilter(2000));isSaveEnabled=false}
+  val dialog=AlertDialog.Builder(this).setTitle("Reason for check ${slot+1}").setMessage("This adds a note and keeps the original missed deadline. Dispatch has not been notified.").setView(input).setNegativeButton("Cancel",null).setPositiveButton("Save locally",null).create()
+  dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+   try{
+    val reason=input.text.toString().trim();require(reason.isNotEmpty())
+    val binding=captureBinding?:error("Sign in again");val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
+    val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+    val policy=AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy"));check(policy.revision==revision)
+    val due=Math.addExact(policy.startsAt,Math.multiplyExact(slot,policy.interval));check(slot>=0&&due<policy.endsAt&&observed>=minOf(due+policy.window,policy.endsAt))
+    val db=ScopedEventStore(this);try{db.capture("check_in_miss_reason",JSONObject().put("policy_revision",revision).put("slot",slot).put("reason",reason),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
+    dialog.dismiss();status.text="Reason saved locally. Send queued records to deliver it to the pilot service. The missed deadline remains recorded."
+   }catch(_:Exception){input.error="Enter a reason and refresh authorization if it has expired."}
+  }};dialog.show()
  }
  private fun beginCheckIn(item:JSONObject){
   val anchor=captureAnchor?:return;val binding=captureBinding?:return;val grant=captureGrant?:return

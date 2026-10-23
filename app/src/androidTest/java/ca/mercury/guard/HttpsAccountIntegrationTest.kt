@@ -74,6 +74,11 @@ class HttpsAccountIntegrationTest {
    assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
    assertEquals(1,fixture("/test/receipts").getInt("media_count"))
    db.recordMediaReceipt("fixture-guard",media);assertTrue(db.pendingPhotos("fixture-guard").isEmpty())
+   val refreshed=client.grant(session,"fixture-phone",item.getString("assignmentId"),identity,"mercury-local")
+   val delivery=refreshed.getJSONObject("check_in_status")
+   assertEquals("fixture-shift",delivery.getString("assignment_id"))
+   assertEquals("evidence_received",delivery.getJSONArray("slots").getJSONObject(0).getString("status"))
+   assertEquals(0,delivery.getInt("total_deadlines_missed"))
    var rejected=false;try{fixture("/test/receipts",host="127.0.0.1")}catch(_:javax.net.ssl.SSLException){rejected=true};assertTrue("Untrusted host accepted",rejected)
    session.clear();try{client.profile(session);fail("Cleared session reused")}catch(_:IllegalStateException){}
   }finally{

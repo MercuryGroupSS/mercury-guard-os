@@ -60,7 +60,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  private fun binding(b: GrantBinding)=JSONObject().put("guard_id",b.guardId).put("site_id",b.siteId).put("assignment_id",b.assignmentId).put("device_thumbprint",b.deviceThumbprint).put("revocation_version",b.revocationVersion)
  private fun binding(j: JSONObject)=GrantBinding(j.getString("guard_id"),j.getString("site_id"),j.getString("assignment_id"),j.getString("device_thumbprint"),j.getLong("revocation_version"))
  private fun requiredAction(kind: String)=when(kind) {
-  "incident" -> "incident"; "patrol_checkpoint" -> "patrol"; "check_in" -> "check_in"; "photo_evidence" -> "photo"; "location" -> "location"
+  "incident" -> "incident"; "patrol_checkpoint" -> "patrol"; "check_in", "check_in_miss_reason" -> "check_in"; "photo_evidence" -> "photo"; "location" -> "location"
   else -> error("Unsupported authorized event kind")
  }
  fun capture(kind: String,data: JSONObject,original: GrantBinding,grant: VerifiedShiftGrant,identity: DeviceIdentity,observedAt: Long): String {

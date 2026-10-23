@@ -8,7 +8,7 @@ function fixture(){
  const bytes=Buffer.from([255,216,255,217]);const eventId=randomUUID();
  const scope={guard_id:'g',site_id:'s',assignment_id:'a',device_thumbprint:'a'.repeat(64),revocation_version:1};
  const record={vendor_id:'v',scope,event:{event_id:eventId,at:100,kind:'photo_evidence',data:{capture_grant_id:'grant',evidence_id:randomUUID(),sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,width:1,height:1,capture:'camera_intent'}}};
- const store=new DurableIngest(':memory:');store.db.prepare('INSERT INTO events VALUES(?,?,?,?,?)').run(scope.device_thumbprint,eventId,1,'synthetic-record',JSON.stringify(record));
+ const store=new DurableIngest(':memory:');store.db.prepare('INSERT INTO events(device,id,sequence,digest,body) VALUES(?,?,?,?,?)').run(scope.device_thumbprint,eventId,1,'synthetic-record',JSON.stringify(record));
  let active=true,revoked=false,subject='u';
  const directory={loadGuardsForSubject:s=>s==='u'?[{authSubject:'u',guardId:'g',vendorId:'v',active}]:[],loadVendor:()=>({vendorId:'v',kind:'company',active:true})};
  const handler=createEvidenceHandler({directory,store,now:()=>200,verifySession:async()=>({subject,active:true,expiresAt:100}),devices:{deviceByThumbprint:()=>({publicKeySpki:'key'}),authorizes:()=>!revoked},grantIssuer:{lookup:()=>revoked?null:{subject:'u',vendorId:'v',claims:{...scope,actions:['photo'],not_before_ms:50,expires_at_ms:150}}}});

@@ -103,3 +103,17 @@ test('check-in requires scheduled linked evidence and rejects duplicate slots at
   f.issuer.revoke(claims.grant_id);assert.equal((await f.send(b)).status,400);
  }finally{f.close();}
 });
+
+test('missed delivery reasons append without clearing the original deadline and retries deduplicate',async()=>{
+ const f=setup();try{
+  const policy={revision:1,interval_ms:60000,window_ms:10000,max_evidence_age_ms:5000,max_accuracy_m:100};
+  const issued=f.issuer.issue({identity:{subject:'u',guardId:'g',vendorId:'v'},device:f.devices.device('d'),assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,checkInPolicy:policy},allowedActions:['check_in'],sessionExpiresAt:100000,now:2000});
+  const grantId=JSON.parse(Buffer.from(issued.payload,'base64url')).grant_id;
+  const b=structuredClone(f.batch);b.events[0].kind='check_in_miss_reason';b.events[0].at=12000;b.events[0].data={capture_grant_id:grantId,policy_revision:1,slot:0,reason:'Offline test connection'};f.time(13000);
+  for(const patch of [{reason:' '},{slot:1},{policy_revision:2}]){const bad=structuredClone(b);Object.assign(bad.events[0].data,patch);assert.equal((await f.send(bad)).status,400);}
+  assert.equal(f.store.count(),0);
+  assert.equal((await f.send(b)).status,200);assert.equal((await f.send(b)).status,200);assert.equal(f.store.count(),1);
+  assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM missed_check_ins').get().n,1);
+  const note=JSON.parse(f.store.db.prepare('SELECT body FROM events').get().body);assert.equal(note.event.data.reason,'Offline test connection');
+ }finally{f.close();}
+});

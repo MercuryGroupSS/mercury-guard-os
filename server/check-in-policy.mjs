@@ -5,7 +5,7 @@ export function checkInPolicy(value,startsAt,endsAt){
  if(!value||!integer(startsAt,1,Number.MAX_SAFE_INTEGER)||!integer(endsAt,startsAt+1,Number.MAX_SAFE_INTEGER)||
   !integer(value.revision,1,Number.MAX_SAFE_INTEGER)||!integer(value.interval_ms,60000,86400000)||
   !integer(value.window_ms,1000,value.interval_ms)||!integer(value.max_evidence_age_ms,1000,Math.min(300000,value.window_ms))||
-  !Number.isFinite(value.max_accuracy_m)||value.max_accuracy_m<=0||value.max_accuracy_m>1000)throw Error('Invalid check-in policy');
+  !Number.isFinite(value.max_accuracy_m)||value.max_accuracy_m<=0||value.max_accuracy_m>1000||Math.ceil((endsAt-startsAt)/value.interval_ms)>10000)throw Error('Invalid check-in policy');
  return {revision:value.revision,starts_at:startsAt,ends_at:endsAt,interval_ms:value.interval_ms,window_ms:value.window_ms,max_evidence_age_ms:value.max_evidence_age_ms,max_accuracy_m:value.max_accuracy_m};
 }
 export function validateCheckIn(policy,event,photo,scope){
@@ -26,4 +26,13 @@ export function validateCheckIn(policy,event,photo,scope){
   photo.event.data.check_in_slot!==d.slot||photo.event.data.check_in_policy_revision!==p.revision)throw Error('Linked photo unavailable');
  const meta=photoMetadata(photo.event.data);if(meta.evidence_id!==d.evidence_id)throw Error('Photo identity mismatch');
  return {slot:d.slot,revision:p.revision,due_at:due};
+}
+
+export function validateMissReason(policy,event){
+ if(!policy)throw Error('Check-in schedule unavailable');
+ const p=checkInPolicy(policy,policy.starts_at,policy.ends_at),d=event.data;
+ if(!d||d.policy_revision!==p.revision||!integer(d.slot,0,10000)||typeof d.reason!=='string'||!d.reason.trim()||d.reason.length>2000)throw Error('Invalid missed-check reason');
+ const due=p.starts_at+d.slot*p.interval_ms,deadline=Math.min(due+p.window_ms,p.ends_at);
+ if(due>=p.ends_at||!integer(event.at,deadline,Number.MAX_SAFE_INTEGER))throw Error('Check-in window has not closed');
+ return d.slot;
 }

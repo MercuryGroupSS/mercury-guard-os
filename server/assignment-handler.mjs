@@ -1,6 +1,7 @@
+import {reconcileCheckIns} from './check-in-status.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
 import {strictJson} from './verify-batch.mjs';
-export function createAssignmentHandler({verifySession,directory,devices,grantIssuer,now=Date.now}){
+export function createAssignmentHandler({verifySession,directory,devices,grantIssuer,store,now=Date.now}){
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  const reply=(status,body)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
  return async request=>{
@@ -34,8 +35,9 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id&&a.canStart);
     if(!assignment)throw Error('Assignment unavailable');
     const device=devices.device(assignment.deviceId);
-    return reply(200,grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
-     allowedActions:['patrol','incident','photo','check_in','location'],now:at}));
+    const grant=grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
+     allowedActions:['patrol','incident','photo','check_in','location'],now:at});
+    return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at):null});
    }
    return reply(200,devices.list(identity,body,now()));
   }catch{return reply(400,{error:'device_request_rejected'});}
