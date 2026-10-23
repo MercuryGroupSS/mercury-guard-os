@@ -27,13 +27,14 @@ class ScopedEventStoreTest {
   assertEquals("shift-a",first.getJSONObject("scope").getString("assignment_id"));assertEquals(1,first.getJSONArray("events").length())
   assertEquals("grant-shift-a",first.getJSONArray("events").getJSONObject(0).getJSONObject("data").getString("capture_grant_id"))
   store.close()
-  ScopedEventStore(context,name,{200},{1}).use{reopened->
+  val reopened=ScopedEventStore(context,name,{200},{1})
+  try {
    assertEquals(first.toString(),payload(reopened.prepareSigned(identity,"mercury-local")!!).toString())
    reopened.recordPilotReceipt(receipt(first));assertEquals(1,reopened.pendingCount())
    val second=payload(reopened.prepareSigned(identity,"mercury-local")!!)
    assertEquals("shift-b",second.getJSONObject("scope").getString("assignment_id"))
    assertTrue(second.getJSONArray("events").getJSONObject(0).getLong("sequence")>first.getJSONArray("events").getJSONObject(0).getLong("sequence"))
-  }
+  } finally { reopened.close() }
  }}
  @Test fun failedAuthorityCannotCreatePendingEvents(){isolated{store,identity,_->
   val a=binding(identity);val b=binding(identity,"shift-b")
@@ -56,7 +57,8 @@ class ScopedEventStoreTest {
   val a=binding(identity);store.capture("incident",JSONObject(),a,grant(a),identity,10000)
   store.writableDatabase.execSQL("UPDATE captured SET body='corrupt'")
   store.close()
-  ScopedEventStore(context,name,{200},{1}).use{reopened->rejected{reopened.pendingCount()}}
+  val reopened=ScopedEventStore(context,name,{200},{1})
+  try { rejected{reopened.pendingCount()} } finally { reopened.close() }
  }}
 
 }
