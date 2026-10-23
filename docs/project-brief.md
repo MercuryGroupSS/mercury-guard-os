@@ -164,3 +164,5 @@ v0.24 verification closed: GitHub APK build and Android API 28/35 instrumentatio
 ## v0.25 authorized capture continuation — 2026-10-23
 
 Added separate encrypted ScopedEventStore. Capture requires a verified permitted grant, current monotonic/boot state, matching original scope and device key. Atomic capture retains grant ID; scoped FIFO v2 batches survive restart and never relabel demo audit events. Local pilot receipts affect only the new queue. Instrumentation tests added; operational UI integration, enrollment/grant issuing and historical-upload authorization remain pending. Physical tests remain deferred.
+
+v0.25 verification complete: GitHub run 39958027569 passed APK build and both API 28/35 instrumentation suites after correcting an API 28 test cleanup incompatibility. Encrypted capture recovery now fails closed on unreadable existing ciphertext. Local preview signature verified. Source/review package and master brief v3.1 updated. Operational UI wiring remains pending; no phone changes.
