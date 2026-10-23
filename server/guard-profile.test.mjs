@@ -1,0 +1,30 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {LocalGuardDirectory} from './local-guard-directory.mjs';
+import {createGuardProfileHandler} from './guard-profile-handler.mjs';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+test('persistent individual roster, uniqueness and immediate access removal',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'mercury-roster-'));let db=new LocalGuardDirectory(join(dir,'roster.sqlite'));
+ try {
+  db.addVendor({vendorId:'MG001',kind:'company',active:true});
+  db.addGuard({guardId:'g1',authSubject:'u1',vendorId:'MG001',active:true});
+  db.addGuard({guardId:'g2',authSubject:'u2',vendorId:'MG001',active:true});
+  assert.throws(()=>db.addGuard({guardId:'g3',authSubject:'u1',vendorId:'MG001',active:true}));
+  assert.throws(()=>db.addGuard({guardId:'g4',authSubject:'u4',vendorId:'missing',active:true}));
+  db.close();db=new LocalGuardDirectory(join(dir,'roster.sqlite'));
+  const handler=createGuardProfileHandler({directory:db,verifySession:async token=>token==='valid'?{subject:'u1',active:true,expiresAt:200}:null,now:()=>100});
+  const get=(token='valid',method='GET')=>handler(new Request('https://guard.test/v1/me',{method,headers:{authorization:'Bearer '+token}}));
+  assert.deepEqual(await (await get()).json(),{guard_id:'g1',vendor_id:'MG001'});
+  assert.equal((await get('wrong')).status,401);assert.equal((await get('valid','POST')).status,405);
+  db.setGuardActive('g1',false);assert.equal((await get()).status,403);
+ }finally{db.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('expired sessions and unavailable directory fail closed',async()=>{
+ const directory={loadGuardsForSubject(){throw Error('offline');},loadVendor(){throw Error('offline');}};
+ for(const [expiresAt,status] of [[99,401],[200,503]]){
+  const h=createGuardProfileHandler({directory,verifySession:async()=>({subject:'u',active:true,expiresAt}),now:()=>100});
+  assert.equal((await h(new Request('https://guard.test/v1/me',{headers:{authorization:'Bearer token'}}))).status,status);
+ }
+});

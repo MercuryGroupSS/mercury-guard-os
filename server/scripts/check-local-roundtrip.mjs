@@ -1,3 +1,4 @@
+import {LocalGuardDirectory} from '../local-guard-directory.mjs';
 // Local-only smoke check. Reads startup credentials without printing them.
 import {createSupabaseSessionVerifier} from '../supabase-session.mjs';
 import {readFileSync} from 'node:fs';
@@ -41,18 +42,29 @@ try {
  const batch={batch_id:randomUUID(),schema_version:2,scope,events:[{event_id:randomUUID(),sequence:1,at:Date.now(),kind:'incident',data:{note:'Synthetic only'}}]};
  const payload=Buffer.from(JSON.stringify(batch)).toString('base64url');
  const proof=JSON.stringify({version:2,algorithm:'SHA256withECDSA',audience:'mercury-local',device_thumbprint:thumbprint,public_key_spki:authority.public_key_spki,payload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${thumbprint}\n${payload}`),privateKey).toString('base64url')});
- const dir=mkdtempSync(join(tmpdir(),'mercury-network-'));let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store}),started=false;
+ const dir=mkdtempSync(join(tmpdir(),'mercury-network-'));const directory=new LocalGuardDirectory(join(dir,'directory.sqlite'));
+ directory.addVendor({vendorId:'synthetic-vendor',kind:'company',active:true});
+ directory.addGuard({guardId:'synthetic-guard',authSubject:id,vendorId:'synthetic-vendor',active:true});
+ let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory}),started=false;
  try {
   let origin=await service.start();started=true;
+  const profile=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
+  let me=await profile();if(me.status!==200||JSON.stringify(await me.json())!==JSON.stringify({guard_id:'synthetic-guard',vendor_id:'synthetic-vendor'}))throw Error('Guard profile failed');
+  directory.setGuardActive('synthetic-guard',false);if((await profile()).status!==403)throw Error('Disabled guard accepted');
+  directory.setGuardActive('synthetic-guard',true);
+  console.log('PASS: authenticated guard profile and disabled guard denial');
   const send=()=>fetch(origin+'/v2/batches',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+session.access_token},body:proof});
   let response=await send();if(response.status!==200)throw Error('Signed network ingestion failed: '+response.status);
   const receipt=await response.json();if(store.count()!==1)throw Error('Missing event');
-  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store});origin=await service.start();started=true;
+  directory.setGuardActive('synthetic-guard',false);if((await send()).status!==401)throw Error('Disabled guard uploaded');
+  directory.setGuardActive('synthetic-guard',true);
+  console.log('PASS: disabled roster identity denies batch retries');
+  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory});origin=await service.start();started=true;
   response=await send();if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Restart retry failed');
   const revoke=await fetch(authorityUrl+'?subject=eq.'+id,{method:'PATCH',headers:admin,body:JSON.stringify({revoked:true})});if(!revoke.ok)throw Error('Revocation update failed');
   if((await send()).status!==401)throw Error('Revoked device accepted');
   console.log('PASS: real local Auth + protected authority + signed HTTP ingestion + restart deduplication + revocation');
- } finally {if(started)await service.stop();store.close();rmSync(dir,{recursive:true,force:true});}
+ } finally {if(started)await service.stop();store.close();directory.close();rmSync(dir,{recursive:true,force:true});}
 
 } finally {
  if(id){await call('/admin/users/'+id,{method:'DELETE',headers:admin});console.log('PASS: synthetic account removed');}
