@@ -48,5 +48,16 @@ export class DispatchFeed {
    return {scope:{guard_id:scope.guardId,vendor_id:scope.vendorId,site_id:scope.siteId,assignment_id:scope.assignmentId,device_thumbprint:scope.deviceThumbprint,revocation_version:scope.revocationVersion},changes:selected.map(r=>JSON.parse(r.body)),next_cursor:token,has_more:more,server_time_ms:now};
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ // A delayed acknowledgement retains its exact historical version. It never
+ // acknowledges a newer version or a retraction and does not prove comprehension.
+ validateAcknowledgement(scope,event){
+  const d=event?.data;
+  if(event?.kind!=='dispatch_ack'||!Number.isSafeInteger(event.at)||event.at<=0||!d||Object.keys(d).sort().join()!=='capture_grant_id,message_id,message_version'||!stable(d.message_id)||!Number.isSafeInteger(d.message_version)||d.message_version<1)throw Error('Invalid acknowledgement');
+  const row=this.db.prepare('SELECT body FROM dispatch_changes WHERE scope=? AND id=? AND version=?').get(scopeKey(scope),d.message_id,d.message_version);
+  if(!row)throw Error('Message version unavailable');
+  const message=JSON.parse(row.body);
+  if(message.state!=='active'||message.issued_at>event.at)throw Error('Message not acknowledgeable');
+  return {message_id:message.message_id,message_version:message.version};
+ }
  close(){this.db.close();}
 }

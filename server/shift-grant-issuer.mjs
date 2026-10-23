@@ -2,7 +2,7 @@ import {checkInPolicy} from './check-in-policy.mjs';
 import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createPrivateKey,createPublicKey,randomUUID,sign} from 'node:crypto';
-const actions=new Set(['patrol','incident','photo','check_in','location']);
+const actions=new Set(['patrol','incident','photo','check_in','location','dispatch_ack']);
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 // Server-side issuer. Private key stays outside APKs and API responses.
 export class ShiftGrantIssuer {

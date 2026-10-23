@@ -4,9 +4,9 @@ import {photoMetadata} from './photo-metadata.mjs';
 import {permitsCheckpoint} from './patrol-route.mjs';
 import {strictJson,verifyScopedBatch} from './verify-batch.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
-const required={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location'};
+const required={dispatch_ack:'dispatch_ack',incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location'};
 // Candidate IDs only select server records. Signature and every capture grant are checked before storage.
-export function createGrantIngestHandler({verifySession,directory,devices,grantIssuer,store,now=Date.now}){
+export function createGrantIngestHandler({verifySession,directory,devices,grantIssuer,store,dispatch,now=Date.now}){
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  const reply=(status,body)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
  return async request=>{
@@ -38,6 +38,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    for(const event of batch.events){
     const saved=grantIssuer.lookup(event.data.capture_grant_id),g=saved?.claims;
     if(!g||saved.subject!==identity.subject||saved.vendorId!==identity.vendorId||g.issuer!==c.issuer||g.audience!==c.audience||g.guard_id!==c.guard_id||g.site_id!==c.site_id||g.assignment_id!==c.assignment_id||g.device_thumbprint!==c.device_thumbprint||g.revocation_version!==c.revocation_version||!g.actions.includes(required[event.kind])||event.at<g.not_before_ms||event.at>=g.expires_at_ms||event.at>at)throw Error('Capture grant mismatch');
+    if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
     if(event.kind==='photo_evidence')photoMetadata(event.data);
     if(event.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy.patrolRoute,event.data))throw Error('Checkpoint not authorized');
    }

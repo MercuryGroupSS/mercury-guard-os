@@ -12,6 +12,7 @@ export function projectDashboardObservation(record,mapping){
  if(!stable(record.vendor_id)||record.vendor_id!==mapping.vendorId||!/^[a-f0-9]{64}$/.test(scope.device_thumbprint)||typeof event.event_id!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(event.event_id)||!Number.isSafeInteger(event.at)||event.at<=0)throw Error('Original attribution required');
  const d=event.data;let data;
  switch(event.kind){
+  case 'dispatch_ack':if(!stable(d.message_id)||!Number.isSafeInteger(d.message_version)||d.message_version<1)throw Error('Invalid acknowledgement');data={message_id:d.message_id,message_version:d.message_version};break;
   case 'incident':data={description:requiredText(d.description,8000)};break;
   case 'patrol_checkpoint':if(!stable(d.route_id)||!stable(d.checkpoint_id)||!Number.isSafeInteger(d.route_revision)||d.route_revision<1)throw Error('Invalid checkpoint');data={route_id:d.route_id,route_revision:d.route_revision,checkpoint_id:d.checkpoint_id};break;
   case 'photo_evidence':data={...photoMetadata(d),media_delivery:'not_transferred'};break;

@@ -25,7 +25,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
    return a;
   },
   audience:'mercury-local'});
- const handler=directory&&devices&&grantIssuer?createGrantIngestHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):createIngestHandler({authenticate,store});
+ const handler=directory&&devices&&grantIssuer?createGrantIngestHandler({directory,devices,grantIssuer,store,dispatch,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):createIngestHandler({authenticate,store});
  const profile=directory?createGuardProfileHandler({directory,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,store,dispatch,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;

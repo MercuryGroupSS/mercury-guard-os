@@ -43,3 +43,16 @@ test('UTF-8 and escaped content stay within the Android response budget across p
   assert.equal(seen,10);
  }finally{feed.close();}
 });
+
+test('acknowledgement validates publication time, scope, and active historical version',()=>{
+ const feed=new DispatchFeed(':memory:');try{
+  feed.publish(scope,message());
+  const event={kind:'dispatch_ack',at:1000,data:{capture_grant_id:'grant',message_id:'message',message_version:1}};
+  assert.deepEqual(feed.validateAcknowledgement(scope,event),{message_id:'message',message_version:1});
+  assert.throws(()=>feed.validateAcknowledgement(scope,{...event,at:999}));
+  for(const field of ['guardId','vendorId','siteId','assignmentId'])assert.throws(()=>feed.validateAcknowledgement({...scope,[field]:'other'},event));
+  feed.publish(scope,{...message('message',2),body:'Updated instruction'});
+  assert.equal(feed.validateAcknowledgement(scope,event).message_version,1);
+  assert.throws(()=>feed.validateAcknowledgement(scope,{...event,data:{...event.data,message_version:3}}));
+ }finally{feed.close();}
+});

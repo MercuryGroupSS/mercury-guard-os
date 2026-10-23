@@ -90,3 +90,10 @@ test('acknowledgement uses the saved immutable payload rather than a modified in
   assert.throws(()=>box.claim(10000));
  }finally{box.close();}
 });
+
+test('acknowledgement projection carries only exact message ID and version',()=>{
+ const {record,mapping}=fixture();record.event.kind='dispatch_ack';record.event.data={message_id:'instruction',message_version:2,capture_grant_id:'private',unapproved:'omit'};
+ const projected=projectDashboardObservation(record,mapping);
+ assert.deepEqual(projected.observation.data,{message_id:'instruction',message_version:2});
+ for(const patch of [{message_version:'2'},{message_version:0},{message_id:''}])assert.throws(()=>projectDashboardObservation({...record,event:{...record.event,data:{...record.event.data,...patch}}},mapping));
+});
