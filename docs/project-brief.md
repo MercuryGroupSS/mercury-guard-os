@@ -340,3 +340,7 @@ Added a server-only GET adapter for explicitly mapped Ops shift IDs and schedule
 ### Ops refresh worker — October 23
 
 Added opt-in bounded refresh orchestration connecting approved mappings, source reads, trusted roster checks and transactional assignment updates. It rechecks mapping approval after network/directory reads, preserves missing-source assignments, coalesces overlapping runs and stops in-flight activation when stopped. All 120 server tests pass. The worker is not enabled in the service runner and no hosted application or data was changed; credential provisioning and persistent approved mappings remain deployment requirements.
+
+### Persistent source binding approvals — October 23
+
+Added a bounded local store for versioned Ops-shift-to-guard/vendor/site/Auth-subject approvals. Current mapping and full approval history commit atomically, survive restart and support exact retries without permitting stale revisions. Disabling retains history. All 122 server tests pass. No real guard mapping was approved; production administrator authentication and storage remain outstanding.
