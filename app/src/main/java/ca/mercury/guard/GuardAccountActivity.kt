@@ -234,6 +234,19 @@ class GuardAccountActivity : Activity() {
    screen(current.getString("title"),"Version ${current.getLong("version")} · viewed on this phone. No acknowledgement has been sent.")
    root.addView(TextView(this).apply{text=current.getString("body");textSize=18f;setPadding(0,dp(16),0,dp(16));setTextIsSelectable(true)})
    if(!current.isNull("due_at"))root.addView(TextView(this).apply{text="Due: ${java.util.Date(current.getLong("due_at"))}";textSize=16f})
+   val events=ScopedEventStore(this)
+   val acknowledged=try{events.dispatchAcknowledged(scope.binding,current.getString("message_id"),current.getLong("version"))}finally{events.close()}
+   if(acknowledged)status.text="Version ${current.getLong("version")} · acknowledgement recorded on this phone. Check upload receipts for service acceptance."
+   else button("Acknowledge version ${current.getLong("version")}"){
+    try{
+     session?.bearer()?:error("Sign in again");check(captureBinding==scope.binding)
+     val grant=captureGrant?:error("Refresh authorization")
+     val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+     DispatchInbox(this).use{it.markRead(scope,current.getString("message_id"),current.getLong("version"),observed)}
+     ScopedEventStore(this).use{it.acknowledgeDispatch(scope.binding,grant,DeviceIdentity(this),current.getString("message_id"),current.getLong("version"),observed)}
+     viewDispatch(item,scope,current)
+    }catch(_:Exception){status.text="Acknowledgement not added. Refresh authorization and messages; existing records remain preserved."}
+   }
    button("Back to messages"){loadDispatch(item,false)};button("Refresh messages"){loadDispatch(item,true)}
   }catch(_:Exception){status.text="This message changed or access expired. Refresh messages before opening it again."}
  }

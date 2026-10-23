@@ -77,7 +77,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  private fun binding(b: GrantBinding)=JSONObject().put("guard_id",b.guardId).put("site_id",b.siteId).put("assignment_id",b.assignmentId).put("device_thumbprint",b.deviceThumbprint).put("revocation_version",b.revocationVersion)
  private fun binding(j: JSONObject)=GrantBinding(j.getString("guard_id"),j.getString("site_id"),j.getString("assignment_id"),j.getString("device_thumbprint"),j.getLong("revocation_version"))
  private fun requiredAction(kind: String)=when(kind) {
-  "incident" -> "incident"; "patrol_checkpoint" -> "patrol"; "check_in", "check_in_miss_reason" -> "check_in"; "photo_evidence" -> "photo"; "location" -> "location"
+  "dispatch_ack" -> "dispatch_ack"; "incident" -> "incident"; "patrol_checkpoint" -> "patrol"; "check_in", "check_in_miss_reason" -> "check_in"; "photo_evidence" -> "photo"; "location" -> "location"
   else -> error("Unsupported authorized event kind")
  }
  fun capture(kind: String,data: JSONObject,original: GrantBinding,grant: VerifiedShiftGrant,identity: DeviceIdentity,observedAt: Long): String {
@@ -119,6 +119,23 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
     .put("biometric",JSONObject().put("method","android_local_biometric").put("at",evidence.biometricAt))
     .put("location",JSONObject(evidence.location.toString())).put("photo_event_id",photoId).put("evidence_id",metadata.getString("evidence_id"))
    val result=capture("check_in",data,original,grant,identity,observedAt)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
+ fun dispatchAcknowledged(original:GrantBinding,messageId:String,version:Long):Boolean {
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
+   if(binding(record.getJSONObject("scope"))!=original)continue
+   val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+   if(event.getString("kind")=="dispatch_ack"&&data.optString("message_id")==messageId&&data.optLong("message_version")==version)return true
+  }};return false
+ }
+ fun acknowledgeDispatch(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,messageId:String,version:Long,observedAt:Long):String {
+  require(messageId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}"))&&version>0)
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(!dispatchAcknowledged(original,messageId,version)){"Acknowledgement already recorded"}
+   val result=capture("dispatch_ack",JSONObject().put("message_id",messageId).put("message_version",version),original,grant,identity,observedAt)
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
  }

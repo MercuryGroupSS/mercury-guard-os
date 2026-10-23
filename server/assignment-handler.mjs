@@ -44,7 +44,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(!assignment)throw Error('Assignment unavailable');
     const device=devices.device(assignment.deviceId);
     const grant=grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
-     allowedActions:['patrol','incident','photo','check_in','location'],now:at});
+     allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at):null});
    }
    return reply(200,devices.list(identity,body,now()));

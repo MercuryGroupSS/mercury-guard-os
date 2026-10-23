@@ -24,7 +24,7 @@ class ShiftGrantVerifier(private val issuer: String, private val audience: Strin
  private val keys = trustedKeys.toMap()
  companion object {
   const val MAX_LIFETIME_MS = 15 * 60 * 1000L
-  private val supportedActions = setOf("patrol", "incident", "photo", "check_in", "location")
+  private val supportedActions = setOf("patrol", "incident", "photo", "check_in", "location", "dispatch_ack")
   private val fields = setOf("version", "grant_id", "issuer", "audience", "guard_id", "site_id", "assignment_id", "device_thumbprint", "revocation_version", "issued_at_ms", "not_before_ms", "expires_at_ms", "actions")
  }
  /** Fixed RSA-SHA256 envelope; no algorithm selection, embedded keys or remote key fetching. */

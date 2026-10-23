@@ -148,4 +148,22 @@ class ScopedEventStoreTest {
   assertEquals(0,store.pendingCount())
  }}
 
+ @Test fun dispatchAcknowledgementIsVersionBoundAndDuplicateSafe(){isolated{store,identity,name->
+  val a=binding(identity);val auth=VerifiedShiftGrant("ack-grant",a,setOf("dispatch_ack"),100,1000,1)
+  rejected{store.acknowledgeDispatch(a,grant(a),identity,"message",1,10000)}
+  assertFalse(store.dispatchAcknowledged(a,"message",1))
+  store.acknowledgeDispatch(a,auth,identity,"message",1,10000)
+  rejected{store.acknowledgeDispatch(a,auth,identity,"message",1,10001)}
+  assertFalse(store.dispatchAcknowledged(a.copy(guardId="other"),"message",1))
+  assertFalse(store.dispatchAcknowledged(a,"message",2))
+  store.acknowledgeDispatch(a,auth,identity,"message",2,10002)
+  assertEquals(2,store.pendingCount());store.close()
+  ScopedEventStore(context,name,{200},{1}).use{reopened->
+   assertTrue(reopened.dispatchAcknowledged(a,"message",1))
+   rejected{reopened.acknowledgeDispatch(a,auth,identity,"message",1,10003)}
+   val batch=payload(reopened.prepareSigned(identity,"mercury-local")!!)
+   assertEquals("dispatch_ack",batch.getJSONArray("events").getJSONObject(0).getString("kind"))
+   reopened.recordPilotReceipt(receipt(batch));assertTrue(reopened.dispatchAcknowledged(a,"message",1));assertEquals(0,reopened.pendingCount())
+  }
+ }}
 }

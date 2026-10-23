@@ -53,6 +53,8 @@ class HttpsAccountIntegrationTest {
    val binding=GrantBinding("fixture-guard","fixture-site","fixture-shift",public.thumbprint,item.getLong("revocationVersion"))
    val grant=ShiftGrantVerifier("mercury-local","mercury-local",mapOf("https-fixture" to key)).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,ServerTimeAnchor(response.getLong("server_time_ms"),started,boot),SystemClock.elapsedRealtime(),boot)
    assertNotNull(grant)
+   db.acknowledgeDispatch(binding,grant!!,identity,"fixture-message",1,response.getLong("server_time_ms"))
+   assertTrue(db.dispatchAcknowledged(binding,"fixture-message",1))
    val inboxName="https-inbox-${UUID.randomUUID()}.db"
    try {
     DispatchInbox(context,inboxName).use { inbox ->
@@ -89,7 +91,7 @@ class HttpsAccountIntegrationTest {
    val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids)
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),"fixture-guard")
-   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(5,fixture("/test/receipts").getInt("count"))
+   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(6,fixture("/test/receipts").getInt("count"))
    val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes)
    assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
    assertEquals(1,fixture("/test/receipts").getInt("media_count"))
