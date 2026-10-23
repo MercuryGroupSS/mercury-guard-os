@@ -20,9 +20,9 @@ const grantIssuer=new ShiftGrantIssuer({path:new URL('grants.sqlite',dir).pathna
 const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
 const dashboardBindings=new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
 // No send function is configured: explicit mappings can queue records locally only.
-const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox});
 const dispatch=new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
+const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
 try {console.log('Local synthetic-data ingestion service: '+await service.start());}
 catch(error){shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();directory.close();devices.close();grantIssuer.close();throw error;}

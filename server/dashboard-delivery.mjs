@@ -13,6 +13,11 @@ export function projectDashboardObservation(record,mapping){
  const d=event.data;let data;
  switch(event.kind){
   case 'dispatch_ack':if(!stable(d.message_id)||!Number.isSafeInteger(d.message_version)||d.message_version<1)throw Error('Invalid acknowledgement');data={message_id:d.message_id,message_version:d.message_version};break;
+  case 'shift_start':case 'shift_end':
+   if(!Number.isSafeInteger(d.clocked_in_at_ms)||d.clocked_in_at_ms<=0||typeof d.early_exit!=='boolean')throw Error('Invalid attendance times');
+   if(event.kind==='shift_start'){if(d.clocked_in_at_ms!==event.at||d.clocked_out_at_ms!==null||d.early_exit!==false||d.reason!==null)throw Error('Invalid clock-in');}
+   else if(d.clocked_out_at_ms!==event.at||event.at<d.clocked_in_at_ms||typeof d.reason!=='string'||d.reason.length>2000||d.early_exit&&!d.reason.trim())throw Error('Invalid clock-out');
+   data={clocked_in_at_ms:d.clocked_in_at_ms,clocked_out_at_ms:d.clocked_out_at_ms,early_exit:d.early_exit,reason:d.reason};break;
   case 'incident':data={description:requiredText(d.description,8000)};break;
   case 'patrol_checkpoint':if(!stable(d.route_id)||!stable(d.checkpoint_id)||!Number.isSafeInteger(d.route_revision)||d.route_revision<1)throw Error('Invalid checkpoint');data={route_id:d.route_id,route_revision:d.route_revision,checkpoint_id:d.checkpoint_id};break;
   case 'photo_evidence':data={...photoMetadata(d),media_delivery:'not_transferred'};break;

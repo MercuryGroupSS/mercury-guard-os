@@ -31,6 +31,15 @@ export class ShiftLifecycle {
    this.db.prepare('INSERT INTO shift_transitions VALUES(?,?,?)').run(request.request_id,digest,JSON.stringify(receipt));this.db.exec('COMMIT');return receipt;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ dashboardAfter(cursor,limit){
+  if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Bounded attendance page required');
+  return this.db.prepare('SELECT rowid AS cursor,receipt FROM shift_transitions WHERE rowid>? ORDER BY rowid LIMIT ?').all(cursor,limit).map(row=>{
+   const receipt=JSON.parse(row.receipt),s=receipt.scope;
+   const h=createHash('sha256').update(`mercury-shift-observation-v1\n${s.device_thumbprint}\n${receipt.request_id}`).digest('hex');
+   const eventId=`${h.slice(0,8)}-${h.slice(8,12)}-${h.slice(12,16)}-${h.slice(16,20)}-${h.slice(20,32)}`;
+   return {cursor:row.cursor,body:JSON.stringify({vendor_id:s.vendor_id,scope:s,event:{event_id:eventId,at:receipt.recorded_at_ms,kind:receipt.action==='start'?'shift_start':'shift_end',data:{clocked_in_at_ms:receipt.clocked_in_at_ms,clocked_out_at_ms:receipt.clocked_out_at_ms,early_exit:receipt.early_exit,reason:receipt.reason}}})};
+  });
+ }
  checkInWindow(assignment){
   const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(assignment.assignmentId);
   if(!row)return null;
