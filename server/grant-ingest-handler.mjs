@@ -27,7 +27,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    if(typeof envelope.payload!=='string'||envelope.payload.length>351000||typeof envelope.public_key_spki!=='string')throw Error('Invalid envelope');
    const candidate=strictJson(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.from(envelope.payload,'base64url')));
    const grantId=candidate?.events?.[0]?.data?.capture_grant_id;
-   const first=grantIssuer.lookup(grantId);
+   const first=await grantIssuer.lookup(grantId);
    if(!first||first.subject!==identity.subject||first.vendorId!==identity.vendorId)throw Error('Grant unavailable');
    const c=first.claims,at=now(),seconds=Math.floor(at/1000);
    const context={enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
@@ -36,7 +36,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    if(!await devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
    const {batch}=verifyScopedBatch(raw,context,seconds);
    for(const event of batch.events){
-    const saved=grantIssuer.lookup(event.data.capture_grant_id),g=saved?.claims;
+    const saved=await grantIssuer.lookup(event.data.capture_grant_id),g=saved?.claims;
     if(!g||saved.subject!==identity.subject||saved.vendorId!==identity.vendorId||g.issuer!==c.issuer||g.audience!==c.audience||g.guard_id!==c.guard_id||g.site_id!==c.site_id||g.assignment_id!==c.assignment_id||g.device_thumbprint!==c.device_thumbprint||g.revocation_version!==c.revocation_version||!g.actions.includes(required[event.kind])||event.at<g.not_before_ms||event.at>=g.expires_at_ms||event.at>at)throw Error('Capture grant mismatch');
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id,deviceThumbprint:c.device_thumbprint},event.at))throw Error('Observation outside confirmed shift');
     if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
@@ -45,15 +45,15 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    }
    // Resolve photo links only after every supplied event has passed its capture grant.
    for(const event of batch.events)if(event.kind==='check_in'){
-    const saved=grantIssuer.lookup(event.data.capture_grant_id);
+    const saved=await grantIssuer.lookup(event.data.capture_grant_id);
     const linked=batch.events.find(e=>e.event_id===event.data.photo_event_id);
     const photo=linked?{scope:batch.scope,event:linked,vendor_id:identity.vendorId}:store.photoForGuard(identity.guardId,event.data.photo_event_id);
     if(photo?.vendor_id!==identity.vendorId)throw Error('Photo vendor mismatch');
-    if(photo&&!grantIssuer.lookup(photo.event.data.capture_grant_id))throw Error('Photo grant unavailable');
+    if(photo&&!await grantIssuer.lookup(photo.event.data.capture_grant_id))throw Error('Photo grant unavailable');
     validateCheckIn(saved.policy.checkInPolicy,event,photo,batch.scope);
    }
    for(const event of batch.events)if(event.kind==='check_in_miss_reason'){
-    const policy=grantIssuer.lookup(event.data.capture_grant_id).policy.checkInPolicy;
+    const policy=(await grantIssuer.lookup(event.data.capture_grant_id)).policy.checkInPolicy;
     validateMissReason(policy,event);
     const assignment={guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id,startsAt:policy.starts_at,endsAt:policy.ends_at,checkInPolicy:policy};
     reconcileCheckIns(store,assignment,at,{activeWindow:await shiftLifecycle?.checkInWindow(assignment)});

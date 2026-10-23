@@ -54,7 +54,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(!assignment)throw Error('Assignment unavailable');
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint},at,{live:true}))throw Error('Active shift required');
     const device=await devices.device(assignment.deviceId);
-    const grant=grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
+    const grant=await grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
      allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at,{activeWindow:await shiftLifecycle?.checkInWindow(assignment)}):null});
    }

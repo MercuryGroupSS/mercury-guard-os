@@ -7,7 +7,7 @@ import {parseEnrollmentKey} from '../enrollment-key.mjs';
 import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {createLocalService} from '../local-service.mjs';
 import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
-import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
+import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
 import {DurableIngest} from '../durable-ingest.mjs';
 const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n');
 const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL'))),url=new URL(config.DB_URL);
@@ -30,7 +30,7 @@ try{
  await assignmentStore.devices.enroll({deviceId,mode:'site',siteId:site,active:true,revoked:false,publicKeySpki:spki});
  const now=Date.now(),shift={id:sourceId,updated_at:new Date(now).toISOString(),scheduled_start:new Date(now-60000).toISOString(),scheduled_end:new Date(now+3600000).toISOString(),status:'scheduled'},binding={opsShiftId:sourceId,guardId:guard,vendorId:vendor,siteId:site,revision:1,active:true};
  const imported=await assignmentStore.sync.apply(shift,binding);
- store=new DurableIngest(':memory:');shiftLifecycle=new PostgresShiftLifecycle(assignmentStore.devices);grantIssuer=new ShiftGrantIssuer({path:':memory:',privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer});const origin=await service.start();
+ store=new DurableIngest(':memory:');shiftLifecycle=new PostgresShiftLifecycle(assignmentStore.devices);grantIssuer=new PostgresShiftGrantIssuer({devices:assignmentStore.devices,privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer});const origin=await service.start();
  const login=()=>fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:guard,password})});
  const response=await login();assert.equal(response.status,200);const session=await response.json();assert.equal('refresh_token' in session,false);
  const me=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
@@ -43,6 +43,11 @@ try{
  assert.equal((await grant()).status,400);
  const started=await post('/v1/shift-transition',{assignment_id:imported.assignmentId,proof:await proof(),transition:{action:'start',confirmed:true,request_id:randomUUID(),reason:''}});assert.equal(started.status,200);
  const issued=await grant();assert.equal(issued.status,200);const issuedBody=await issued.json();assert.equal(verify('sha256',Buffer.from(`mercury-shift-grant-v1.${issuedBody.key_id}.${issuedBody.payload}`),createPublicKey({key:Buffer.from(grantIssuer.publicKey(),'base64url'),type:'spki',format:'der'}),Buffer.from(issuedBody.signature,'base64url')),true);const claims=JSON.parse(Buffer.from(issuedBody.payload,'base64url'));assert.equal(claims.guard_id,guard);assert.equal(claims.assignment_id,imported.assignmentId);assert.equal(claims.device_thumbprint,thumb);
+ const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:guard,site_id:site,assignment_id:imported.assignmentId,device_thumbprint:thumb,revocation_version:1},events:[{event_id:randomUUID(),sequence:1,at:issuedBody.server_time_ms,kind:'incident',data:{note:'Synthetic PostgreSQL grant integration',capture_grant_id:claims.grant_id}}]};
+ const payload=Buffer.from(JSON.stringify(batch)).toString('base64url'),envelope={version:2,algorithm:'SHA256withECDSA',audience:'mercury-local',device_thumbprint:thumb,public_key_spki:spki,payload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${thumb}\n${payload}`),keys.privateKey).toString('base64url')};
+ const ingested=await post('/v2/batches',envelope);assert.equal(ingested.status,200);assert.equal(store.db.prepare('SELECT count(*) n FROM events').get().n,1);
+ await grantIssuer.revoke(claims.grant_id);assert.equal((await post('/v2/batches',envelope)).status,400);
+ console.log('PASS: signed incident HTTP ingest with shared PostgreSQL grant lookup and revocation');
  await assignmentStore.sync.apply({...shift,updated_at:new Date(now+1000).toISOString(),status:'cancelled'},binding);
  const cancelled=await post('/v1/assignments',await proof());assert.equal(cancelled.status,200);const cancelledRows=(await cancelled.json()).assignments;assert.equal(cancelledRows.length,1);assert.equal(cancelledRows[0].canStart,false);assert.equal(cancelledRows[0].assignmentActive,false);
  assert.equal((await grant()).status,400);
@@ -61,6 +66,7 @@ try{
   await admin.query("DELETE FROM mercury_guard.shift_transitions WHERE receipt->'scope'->>'guard_id'=$1",[guard]);
   await admin.query("DELETE FROM mercury_guard.shift_rejections WHERE receipt->'scope'->>'guard_id'=$1",[guard]);
   await admin.query('DELETE FROM mercury_guard.shift_sessions WHERE guard=$1',[guard]);
+  await admin.query('DELETE FROM mercury_guard.capture_grants WHERE subject=$1',[subject??'00000000-0000-0000-0000-000000000000']);
   await admin.query('DELETE FROM mercury_guard.assignments WHERE guard_id=$1',[guard]);
   await admin.query('DELETE FROM mercury_guard.devices WHERE device_id=$1',[deviceId]);
   await admin.query('DELETE FROM mercury_guard.sites WHERE site_id=$1',[site]);

@@ -412,3 +412,7 @@ Added private centralized mapping approvals with revisioned audit history and sh
 ### Shared confirmed shift lifecycle
 
 Moved PostgreSQL-mode confirmed shifts and transition/rejection receipts into the shared private database. Added one-active-guard/phone constraints, immutable receipts, current-authority locking, exact retry recovery and cancellation closeout. Updated HTTP capture checks, scheduled reconciliation and dashboard projection for asynchronous shift state. Real PostgreSQL concurrency/replay checks and local Auth/HTTP grant/closeout smoke passed; 132 server tests pass; advisors clear. Clock events currently serialize globally for reliable receipt cursor ordering; production throughput needs measurement. Grant/event/media/outbound persistence and authenticated administrator provisioning remain outstanding.
+
+### Shared capture grants verified
+
+PostgreSQL-mode capture grants/policies now persist centrally with immutable payload/binding fields and cross-instance revocation. Signing logic is shared with SQLite; Android protocol unchanged. Grant issuance rechecks and locks active shift/assignment/device/guard/vendor/site authority and serializes with clock-out. Async issuer operations are awaited throughout HTTP/evidence/ingestion. Real local HTTP signed incident ingestion and post-revocation denial passed; 132 server tests, PostgreSQL replay and advisors passed. Shared event/media/outbound persistence, production key distribution, authenticated administration, hosted integration and physical acceptance remain outstanding.
