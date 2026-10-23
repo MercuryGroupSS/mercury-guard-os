@@ -376,3 +376,7 @@ Local service can explicitly select PostgreSQL identity through MERCURY_IDENTITY
 ### PostgreSQL CI coverage — October 23
 
 Added a dedicated PostgreSQL 17 job to server-contract.yml and included supabase source paths in workflow triggers. It installs pinned dependencies without scripts, replays identity/throttle migrations and checks constraints, grants and concurrent limits in a disposable database. The reusable verifier passes locally; exact-source CI results are pending. No hosted credentials or data are involved.
+
+### PostgreSQL device and assignment schema — October 23
+
+Added private relational device/site/assignment/challenge tables with guard/vendor pairing, site-or-personal enrollment constraints, unique keys/challenges and bounded schedule/policy fields. Server role may cancel assignments but cannot rewrite historical scope/schedule or enrolled keys. RLS and restricted grants are verified. Corrected a PostgreSQL regex quantifier limit found by tests. Local SQL checks and disposable migration replay pass, advisors are clear and migration history aligns. PostgreSQL CI includes the new schema checks; runtime device storage remains SQLite. Earlier PostgreSQL CI run 40007427240 passed both protocol and postgres-identity jobs.

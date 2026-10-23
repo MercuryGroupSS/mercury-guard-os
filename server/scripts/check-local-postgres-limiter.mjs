@@ -26,8 +26,9 @@ try{
  await admin.query('CREATE DATABASE '+name);created=true;url.pathname='/'+name;
  fixture=new Client({connectionString:url.toString()});await fixture.connect();
  await fixture.query('CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text);');
- for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql','20261023185827_guard_device_assignments.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/tests/guard-identity.sql',import.meta.url),'utf8'));
+ await fixture.query(readFileSync(new URL('../../supabase/tests/guard-device-assignments.sql',import.meta.url),'utf8'));
  for(let i=0;i<2;i++){const c=new Client({connectionString:url.toString()});await c.connect();clients.push(c);await c.query('SET ROLE service_role');}
  const limits=clients.map(createPostgresLoginLimiter),bucket=s=>createHash('sha256').update(s).digest('hex');
  async function concurrent(n,key){const results=Array(n);await Promise.all(limits.map(async(limit,lane)=>{for(let i=lane;i<n;i+=limits.length)results[i]=await limit(bucket(key(i)));}));return results;}
