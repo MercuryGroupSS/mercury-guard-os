@@ -43,11 +43,12 @@ class DeviceReadinessTest {
    onView(org.hamcrest.Matchers.anyOf(withText("Prototype tools"), withContentDescription("Prototype tools"))).perform(scrollTo(), click())
    onView(withText("Device readiness")).perform(scrollTo(), click())
    onView(withText("DEVICE READINESS")).check(matches(isDisplayed()))
-   onView(withText("Precise location: not granted")).check(matches(isDisplayed()))
+   onView(withText(org.hamcrest.Matchers.containsString("Precise location: not granted"))).check(matches(isDisplayed()))
    onView(withText("GPS tracking: stopped · no active demo shift")).perform(scrollTo()).check(matches(isDisplayed()))
    scenario.recreate()
    onView(withText("DEVICE READINESS")).check(matches(isDisplayed()))
    onView(withText("Refresh readiness")).perform(scrollTo(), click())
+   onView(withText(org.hamcrest.Matchers.startsWith("Readiness refreshed at"))).perform(scrollTo()).check(matches(isDisplayed()))
    onView(withText("Return")).perform(scrollTo(), click())
    onView(withText("Mercury One")).check(matches(isDisplayed()))
   }

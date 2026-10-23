@@ -136,8 +136,21 @@ class MainActivity : Activity() {
   typeface = Typeface.create("sans-serif", Typeface.NORMAL)
   setLineSpacing(dp(3).toFloat(), 1f); setPadding(0, dp(8), 0, dp(8))
  }
+ private fun statusCard(title: String, detail: String) {
+  val card = LinearLayout(this).apply {
+   orientation = LinearLayout.VERTICAL
+   setPadding(dp(18), dp(12), dp(18), dp(12))
+   background = surface(Color.WHITE)
+  }
+  card.addView(label(title, 14f, cyan).apply {
+   typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+   isAccessibilityHeading = true
+  })
+  card.addView(label(detail, 16f, ink))
+  root.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(12) })
+ }
  private fun action(title: String, block: () -> Unit) {
-  val primary = title == "Sign in with biometrics" || title == "Save incident" || title.startsWith("Record checkpoint:")
+  val primary = title == "Escalate" || title == "Sign in with biometrics" || title == "Save incident" || title.startsWith("Record checkpoint:")
   val destructive = title == "End shift early" || title == "Clock out" || title == "Discard draft"
   val foreground = if (primary) Color.WHITE else if (destructive) Color.rgb(156, 45, 48) else ink
   val fill = if (primary) cyan else Color.WHITE
@@ -175,7 +188,7 @@ class MainActivity : Activity() {
    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
   })
   hud = HudMarkView(this).apply { importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO }
-  header.addView(hud, LinearLayout.LayoutParams(-1, dp(if (wide) 240 else 160)))
+  header.addView(hud, LinearLayout.LayoutParams(-1, dp(if (wide) 180 else 72)))
   hud?.startMotion()
   header.addView(label(title, 28f).apply {
    typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -222,24 +235,20 @@ class MainActivity : Activity() {
   incidentInput = null
   clockOutVisible = assignment.canClockOut()
   if (!active) { showLogin(); return }
-  heading(if (active) "ACTIVE SHIFT" else "SIGN IN", "Mercury One · LOCAL DEMO ONLY · No real clock-in or dispatch")
-  if (!active) {
-   root.addView(label(if (assignment.available()) "Simulated assignment ready. Secure biometric sign-in starts this local demo after device checks." else if (assignment.consumed()) "This simulated assignment has already been used. No new shift is assigned." else "No assigned shift. Clock-in is unavailable. Your real schedule is not connected.", 17f))
-   if (assignment.available()) action("Sign in with biometrics") { authenticateForShift() }
-   root.addView(label("Uses a supported secure biometric. Face unlock availability depends on your phone; Mercury One does not collect face images.", 14f, muted))
-  } else {
-   root.addView(label("SIMULATED SHIFT · local clock-in only", 17f, cyan))
-   if (assignment.end() > 0) root.addView(label("Scheduled end: ${java.text.DateFormat.getDateTimeInstance().format(java.util.Date(assignment.end()))}", 14f, muted))
-   root.addView(label("Your next prompts", 20f))
-   action("Patrol · Open demo route") { showPatrol() }
-   root.addView(label("Readiness arrives automatically. Demo cadence: readiness every 15 minutes; check-in every 30 minutes. Real scheduling is not connected.",14f,muted))
-   action("Shift check-in") { showDuty(duty.requestCheckIn(session.identity())) }
-   if (duty.missed().isNotEmpty()) root.addView(label("Missed verification: reason required in Escalate → Dispatch acknowledge. No alert has been sent.",16f,Color.rgb(155,45,45)))
-   if (clockOutVisible) action("Clock out") { confirmClockOut() }
-  }
+  heading("ACTIVE SHIFT", "Local demo · no real clock-in or dispatch")
+  val end = if (assignment.end() > 0) java.text.DateFormat.getDateTimeInstance().format(java.util.Date(assignment.end())) else "Not scheduled"
+  statusCard("SHIFT STATUS", "Simulated shift active\nScheduled end: $end")
   action("Escalate") { showEscalation() }
+  root.addView(label("Report an incident, record evidence or review an issue. Nothing is sent to live dispatch.", 14f, muted))
+  root.addView(label("On shift", 20f).apply { isAccessibilityHeading = true })
+  action("Patrol · Open demo route") { showPatrol() }
+  action("Shift check-in") { showDuty(duty.requestCheckIn(session.identity())) }
+  statusCard("UPCOMING CHECKS", "Readiness every 15 minutes\nCheck-in every 30 minutes\nDemo timing · real schedule not connected")
+  if (duty.missed().isNotEmpty()) statusCard("REASON REQUIRED", "A verification was missed. Open Escalate → Dispatch acknowledge to record a reason. No alert has been sent.")
+  if (clockOutVisible) action("Clock out") { confirmClockOut() }
   action("Prototype tools") { showTools() }
  }
+
  private fun showLogin() {
   hud?.stopMotion(); hud = null; loginParticles?.stopMotion()
   window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
@@ -502,7 +511,7 @@ class MainActivity : Activity() {
   heading(if (p.kind == "readiness") "READINESS CHECK" else "SHIFT CHECK-IN", "Timed local demo · no live dispatch")
   dutySurface = findViewById<ViewGroup>(android.R.id.content).getChildAt(0)
   dutyStatus = label("",20f).also { root.addView(it) }
-  root.addView(label("Secure biometric verification required. Android selects a supported secure face or fingerprint sensor; this is not face-only identification.",16f))
+  root.addView(label(if (duty.has("duty_biometric",p.id)) "Secure biometric verification complete." else "Verify with a supported secure face or fingerprint sensor. Android selects the sensor.",16f))
   root.addView(label("0–2 min green · 2–5 yellow · 5–10 red. At 10 minutes the miss remains recorded and requires a reason. Sound/vibration follow system settings. Optional full-screen alerts require app consent and Android special access in Device readiness. Otherwise tap the notification to open the alert.",14f,muted))
   if (!duty.has("duty_biometric",p.id)) action("Verify with secure biometrics") { verifyDuty(p) }
   else if (p.kind == "check_in") {
@@ -733,15 +742,15 @@ class MainActivity : Activity() {
   } catch (_: Exception) { root.addView(label("Record could not be opened. Stored data was preserved.")) }
   action("Back to audit") { showAudit(auditBefore) }
  }
- private fun showDeviceReadiness() {
+ private fun showDeviceReadiness(feedback: String? = null) {
   currentPage = "device_readiness"
   val readiness = DeviceReadiness(this)
   heading("DEVICE READINESS", "Read-only checks · permission changes require your choice")
-  root.addView(label("Precise location: ${if (readiness.preciseLocationGranted()) "granted" else "not granted"}"))
-  root.addView(label("Device GPS: ${if (readiness.gpsEnabled()) "enabled" else "disabled or unavailable"}"))
-  root.addView(label("Shift notifications: ${if (readiness.notificationsEnabled()) "enabled" else "blocked or not granted"}"))
-  root.addView(label(readiness.trackingDescription(), 16f, cyan))
-  root.addView(label(DutyAlertDelivery(this,store).status(),14f,muted))
+  val checkedAt = java.text.DateFormat.getTimeInstance().format(java.util.Date())
+  root.addView(label(feedback ?: "Checked at $checkedAt", 14f, cyan).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE })
+  statusCard("LOCATION", "Precise location: ${if (readiness.preciseLocationGranted()) "granted" else "not granted"}\nDevice GPS: ${if (readiness.gpsEnabled()) "enabled" else "disabled or unavailable"}")
+  statusCard("GPS TRACKING", readiness.trackingDescription())
+  statusCard("SHIFT ALERTS", "Shift notifications: ${if (readiness.notificationsEnabled()) "enabled" else "blocked or not granted"}\n${DutyAlertDelivery(this,store).status()}")
   val fullScreen=FullScreenAlerts(this)
   action(if(fullScreen.consented()) "Turn off automatic full-screen alerts" else "Set up optional full-screen alerts") {
    if(fullScreen.consented()) { fullScreen.setConsent(false); showDeviceReadiness() }
@@ -773,9 +782,9 @@ class MainActivity : Activity() {
   if (shiftActive) action("Request GPS for active demo shift") {
    if (!shiftActive) { showDeviceReadiness() }
    else if (!readiness.preciseLocationGranted()) requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,Manifest.permission.ACCESS_COARSE_LOCATION),101)
-   else { startTracking(retry = true); Toast.makeText(this,"GPS retry requested; a new fix may take time.",Toast.LENGTH_SHORT).show(); showDeviceReadiness() }
+   else { startTracking(retry = true); Toast.makeText(this,"GPS retry requested; a new fix may take time.",Toast.LENGTH_SHORT).show(); showDeviceReadiness("GPS retry requested. Waiting for a new fix; the reading below may still be the previous fix.") }
   }
-  action("Refresh readiness") { showDeviceReadiness(); Toast.makeText(this,"Readiness refreshed",Toast.LENGTH_SHORT).show() }
+  action("Refresh readiness") { showDeviceReadiness("Readiness refreshed at ${java.text.DateFormat.getTimeInstance().format(java.util.Date())}. Refresh checks status; it does not request a GPS fix."); Toast.makeText(this,"Readiness refreshed",Toast.LENGTH_SHORT).show() }
   action("Return") { showDashboard() }
  }
  private fun showInfo() {
