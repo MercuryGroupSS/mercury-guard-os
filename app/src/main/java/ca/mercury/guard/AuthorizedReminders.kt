@@ -10,7 +10,8 @@ import java.util.UUID
 /** One device reminder schedule. No account credentials or capture authority are persisted. */
 class AuthorizedReminders internal constructor(private val context:Context,private val prefsName:String="authorized_reminders",
  private val identity:DeviceIdentity=DeviceIdentity(context),private val elapsedNow:()->Long={SystemClock.elapsedRealtime()},
- private val bootNow:()->Int={Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)}) {
+ private val bootNow:()->Int={Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)},
+ private val notificationAccess:(()->Boolean)?=null) {
  private val prefs=context.getSharedPreferences(prefsName,Context.MODE_PRIVATE)
  private val alarm=context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
  private val notes=context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -22,7 +23,7 @@ class AuthorizedReminders internal constructor(private val context:Context,priva
  fun stop()=synchronized(lock){alarm.cancel(intent());notes.cancel(NOTE);check(prefs.edit().remove("schedule").commit())}
  fun exactAvailable()=Build.VERSION.SDK_INT<31||alarm.canScheduleExactAlarms()
  private fun ensureChannel(){if(notes.getNotificationChannel(CHANNEL)==null)notes.createNotificationChannel(NotificationChannel(CHANNEL,"Authorized check-in reminders",NotificationManager.IMPORTANCE_HIGH).apply{description="One reminder per assigned check-in window";enableVibration(true);lockscreenVisibility=Notification.VISIBILITY_PRIVATE})}
- fun notificationsAvailable():Boolean {ensureChannel();return DeviceReadiness(context).notificationPermissionGranted()&&notes.areNotificationsEnabled()&&notes.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE}
+ fun notificationsAvailable():Boolean {ensureChannel();return notificationAccess?.invoke()?: (DeviceReadiness(context).notificationPermissionGranted()&&notes.areNotificationsEnabled()&&notes.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE)}
  fun enable(policy:JSONObject,binding:GrantBinding,grant:VerifiedShiftGrant,anchor:ServerTimeAnchor)=synchronized(lock){
   val elapsed=elapsedNow();val boot=bootNow()
   check(grant.permits("check_in",binding,elapsed,boot));check(anchor.bootCount==boot&&elapsed>=anchor.elapsedMillis)

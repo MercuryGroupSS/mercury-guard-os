@@ -24,3 +24,19 @@ Five new adapter tests plus seventeen existing protocol tests pass (22 total). T
 2. Implement server authentication, enrollment, scoped grants and immutable original capture scope in Android.
 3. Add durable transactional ingestion and replay receipts; maintain separate Mercury One observations and heartbeat. Review downstream compliance behavior before publishing projections.
 4. Exercise a local HTTP round trip and database isolation, then test the Fold. No production activation is implied by adapter unit tests.
+
+## Isolated delivery path — 23 October 2026
+
+Read-only reinspection of the existing checkin-ingest.js confirmed it remains a WhatsApp-specific endpoint. No existing application code, schema, heartbeat or payroll record was modified.
+
+The Guard OS repository now contains a separate integration-inbox protocol:
+
+- `dashboard-bridge.mjs`: administrative stable identity/assignment bindings with increasing revisions. Bounded scans project only accepted service records that have an explicitly approved mapping. Unmapped records remain in the source store and are revisited. No device API can approve mappings.
+- `dashboard-delivery.mjs`: strict observation projection, durable immutable outbox, exclusive expiring delivery leases, exponential retry delay, bounded HTTPS transport without redirects, and exact payload-hash receipts. Original mapping/content conflicts require review rather than silently retargeting a queued observation.
+- `dashboard-inbox.mjs`: isolated SQLite reference receiver at POST /v1/mercury-one/observations, with a dedicated service credential, independent mapping validation, body bounds and idempotent durable insertion. It writes only its new reference inbox, not existing dashboard tables.
+
+Receipts are named stored_in_integration_inbox and bind delivery ID, destination and SHA-256 of the exact payload. That confirms inbox persistence, not dashboard rendering, compliance processing or payroll clock-in. Photo/check-in projections explicitly state media_delivery=not_transferred; private image delivery remains a separate unfinished integration. Only approved typed fields are projected; unrelated source data and capture-grant IDs are omitted. Local reasons remain immutable observations.
+
+The local service runner creates a local binding store and outbox, and scans accepted records every 30 seconds. It deliberately supplies no network send function, so outbound delivery is disabled. No actual customer/guard mapping has been approved or inferred from names. Existing records are preserved when mapping is missing, changed, revoked or delivery fails.
+
+84 server tests pass, including a real loopback HTTP sender-to-inbox round trip, durable retry receipts, immutable content conflicts, wrong credentials/mappings, lease recovery, redirect rejection, oversized receipts and revocation before sending. The destination is synthetic and separate from the user's hosted applications. Production still requires reviewed receiver persistence/deployment, dedicated credential provisioning, approved mappings, private media access, downstream rendering/compliance integration and inbound dispatch/assignment refresh.

@@ -1,0 +1,68 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {randomUUID} from 'node:crypto';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {createServer} from 'node:http';
+import {Readable} from 'node:stream';
+import {DashboardOutbox,createDashboardTransport,deliverDashboardOnce,projectDashboardObservation} from './dashboard-delivery.mjs';
+import {DashboardInbox,createDashboardInboxHandler} from './dashboard-inbox.mjs';
+const token='synthetic-integration-token-'.repeat(3);
+function fixture(){return {record:{vendor_id:'vendor',scope:{guard_id:'guard',site_id:'site',assignment_id:'assignment',device_thumbprint:'a'.repeat(64)},event:{event_id:randomUUID(),at:10000,kind:'incident',data:{description:'Synthetic test report',capture_grant_id:'private-grant',unapproved:'must not transfer'}}},mapping:{active:true,revision:1,destination:'local-dashboard-test',dashboardShiftId:'homebase-shift',guardId:'guard',vendorId:'vendor',siteId:'site',assignmentId:'assignment'}};}
+test('projection requires explicit identity mappings and excludes unrelated source fields',()=>{
+ const {record,mapping}=fixture(),p=projectDashboardObservation(record,mapping);
+ assert.equal(p.dashboard_shift_id,'homebase-shift');assert.deepEqual(p.observation.data,{description:'Synthetic test report'});assert.equal(p.source,'mercury_one');
+ for(const patch of [{active:false},{guardId:'other'},{vendorId:'other'},{siteId:'other'},{assignmentId:'other'}])assert.throws(()=>projectDashboardObservation(record,{...mapping,...patch}));
+ assert.throws(()=>projectDashboardObservation({...record,event:{...record.event,kind:'clock_out'}},mapping));
+});
+test('outbox survives restart and rejects remapping; a stale lease cannot clear a newer attempt',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'dashboard-outbox-')),path=join(dir,'outbox.db');let box=new DashboardOutbox(path);
+ try{
+  const {record,mapping}=fixture(),id=box.enqueue(record,mapping);assert.equal(box.enqueue(record,mapping),id);
+  assert.throws(()=>box.enqueue(record,{...mapping,dashboardShiftId:'other'}));const first=box.claim(1000);assert.equal(box.claim(1001),null);
+  box.close();box=new DashboardOutbox(path);const next=box.claim(121000);assert.equal(next.id,id);assert.notEqual(next.lease,first.lease);
+  const receipt={delivery_id:id,destination:mapping.destination,payload_sha256:first.hash,status:'stored_in_integration_inbox'};
+  assert.throws(()=>box.accepted(first,receipt));box.accepted(next,receipt);assert.equal(box.claim(200000),null);
+ }finally{box.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('false or mismatched receipts and network errors leave delivery pending with backoff',async()=>{
+ const {record,mapping}=fixture(),box=new DashboardOutbox(':memory:');try{
+  box.enqueue(record,mapping);let now=1000;
+  assert.equal(await deliverDashboardOnce(box,async()=>({status:'ok'}),()=>now),'pending');
+  assert.equal(box.db.prepare('SELECT status FROM dashboard_outbox').get().status,'pending');assert.equal(box.claim(1001),null);
+  now=10000;assert.equal(await deliverDashboardOnce(box,async()=>{throw Error('offline')},()=>now),'pending');
+ }finally{box.close();}
+});
+test('inbox authenticates dedicated credentials, rejects unknown mapping and detects altered retries',async()=>{
+ const {record,mapping}=fixture(),box=new DashboardOutbox(':memory:'),inbox=new DashboardInbox(':memory:');let approved=true;
+ try{
+  box.enqueue(record,mapping);const job=box.claim(1000);
+  const handler=createDashboardInboxHandler({token,destination:mapping.destination,inbox,loadMapping:async()=>approved?mapping:null});
+  const req=(body=job.body,auth=token)=>new Request('https://example.test/v1/mercury-one/observations',{method:'POST',headers:{authorization:`Bearer ${auth}`,'content-type':'application/json'},body});
+  assert.equal((await handler(req(job.body,'wrong'))).status,401);approved=false;assert.equal((await handler(req())).status,403);approved=true;
+  assert.equal((await handler(req())).status,200);assert.equal((await handler(req())).status,200);
+  const altered=JSON.parse(job.body);altered.observation.data.description='changed';assert.equal((await handler(req(JSON.stringify(altered)))).status,400);
+  assert.equal(inbox.db.prepare('SELECT count(*) AS n FROM mercury_one_inbox').get().n,1);
+  approved=false;assert.equal((await handler(req())).status,403);
+ }finally{box.close();inbox.close();}
+});
+test('transport rejects insecure endpoints, redirects and oversized receipts',async()=>{
+ for(const endpoint of ['http://example.test/v1/mercury-one/observations','https://user:pass@example.test/path','https://example.test/path?token=x'])assert.throws(()=>createDashboardTransport({endpoint,token}));
+ const {record,mapping}=fixture(),box=new DashboardOutbox(':memory:');try{
+  box.enqueue(record,mapping);const job=box.claim(1000);
+  for(const response of [new Response('',{status:302,headers:{location:'https://elsewhere.test'}}),new Response('x'.repeat(4097))])await assert.rejects(createDashboardTransport({endpoint:'https://example.test/v1/mercury-one/observations',token,fetchImpl:async(url,options)=>{assert.equal(options.redirect,'manual');return response;}})(job));
+ }finally{box.close();}
+});
+test('real local HTTP delivery obtains a persisted inbox receipt without modifying other applications',async()=>{
+ const {record,mapping}=fixture(),box=new DashboardOutbox(':memory:'),inbox=new DashboardInbox(':memory:');
+ const handler=createDashboardInboxHandler({token,destination:mapping.destination,inbox,loadMapping:async()=>mapping});
+ const server=createServer(async(req,res)=>{const result=await handler(new Request(`http://127.0.0.1${req.url}`,{method:req.method,headers:req.headers,body:Readable.toWeb(req),duplex:'half'}));res.writeHead(result.status,Object.fromEntries(result.headers));res.end(await result.text());});
+ try{
+  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve)});
+  box.enqueue(record,mapping);const send=createDashboardTransport({endpoint:`http://127.0.0.1:${server.address().port}/v1/mercury-one/observations`,token,allowLocal:true});
+  assert.equal(await deliverDashboardOnce(box,send),'delivered');assert.equal(await deliverDashboardOnce(box,send),'idle');
+  assert.equal(inbox.db.prepare('SELECT count(*) AS n FROM mercury_one_inbox').get().n,1);
+  assert.equal(box.db.prepare('SELECT status FROM dashboard_outbox').get().status,'delivered');
+ }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));box.close();inbox.close();}
+});

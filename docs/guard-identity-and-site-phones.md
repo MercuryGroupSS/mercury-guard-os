@@ -144,3 +144,7 @@ The app now declares SCHEDULE_EXACT_ALARM and offers the owner-controlled Alarms
 The encrypted event database upgrades to schema 4 with a hashed check-in lookup and validation against its original encrypted record. This avoids decrypting the full captured-event history during an alarm callback. Migration preserves existing events and queued receipts. Local APK/test APK compilation, JVM timing-boundary tests and lint pass; the newest instrumentation migration checks compile successfully and await execution on API 28/API 35 in CI. Physical notification timing on the Fold remains deferred.
 
 The preceding server-worker commit 9a59bb3 passed build, HTTPS integration and API 28/API 35 in run 39992013384.
+
+## Reminder test isolation correction
+
+Reminder commit fae9938 passed the APK build, HTTPS integration and API 28 in run 39993160726. API 35 stopped during DeviceReadinessTest: its log shows notification-permission revocation followed by signal 9 termination of the instrumented app. The new reminder state test had previously granted that shared permission. It now injects notification readiness for its isolated schedule-state checks instead of changing the process-wide permission. Production still uses Android's real notification permission/channel checks. The corrected APK/test APK, JVM checks and lint pass locally; full emulator rerun is pending.

@@ -1,5 +1,4 @@
 package ca.mercury.guard
-import android.os.Build
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
 import org.junit.Assert.*
@@ -11,10 +10,9 @@ import java.util.UUID
 class AuthorizedRemindersTest {
  @Test fun encryptedScheduleSurvivesRecreationAndStopsForOtherGuardOrBoot(){
   val instrumentation=InstrumentationRegistry.getInstrumentation();val context=instrumentation.targetContext
-  if(Build.VERSION.SDK_INT>=33)instrumentation.uiAutomation.executeShellCommand("pm grant ${context.packageName} android.permission.POST_NOTIFICATIONS").use{android.os.ParcelFileDescriptor.AutoCloseInputStream(it).bufferedReader().readText()}
   val suffix=UUID.randomUUID().toString();val alias="test.reminders.$suffix";val marker="reminders-$suffix";val prefsName="reminders-$suffix"
   val identity=DeviceIdentity(context,alias,marker);var boot=1
-  fun reminders()=AuthorizedReminders(context,prefsName,identity,{1000},{boot})
+  fun reminders()=AuthorizedReminders(context,prefsName,identity,{1000},{boot},{true})
   val r=reminders()
   try{
    val binding=GrantBinding("private-guard","private-site","assignment",identity.create().thumbprint,1)
