@@ -352,3 +352,7 @@ Disabled approved mappings now revoke local assignment eligibility without waiti
 ### Real local Ops REST integration — October 23
 
 Verified the source reader and refresh pipeline against the isolated local Supabase REST API. Persisted synthetic approvals plus trusted roster checks create an assignment from the selected source row, and a subsequent source cancellation disables it while retaining original schedule fields. Unmapped rows are excluded; missing IDs are reported. Temporary fixture creation refuses an existing public.shifts table, and cleanup ownership/removal were verified. Hosted Ops was untouched. Added a reproducible local smoke script; production connectivity remains unverified.
+
+### Ops-to-phone authorization smoke — October 23
+
+Extended the real local REST smoke through temporary Supabase Auth login, enrolled-device proof and the actual assignment handler. The imported assignment is visible to the authenticated guard; replay is denied, and source cancellation removes assignment availability. Temporary account and table cleanup passed. This is local handler integration evidence, not physical-device testing or hosted activation.
