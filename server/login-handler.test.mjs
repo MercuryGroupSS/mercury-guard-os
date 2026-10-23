@@ -31,3 +31,12 @@ test('global limit bounds account-bucket allocation under ID spraying',()=>{
   assert.equal(d.db.prepare('SELECT count(*) AS n FROM login_attempts').get().n,101);
  }finally{d.close();}
 });
+
+test('asynchronous directory and limiter are awaited and post-login revocation denies session',async()=>{
+ const {createLoginHandler}=await import('./login-handler.mjs');let allowed=false,active=true,authenticated=0;
+ const directory={consumeLoginAttempt:async()=>allowed,loginAccount:async()=>active?{subject:'subject',email:'test@example.invalid'}:null};
+ const handler=createLoginHandler({directory,passwordSession:async()=>{authenticated++;active=false;return {access_token:'synthetic'};}});
+ const request=()=>new Request('https://guard.test/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:'guard',password:'synthetic'})});
+ assert.equal((await handler(request())).status,429);assert.equal(authenticated,0);
+ allowed=true;assert.equal((await handler(request())).status,401);assert.equal(authenticated,1);
+});

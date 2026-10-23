@@ -17,12 +17,12 @@ export function createLoginHandler({directory,passwordSession,now=Date.now}){
   finally{reader.releaseLock();}
   try{
    const bucket=createHash('sha256').update(body.guard_id).digest('hex');
-   if(!directory.consumeLoginAttempt(bucket,now()))return reply(429,{error:'try_again_later'});
-   const account=directory.loginAccount(body.guard_id);
+   if(!await directory.consumeLoginAttempt(bucket,now()))return reply(429,{error:'try_again_later'});
+   const account=await directory.loginAccount(body.guard_id);
    if(!account)return reply(401,{error:'sign_in_failed'});
    const result=await passwordSession({...account,password:body.password});
    // Recheck the mapping after asynchronous authentication in case access changed.
-   const current=directory.loginAccount(body.guard_id);
+   const current=await directory.loginAccount(body.guard_id);
    if(!result||!current||current.subject!==account.subject||current.email!==account.email)return reply(401,{error:'sign_in_failed'});
    return reply(200,{...result,server_time_ms:now()});
   }catch{return reply(503,{error:'sign_in_unavailable'});}

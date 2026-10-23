@@ -360,3 +360,7 @@ Extended the real local REST smoke through temporary Supabase Auth login, enroll
 ### Private PostgreSQL identity schema — October 23
 
 Created mercury_guard vendors/guards/guard_login in isolated local Supabase. Multiple individual guards can reference one company vendor; Auth subjects and lowercase login mappings are unique, activation defaults off, and referenced identities cannot be deleted. All tables have RLS and no anon/authenticated privileges; the server role has SELECT/INSERT/UPDATE only. Transactional fixtures rolled back, local advisors reported no issues, migration history is aligned, and generated migration replay passed in a disposable database that was then removed. Runtime remains on SQLite pending a PostgreSQL adapter. No hosted schema or application was changed.
+
+### PostgreSQL directory adapter — October 23
+
+Added asynchronous parameterized guard/vendor/login lookup against the private identity schema. Login now awaits the limiter and directory before and after authentication, preserving revocation checks with asynchronous storage. The real local PostgreSQL service-role smoke passes; fixtures were rolled back. All 124 server tests pass. Driver pinned with lockfile and no lifecycle scripts. Production connection configuration, durable shared login throttling and runner activation remain unfinished.
