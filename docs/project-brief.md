@@ -158,3 +158,5 @@ Access restored using reviewed execution permissions. Docker Desktop running; is
 ## v0.24 local authenticated backend — 2026-10-23
 
 Local Supabase Auth is now used by the actual loopback HTTP ingestion service; protected PostgreSQL authorization records drive trusted context and device revocation. Signed reports persist in local SQLite with replay receipts. Actual network test verifies identity, denied client authority reads, signed ingestion, restart/retry, revocation, and cleanup. 37 server unit tests pass; local DB advisors clean. Android HTTPS transport foundation and receipt tests added; APK/assembly/JVM/lint pass. No physical testing or deployment; remaining operational integration listed in build-v0.24.md.
+
+v0.24 verification closed: GitHub APK build and Android API 28/35 instrumentation suites passed (run 39954949196); server workflow also passed. Stable preview APK signature verified; source/review packages and cumulative master brief v3.0 saved. Local Supabase remains running. Physical acceptance and operational app integration remain pending, as detailed in build-v0.24.md.

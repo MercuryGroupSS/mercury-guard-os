@@ -27,3 +27,7 @@ This uses Node 24 built-in SQLite with no additional packages. The database is p
 The HTTP boundary now has a composed test using real P-256 signatures and the durable SQLite store, including restart/retry and revoked authorization. All 28 local tests pass. Requests run in-process, without a socket or real Supabase session; this is not an Android network round trip.
 
 `authorization.mjs` assembles verifier context only from a verified session and independent server authorization record. It validates active state, subject, enrollment, revocation, audience, binding IDs and bounded grant lifetime, and clamps expiry to the session. Both providers must be implemented using authoritative sources; no real sign-in is configured. The composed ingestion test now uses this boundary. The suite has 32 passing tests.
+
+## v0.24 local Supabase service
+
+Local Supabase Auth and protected PostgreSQL authority records now drive the loopback ingestion service. Run `node server/scripts/check-local-roundtrip.mjs` from the project root (not the server directory) for a real HTTP/signature/restart/revocation check, or `node server/scripts/start-local-service.mjs` for the synthetic-data pilot. See docs/local-supabase.md. There are 37 offline unit tests. This supersedes earlier statements that all authentication is injected test data; hosted activation, original Android capture scope and operational UI remain pending.
