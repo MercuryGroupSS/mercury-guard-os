@@ -1,0 +1,76 @@
+import {DatabaseSync} from 'node:sqlite';
+import {createPublicKey,createHash,randomBytes,randomUUID,verify} from 'node:crypto';
+import {assignmentForGuard} from './guard-directory.mjs';
+const id=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
+function decode(x,max){
+ if(typeof x!=='string'||x.length>max*2||!/^[A-Za-z0-9_-]+$/.test(x))throw Error('Invalid encoding');
+ const b=Buffer.from(x,'base64url');if(b.length>max||b.toString('base64url')!==x)throw Error('Invalid encoding');return b;
+}
+function key(spki){
+ const bytes=decode(spki,256),k=createPublicKey({key:bytes,type:'spki',format:'der'});
+ if(k.asymmetricKeyType!=='ec'||k.asymmetricKeyDetails?.namedCurve!=='prime256v1')throw Error('P256 required');
+ return {key:k,thumbprint:createHash('sha256').update(bytes).digest('hex')};
+}
+// Local synthetic pilot. Administrative methods are deliberately not HTTP routes.
+export class LocalDeviceAssignments {
+ constructor(path,audience='mercury-local'){
+  if(!/^[A-Za-z0-9._:/-]{1,128}$/.test(audience))throw Error('Audience required');
+  this.audience=audience;this.db=new DatabaseSync(path);
+  this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+   CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,thumbprint TEXT NOT NULL UNIQUE,body TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS assignments(id TEXT PRIMARY KEY,guard_id TEXT NOT NULL,body TEXT NOT NULL);
+   CREATE TABLE IF NOT EXISTS challenges(id TEXT PRIMARY KEY,subject TEXT NOT NULL,device TEXT NOT NULL,nonce TEXT NOT NULL,expires INTEGER NOT NULL,UNIQUE(subject,device));`);
+ }
+ enroll(device){
+  if(!id(device.deviceId)||device.active!==true||device.revoked!==false||
+   !(device.mode==='site'&&id(device.siteId)||device.mode==='personal'&&id(device.guardId)))throw Error('Approved enrollment required');
+  const k=key(device.publicKeySpki);
+  const stored={deviceId:device.deviceId,mode:device.mode,siteId:device.mode==='site'?device.siteId:null,
+   guardId:device.mode==='personal'?device.guardId:null,active:true,revoked:false,publicKeySpki:device.publicKeySpki,thumbprint:k.thumbprint};
+  this.db.prepare('INSERT INTO devices VALUES(?,?,?)').run(stored.deviceId,k.thumbprint,JSON.stringify(stored));
+ }
+ device(deviceId){const row=this.db.prepare('SELECT body FROM devices WHERE id=?').get(deviceId);return row?JSON.parse(row.body):null;}
+ revoke(deviceId){const d=this.device(deviceId);if(!d)throw Error('Unknown device');d.revoked=true;this.db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify(d),deviceId);}
+ assign(a){
+  if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
+  const row=Object.fromEntries(['assignmentId','guardId','vendorId','siteId','startsAt','endsAt','active'].map(k=>[k,a[k]]));
+  this.db.prepare('INSERT INTO assignments VALUES(?,?,?)').run(a.assignmentId,a.guardId,JSON.stringify(row));
+ }
+ cancel(assignmentId){const row=this.db.prepare('SELECT body FROM assignments WHERE id=?').get(assignmentId);if(!row)throw Error('Unknown assignment');const a=JSON.parse(row.body);a.active=false;this.db.prepare('UPDATE assignments SET body=? WHERE id=?').run(JSON.stringify(a),assignmentId);}
+ challenge(identity,deviceId,now=Date.now()){
+  if(!id(identity?.subject)||!id(identity.guardId)||!id(deviceId)||!Number.isSafeInteger(now))throw Error('Invalid request');
+  const d=this.device(deviceId);
+  if(!d||!d.active||d.revoked||(d.mode==='personal'&&d.guardId!==identity.guardId))throw Error('Device unavailable');
+  this.db.prepare('DELETE FROM challenges WHERE expires<=?').run(now);
+  const requestId=randomUUID(),nonce=randomBytes(32).toString('base64url'),expires=now+60000;
+  this.db.prepare('INSERT INTO challenges VALUES(?,?,?,?,?) ON CONFLICT(subject,device) DO UPDATE SET id=excluded.id,nonce=excluded.nonce,expires=excluded.expires').run(requestId,identity.subject,deviceId,nonce,expires);
+  return {audience:this.audience,request_id:requestId,challenge:nonce,expires_at:expires};
+ }
+ list(identity,proof,now=Date.now()){
+  const fields=['version','algorithm','audience','request_id','challenge','device_thumbprint','public_key_spki','signature_der'];
+  if(!identity||!id(identity.subject)||!Number.isSafeInteger(now)||!proof||Object.keys(proof).sort().join()!==fields.sort().join()||proof.version!==1||proof.algorithm!=='SHA256withECDSA'||proof.audience!==this.audience||typeof proof.request_id!=='string')throw Error('Invalid proof');
+  this.db.exec('BEGIN IMMEDIATE');
+  try{
+   const c=this.db.prepare('SELECT * FROM challenges WHERE id=? AND subject=?').get(proof.request_id,identity.subject);
+   if(!c||c.expires<=now||c.nonce!==proof.challenge)throw Error('Challenge unavailable');
+   const d=this.device(c.device);
+   if(!d||!d.active||d.revoked||proof.device_thumbprint!==d.thumbprint||proof.public_key_spki!==d.publicKeySpki)throw Error('Device unavailable');
+   const message=`mercury-enrollment-proof-v1\n${this.audience}\n${c.id}\n${c.nonce}\n${d.thumbprint}`;
+   if(!verify('sha256',Buffer.from(message),key(d.publicKeySpki).key,decode(proof.signature_der,80)))throw Error('Invalid signature');
+   this.db.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
+   const assignments=this.db.prepare('SELECT body FROM assignments WHERE guard_id=?').all(identity.guardId)
+    .map(r=>assignmentForGuard({identity,assignment:JSON.parse(r.body),device:d,now})).filter(Boolean);
+   this.db.exec('COMMIT');return {assignments};
+  }catch(e){this.db.exec('ROLLBACK');throw e;}
+ }
+ authorizes(identity,authority,now=Date.now()){
+  if(!authority||typeof authority.thumbprint!=='string')return false;
+  const row=this.db.prepare('SELECT body FROM devices WHERE thumbprint=?').get(authority.thumbprint);
+  const assigned=this.db.prepare('SELECT body FROM assignments WHERE id=?').get(authority.assignmentId);
+  if(!row||!assigned)return false;
+  const device=JSON.parse(row.body),assignment=JSON.parse(assigned.body);
+  if(device.publicKeySpki!==authority.publicKeySpki||assignment.siteId!==authority.siteId||assignment.guardId!==authority.guardId)return false;
+  return assignmentForGuard({identity,assignment,device,now})?.canStart===true;
+ }
+ close(){this.db.close();}
+}

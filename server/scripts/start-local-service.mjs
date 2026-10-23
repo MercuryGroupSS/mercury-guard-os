@@ -1,3 +1,4 @@
+import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {createLocalService} from '../local-service.mjs';
@@ -8,9 +9,10 @@ const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL
 const dir=new URL('.local-backend/',root);mkdirSync(dir,{recursive:true,mode:0o700});
 const store=new DurableIngest(new URL('events.sqlite',dir).pathname);
 const directory=new LocalGuardDirectory(new URL('directory.sqlite',dir).pathname);
-const service=createLocalService({config,store,directory});
+const devices=new LocalDeviceAssignments(new URL('devices.sqlite',dir).pathname);
+const service=createLocalService({config,store,directory,devices});
 try {console.log('Local synthetic-data ingestion service: '+await service.start());}
-catch(error){store.close();directory.close();throw error;}
+catch(error){store.close();directory.close();devices.close();throw error;}
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;await service.stop();store.close();directory.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;await service.stop();store.close();directory.close();devices.close();process.exit(0);}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);

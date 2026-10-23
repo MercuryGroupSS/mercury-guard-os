@@ -1,3 +1,4 @@
+import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
 // Local-only smoke check. Reads startup credentials without printing them.
 import {createSupabaseSessionVerifier} from '../supabase-session.mjs';
@@ -45,7 +46,10 @@ try {
  const dir=mkdtempSync(join(tmpdir(),'mercury-network-'));const directory=new LocalGuardDirectory(join(dir,'directory.sqlite'));
  directory.addVendor({vendorId:'synthetic-vendor',kind:'company',active:true});
  directory.addGuard({guardId:'synthetic-guard',authSubject:id,vendorId:'synthetic-vendor',active:true});
- let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory}),started=false;
+ const devices=new LocalDeviceAssignments(join(dir,'devices.sqlite'));
+ devices.enroll({deviceId:'synthetic-phone',mode:'site',siteId:'synthetic-site',active:true,revoked:false,publicKeySpki:authority.public_key_spki});
+ devices.assign({assignmentId:'synthetic-shift',guardId:'synthetic-guard',vendorId:'synthetic-vendor',siteId:'synthetic-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000});
+ let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices}),started=false;
  try {
   let origin=await service.start();started=true;
   const profile=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
@@ -53,18 +57,30 @@ try {
   directory.setGuardActive('synthetic-guard',false);if((await profile()).status!==403)throw Error('Disabled guard accepted');
   directory.setGuardActive('synthetic-guard',true);
   console.log('PASS: authenticated guard profile and disabled guard denial');
+  const post=(path,body)=>fetch(origin+path,{method:'POST',headers:{authorization:'Bearer '+session.access_token,'content-type':'application/json'},body:JSON.stringify(body)});
+  const challengeResponse=await post('/v1/device-challenge',{device_id:'synthetic-phone'});
+  if(challengeResponse.status!==200)throw Error('Device challenge failed');
+  const c=await challengeResponse.json();
+  const deviceProof={version:1,algorithm:'SHA256withECDSA',audience:c.audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:thumbprint,public_key_spki:authority.public_key_spki,
+   signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${thumbprint}`),privateKey).toString('base64url')};
+  const assignmentResponse=await post('/v1/assignments',deviceProof);
+  if(assignmentResponse.status!==200)throw Error('Assignment request failed');
+  const assigned=await assignmentResponse.json();if(assigned.assignments.length!==1||assigned.assignments[0].assignmentId!=='synthetic-shift')throw Error('Assignment scope incorrect');
+  if((await post('/v1/assignments',deviceProof)).status!==400)throw Error('Device proof replay accepted');
+  console.log('PASS: enrolled device proof + scoped assignment delivery + replay denial');
+
   const send=()=>fetch(origin+'/v2/batches',{method:'POST',headers:{'content-type':'application/json',authorization:'Bearer '+session.access_token},body:proof});
   let response=await send();if(response.status!==200)throw Error('Signed network ingestion failed: '+response.status);
   const receipt=await response.json();if(store.count()!==1)throw Error('Missing event');
   directory.setGuardActive('synthetic-guard',false);if((await send()).status!==401)throw Error('Disabled guard uploaded');
   directory.setGuardActive('synthetic-guard',true);
   console.log('PASS: disabled roster identity denies batch retries');
-  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory});origin=await service.start();started=true;
+  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices});origin=await service.start();started=true;
   response=await send();if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Restart retry failed');
   const revoke=await fetch(authorityUrl+'?subject=eq.'+id,{method:'PATCH',headers:admin,body:JSON.stringify({revoked:true})});if(!revoke.ok)throw Error('Revocation update failed');
   if((await send()).status!==401)throw Error('Revoked device accepted');
   console.log('PASS: real local Auth + protected authority + signed HTTP ingestion + restart deduplication + revocation');
- } finally {if(started)await service.stop();store.close();directory.close();rmSync(dir,{recursive:true,force:true});}
+ } finally {if(started)await service.stop();store.close();directory.close();devices.close();rmSync(dir,{recursive:true,force:true});}
 
 } finally {
  if(id){await call('/admin/users/'+id,{method:'DELETE',headers:admin});console.log('PASS: synthetic account removed');}
