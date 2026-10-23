@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DurableIngest} from './durable-ingest.mjs';
 import {createIngestHandler} from './ingest-handler.mjs';
+import {createAuthorization} from './authorization.mjs';
 function fixture(){
  const {privateKey,publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'});
  const spki=publicKey.export({type:'spki',format:'der'});
@@ -50,13 +51,14 @@ test('signed batch passes HTTP boundary into durable store and receipt survives 
  const dir=mkdtempSync(join(tmpdir(),'mercury-http-')),path=join(dir,'test.sqlite');
  const f=fixture(); let db=new DurableIngest(path);
  const raw=f.proof(f.batch([f.event(1),f.event(2,'incident')]));
- const makeHandler=()=>createIngestHandler({authenticate:async header=>header==='Bearer local-test-only'?f.ctx:null,store:db,now:()=>1100});
+ const authenticate=createAuthorization({verifySession:async token=>token==='local-test-only'?{subject:'synthetic-subject',active:true,expiresAt:1900}:null,loadAuthorization:async()=>({...f.ctx,subject:'synthetic-subject',active:true}),audience:f.ctx.audience,now:()=>1100});
+ const makeHandler=()=>createIngestHandler({authenticate,store:db,now:()=>1100});
  const req=token=>new Request('http://localhost/v2/batches',{method:'POST',headers:{'content-type':'application/json',authorization:token},body:raw});
  try {
   assert.equal((await makeHandler()(req('Bearer wrong'))).status,401); assert.equal(db.count(),0);
   const first=await makeHandler()(req('Bearer local-test-only')); assert.equal(first.status,200); const receipt=await first.json();
   db.close(); db=new DurableIngest(path);
   const retry=await makeHandler()(req('Bearer local-test-only')); assert.deepEqual(await retry.json(),receipt); assert.equal(db.count(),2);
-  f.ctx.revoked=true; assert.equal((await makeHandler()(req('Bearer local-test-only'))).status,400);
+  f.ctx.revoked=true; assert.equal((await makeHandler()(req('Bearer local-test-only'))).status,401);
  } finally {db.close();rmSync(dir,{recursive:true,force:true});}
 });

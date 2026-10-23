@@ -146,3 +146,7 @@ Added a Request/Response ingestion handler with mandatory injected server authen
 ## Composed delivery verification — 2026-10-23
 
 A signed synthetic batch now passes the HTTP Request/Response handler into SQLite; the same persisted receipt is returned after restart. Invalid credentials do not reach storage and revoked authorization prevents replay. All 28 local server tests pass. This remains an in-process transport test with injected authentication, not a real Supabase session or Android network round trip. ADB remains blocked by the Mac local-listener restriction. No new APK or physical verification in this continuation.
+
+## Authorization boundary continuation — 2026-10-23
+
+The prior GitHub Android workflow completed successfully. Added server authorization assembly that resolves a verified subject through an independent authoritative provider, validates enrollment/revocation/binding/grant lifetime, and limits authorization to session expiry. User-editable claims are ignored. The composed signed-batch HTTP/storage test now exercises this boundary. All 32 local server tests pass. Providers remain synthetic: real Supabase session verification, enrollment/grant storage, Android capture scope and transport remain outstanding. Physical tests deferred at user request; no phone interaction.
