@@ -9,3 +9,7 @@ The Android test creates an installation key in Keystore, enrolls it with the fi
 Local compilation of the dedicated test APK succeeded. Emulator/network execution is pending until the workflow completes. Normal APK trust separation is checked with a separate normal build. Physical tests remain deferred.
 
 The observation-time anchor now uses response receipt time, while expiry verification uses request-start time conservatively. This avoids adding network latency to reported observation timestamps and creating apparent future events.
+
+## First verified emulator result
+
+The API 35 HTTPS integration job in run 39986433364 completed successfully for commit a03d9830a1c0cdaa9c42c63d554c8bf13f41b8f6. This verifies the Android Keystore → real HTTPS → Guard backend account/assignment/grant/incident/receipt path with the synthetic CI Auth adapter, including duplicate-safe ingestion, untrusted-host rejection and cleared-session rejection. The subsequently added patrol coverage is a separate pending run and is not included in this first pass.
