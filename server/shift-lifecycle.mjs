@@ -31,6 +31,12 @@ export class ShiftLifecycle {
    this.db.prepare('INSERT INTO shift_transitions VALUES(?,?,?)').run(request.request_id,digest,JSON.stringify(receipt));this.db.exec('COMMIT');return receipt;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ snapshot(scope){
+  const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(scope.assignmentId);
+  if(!row)return {state:'not_started',clocked_in_at_ms:null,clocked_out_at_ms:null};
+  if(row.guard!==scope.guardId||row.vendor!==scope.vendorId||row.site!==scope.siteId||row.device!==scope.deviceThumbprint)throw Error('Shift scope mismatch');
+  return {state:row.clocked_out===null?'active':'ended',clocked_in_at_ms:row.clocked_in,clocked_out_at_ms:row.clocked_out};
+ }
  permitsCapture(scope,at,{live=false}={}){
   if(!scope||!Number.isSafeInteger(at)||at<=0)return false;
   const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(scope.assignmentId);

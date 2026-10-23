@@ -116,15 +116,77 @@ class GuardAccountActivity : Activity() {
     busy=false
     try{
      check(p!=null&&a!=null)
-     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it).getString("assignmentId")}.toSet())
-     status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} eligible assignment(s). No clock-in has been recorded."
+     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active"}.map{it.getString("assignmentId")}.toSet())
+     status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service."
      button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
       val item=rows.getJSONObject(i);check(item.getString("guardId")==guard&&item.getString("vendorId")==vendor)
-      button("${item.getString("siteId")} · ${item.getString("assignmentId")}"){verifyAssignment(item)}
+      if(a.has("server_time_ms")){item.put("status_server_time_ms",a.getLong("server_time_ms"));item.put("status_elapsed_ms",SystemClock.elapsedRealtime())}
+      button("${item.getString("siteId")} · ${item.getString("assignmentId")}"){assignmentOverview(item)}
      }
     }catch(_:Exception){status.text="Assignments could not be verified. Check connectivity or ask your administrator to review this phone's enrollment."}
     button("Refresh assignments"){loadAssignments()};button("Sign out"){startScreen()}
+   }
+  }.start()
+ }
+ private fun assignmentOverview(item:JSONObject){
+  captureGrant=null;captureBinding=null;captureAnchor=null
+  if(!item.has("shift_state")){verifyAssignment(item);return}
+  val scope=DispatchScope(GrantBinding(item.getString("guardId"),item.getString("siteId"),item.getString("assignmentId"),item.getString("deviceThumbprint"),item.getLong("revocationVersion")),item.getString("vendorId"))
+  val state=item.getJSONObject("shift_state").getString("state")
+  screen("SHIFT · ${item.getString("siteId")}","Service status: ${state.replace('_',' ')}. Attendance records remain local to the pilot service; payroll is not connected.")
+  try{
+   val pending=ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(scope,action)?.takeIf{!it.has("receipt")}}}
+   for(saved in pending){val request=saved.getJSONObject("request");button("Resolve pending ${request.getString("action")}"){submitShift(item,scope,request.getString("action"),request.getString("reason"))}}
+   if(pending.isEmpty()){
+    when(state){
+     "not_started"->if(item.getBoolean("canStart"))button("Clock in"){
+      AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->submitShift(item,scope,"start","")}.show()
+     }else status.text="This assignment is outside its clock-in window. Refresh assignments when it begins."
+     "active"->{
+      val now=Math.addExact(item.getLong("status_server_time_ms"),Math.subtractExact(SystemClock.elapsedRealtime(),item.getLong("status_elapsed_ms")))
+      if(now<item.getLong("endsAt")){
+       button("Continue shift"){verifyAssignment(item)}
+       button("Escalate · end shift early"){
+        val reason=EditText(this).apply{hint="Reason for leaving early";isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(2000))}
+        val dialog=AlertDialog.Builder(this).setTitle("End shift early").setMessage("Give a reason, then confirm. This records an early exit; it does not notify dispatch yet.").setView(reason).setNegativeButton("Cancel",null).setPositiveButton("Confirm early exit",null).create()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else{dialog.dismiss();submitShift(item,scope,"end",text)}}};dialog.show()
+       }
+      }else button("Clock out"){
+       AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->submitShift(item,scope,"end","")}.show()
+      }
+     }
+     "ended"->status.text="Shift ended. Saved records remain available for upload."
+     else->error("Unknown shift state")
+    }
+   }
+  }catch(_:Exception){status.text="Shift status could not be opened. Refresh assignments; saved confirmation requests remain preserved."}
+  button("Send my queued records"){sendScoped(scope.binding.guardId)}
+  button("Refresh assignments"){loadAssignments()};button("Sign out"){startScreen()}
+ }
+ private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
+  if(busy)return
+  val c=config?:return;val active=session?:return;val stamp=generation
+  busy=true;captureGrant=null;captureBinding=null;captureAnchor=null
+  status.text="Confirming shift $action with the service…"
+  Thread{
+   var success=false
+   try{
+    active.bearer()
+    ShiftTransitionStore(this).use{db->
+     val request=db.prepare(scope,action,reason)
+     val receipt=GuardAccountClient(c.endpoint).transition(active,c.deviceId,scope.binding.assignmentId,DeviceIdentity(this),c.audience,request)
+     db.accept(scope,action,receipt);success=true
+    }
+    if(action=="end")AuthorizedReminders(this).stop()
+   }catch(_:Exception){}
+   val accepted=success
+   runOnUiThread{
+    if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
+    busy=false
+    if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed by the pilot service. You are signed out; queued records remain preserved."}
+    else if(accepted)loadAssignments()
+    else{assignmentOverview(item);status.text="Confirmation is unresolved. Use Resolve pending to retry the same request; no new clock time will be substituted."}
    }
   }.start()
  }

@@ -79,12 +79,16 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
  try{
   assert.equal((await send(body('a','start'),'invalid')).status,401);
   assert.equal((await send(body('b','start'))).status,400);
+  const states=async()=>handler(new Request('https://guard.test/v1/assignments',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify(proof(k,db.challenge(identity,'phone',now)))}));
+  const before=await (await states()).json();assert.equal(before.assignments[0].shift_state.state,'not_started');assert.equal(before.server_time_ms,now);
   const startBody=body('a','start');const start=await send(startBody);assert.equal(start.status,200);const original=await start.json();
   assert.equal((await send(startBody)).status,400);
+  assert.equal((await (await states()).json()).assignments[0].shift_state.state,'active');
   now=999999;
   assert.deepEqual(await (await send(body('a','start'))).json(),original);
   const ordinary=db.list(identity,proof(k,db.challenge(identity,'phone',now)),now);assert.equal(ordinary.assignments.length,0);
   const ended=await send(body('a','end'));assert.equal(ended.status,200);assert.equal((await ended.json()).early_exit,false);
+  assert.equal((await (await states()).json()).assignments[0].shift_state.state,'ended');
   db.cancel('a');assert.equal((await send(body('a','end'))).status,400);
  }finally{shiftLifecycle.close();db.close();}
 });

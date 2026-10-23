@@ -56,7 +56,12 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
      allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?reconcileCheckIns(store,assignment,at):null});
    }
-   return reply(200,devices.list(identity,body,now()));
+   const at=now(),result=devices.list(identity,body,at,{historical:!!shiftLifecycle});
+   if(shiftLifecycle){
+    result.assignments=result.assignments.map(a=>({...a,canStart:at>=a.startsAt&&at<a.endsAt,shift_state:shiftLifecycle.snapshot({...identity,siteId:a.siteId,assignmentId:a.assignmentId,deviceThumbprint:a.deviceThumbprint})})).filter(a=>at<a.endsAt||a.shift_state.state!=='not_started');
+    result.server_time_ms=at;
+   }
+   return reply(200,result);
   }catch(error){return error instanceof DispatchCursorError?reply(409,{error:'cursor_reset_required'}):reply(400,{error:'device_request_rejected'});}
   finally{reader.releaseLock();}
  };
