@@ -3,6 +3,8 @@ import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
+import {PostgresAdministration} from '../postgres-administration.mjs';
+import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
@@ -35,7 +37,8 @@ const dashboardBindings=identityMode==='postgres'?new PostgresDashboardBindings(
 const dispatch=identityMode==='postgres'?new PostgresDispatchFeed(devices):new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=identityMode==='postgres'?new PostgresShiftLifecycle(devices):new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
 const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
-const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
+const admin=identityMode==='postgres'?new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})}):null;
+const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}
 catch(error){await opsRefresh.close();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;

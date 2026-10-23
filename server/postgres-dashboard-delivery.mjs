@@ -7,7 +7,7 @@ const keys=m=>[m.assignmentId,m.guardId,m.vendorId,m.siteId];
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
 export class PostgresDashboardBindings{
  constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;}
- async approve(value){
+ async approve(value,existingClient=null){
   const m=prepareDashboardMapping(value);
   return this.devices.transaction(async client=>{
    await client.query('SELECT pg_advisory_xact_lock(724910621355085::bigint)');
@@ -16,7 +16,7 @@ export class PostgresDashboardBindings{
    if(prior&&m.revision<=Number(prior.revision))throw Error('Mapping revision must advance');
    await client.query('INSERT INTO mercury_guard.dashboard_mapping_history(assignment_id,guard_id,vendor_id,site_id,revision,body) VALUES($1,$2,$3,$4,$5,$6)',[...keys(m),m.revision,m]);
    await client.query('INSERT INTO mercury_guard.dashboard_bindings VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(assignment_id,guard_id,vendor_id,site_id) DO UPDATE SET dashboard_shift_id=excluded.dashboard_shift_id,destination=excluded.destination,revision=excluded.revision,active=excluded.active',[...keys(m),m.dashboardShiftId,m.destination,m.revision,m.active]);
-  });
+  },existingClient);
  }
  async get(scope){return mapping((await this.pool.query('SELECT * FROM mercury_guard.dashboard_bindings WHERE assignment_id=$1 AND guard_id=$2 AND vendor_id=$3 AND site_id=$4',keys(scope))).rows[0]);}
  close(){}

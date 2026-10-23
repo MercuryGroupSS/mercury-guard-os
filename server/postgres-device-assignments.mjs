@@ -9,15 +9,15 @@ const assignmentRow=r=>({assignmentId:r.assignment_id,guardId:r.guard_id,vendorI
 const deviceSelect='SELECT d.*,s.active AS site_active FROM mercury_guard.devices d LEFT JOIN mercury_guard.sites s ON s.site_id=d.site_id';
 export class PostgresDeviceAssignments{
  constructor(pool,audience='mercury-local'){if(typeof pool?.connect!=='function'||typeof pool?.query!=='function'||!/^[A-Za-z0-9._:/-]{1,128}$/.test(audience))throw Error('Pool and audience required');this.pool=pool;this.audience=audience;}
- async transaction(fn){const client=await this.pool.connect();try{await client.query('BEGIN');const result=await fn(client);await client.query('COMMIT');return result;}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}
+ async transaction(fn,existingClient=null){if(existingClient)return fn(existingClient);const client=await this.pool.connect();try{await client.query('BEGIN');const result=await fn(client);await client.query('COMMIT');return result;}catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}}
  async device(deviceId){return deviceRow((await this.pool.query(deviceSelect+' WHERE d.device_id=$1',[deviceId])).rows[0]);}
  async deviceByThumbprint(thumbprint){return deviceRow((await this.pool.query(deviceSelect+' WHERE d.thumbprint=$1',[thumbprint])).rows[0]);}
- async enroll(d){
+ async enroll(d,client=this.pool){
   if(!id(d?.deviceId)||d.active!==true||d.revoked!==false||!(d.mode==='site'&&id(d.siteId)&&d.guardId==null||d.mode==='personal'&&id(d.guardId)&&d.siteId==null))throw Error('Approved enrollment required');
   const key=parseEnrollmentKey(d.publicKeySpki);
-  await this.pool.query('INSERT INTO mercury_guard.devices(device_id,mode,site_id,guard_id,thumbprint,public_key_spki,active,revoked) VALUES($1,$2,$3,$4,$5,$6,true,false)',[d.deviceId,d.mode,d.mode==='site'?d.siteId:null,d.mode==='personal'?d.guardId:null,key.thumbprint,d.publicKeySpki]);
+  await client.query('INSERT INTO mercury_guard.devices(device_id,mode,site_id,guard_id,thumbprint,public_key_spki,active,revoked) VALUES($1,$2,$3,$4,$5,$6,true,false)',[d.deviceId,d.mode,d.mode==='site'?d.siteId:null,d.mode==='personal'?d.guardId:null,key.thumbprint,d.publicKeySpki]);
  }
- async revoke(deviceId){if((await this.pool.query('UPDATE mercury_guard.devices SET revoked=true,revocation_version=revocation_version+1 WHERE device_id=$1',[deviceId])).rowCount!==1)throw Error('Unknown device');}
+ async revoke(deviceId,client=this.pool){if((await client.query('UPDATE mercury_guard.devices SET revoked=true,revocation_version=revocation_version+1 WHERE device_id=$1',[deviceId])).rowCount!==1)throw Error('Unknown device');}
  async assign(a,client=this.pool){
   if(!a||['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt<=0||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const route=a.patrolRoute?patrolRoute(a.patrolRoute):null,policy=a.checkInPolicy?checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt):null;

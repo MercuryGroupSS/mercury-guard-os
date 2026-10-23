@@ -8,7 +8,7 @@ export class PostgresOpsAssignmentSync{
   const key=createHash('sha256').update('mercury-ops-sync:'+source).digest().readBigInt64BE().toString();
   await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[key]);
  }
- async revokeBinding(binding){
+ async revokeBinding(binding,existingClient=null){
   if(!binding||!['opsShiftId','guardId','vendorId','siteId'].every(k=>id(binding[k]))||binding.active!==false||!Number.isSafeInteger(binding.revision)||binding.revision<1)throw Error('Disabled approved binding required');
   return this.devices.transaction(async client=>{
    await this.lock(client,binding.opsShiftId);
@@ -22,7 +22,7 @@ export class PostgresOpsAssignmentSync{
    await client.query('INSERT INTO mercury_guard.ops_binding_revocations VALUES($1,$2) ON CONFLICT(source_id) DO UPDATE SET revision=excluded.revision',[binding.opsShiftId,binding.revision]);
    await client.query('INSERT INTO mercury_guard.ops_assignment_history(source_id,source_at,binding_revision,assignment_id,previous_assignment_id,status) VALUES($1,$2,$3,$4,$5,$6)',[binding.opsShiftId,previous?.source_at??0,binding.revision,previous?.assignment_id??null,previous?.assignment_id??null,'binding_revoked']);
    return {status:'binding_revoked'};
-  });
+  },existingClient);
  }
  async apply(shift,binding){
   const {sourceAt,active,material,sourceDigest,bindingDigest,materialHash,digest}=prepareOpsSync(shift,binding);

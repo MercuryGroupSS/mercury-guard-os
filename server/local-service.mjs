@@ -1,3 +1,4 @@
+import {createAdminHandler} from './admin-handler.mjs';
 import {createCheckInWorker} from './check-in-worker.mjs';
 import {createEvidenceHandler} from './evidence-handler.mjs';
 import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
@@ -13,7 +14,7 @@ import {createAuthorization} from './authorization.mjs';
 import {createSupabaseSessionVerifier} from './supabase-session.mjs';
 import {createSupabaseAuthority} from './supabase-authority.mjs';
 // Loopback-only pilot composition; callers provide credential config privately.
-export function createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle}) {
+export function createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin}) {
  if(config.API_URL!=='http://127.0.0.1:55321')throw Error('Local Supabase required');
  const authority=createSupabaseAuthority({url:config.API_URL,serviceKey:config.SERVICE_ROLE_KEY,allowLocal:true});
  const resolve=directory?createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)}):null;
@@ -31,12 +32,13 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
  const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const evidence=directory&&devices&&grantIssuer?createEvidenceHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const checkIns=devices&&store?createCheckInWorker({store,devices,shiftLifecycle}):null;
+ const administration=admin?createAdminHandler({admin,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true}),passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const server=createServer(async(req,res)=>{
   try {
    const request=new Request(new URL(req.url,'http://127.0.0.1'),{method:req.method,headers:req.headers,
     ...(['GET','HEAD'].includes(req.method)?{}:{body:Readable.toWeb(req),duplex:'half'})});
    const path=new URL(request.url).pathname;
-   const response=await (evidence&&path.startsWith('/v1/evidence/')?evidence(request):login&&path==='/v1/session/login'?login(request):profile&&path==='/v1/me'?profile(request):assignments&&['/v1/device-challenge','/v1/assignments','/v1/shift-grant','/v1/dispatch','/v1/shift-transition'].includes(path)?assignments(request):handler(request));
+   const response=await (administration&&path.startsWith('/v1/admin/')?administration(request):evidence&&path.startsWith('/v1/evidence/')?evidence(request):login&&path==='/v1/session/login'?login(request):profile&&path==='/v1/me'?profile(request):assignments&&['/v1/device-challenge','/v1/assignments','/v1/shift-grant','/v1/dispatch','/v1/shift-transition'].includes(path)?assignments(request):handler(request));
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
   }catch{res.writeHead(500,{'content-type':'application/json','cache-control':'no-store'});res.end('{"error":"request_failed"}');}
  });

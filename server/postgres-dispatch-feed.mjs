@@ -3,7 +3,7 @@ import {scopeKey,prepareDispatchVersion,stable} from './dispatch-input.mjs';
 import {DispatchCursorError} from './dispatch-feed.mjs';
 export class PostgresDispatchFeed{
  constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;}
- async publish(scope,value){
+ async publish(scope,value,existingClient=null){
   const {key,body}=prepareDispatchVersion(scope,value);
   return this.devices.transaction(async client=>{
    await client.query('SELECT pg_advisory_xact_lock(724910621355084::bigint)');
@@ -13,7 +13,7 @@ export class PostgresDispatchFeed{
    const last=Number((await client.query('SELECT COALESCE(MAX(version),0) version FROM mercury_guard.dispatch_changes WHERE scope=$1 AND id=$2',[key,value.message_id])).rows[0].version);
    if(value.version!==last+1)throw Error('Message versions must advance one step');
    await client.query('INSERT INTO mercury_guard.dispatch_changes(scope,id,version,body,guard_id,vendor_id,site_id,assignment_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[key,value.message_id,value.version,body,scope.guardId,scope.vendorId,scope.siteId,scope.assignmentId]);
-  });
+  },existingClient);
  }
  async read(scope,cursor,now=Date.now()){
   const key=scopeKey(scope);
