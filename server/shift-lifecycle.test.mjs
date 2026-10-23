@@ -21,11 +21,11 @@ test('scheduled end is an explicit transition, with durable exact replay',()=>{
 });
 test('early exit needs confirmation and reason; denial leaves active shift intact',()=>{
  const ledger=new ShiftLifecycle(':memory:');try{
-  for(const now of [999,5000])assert.throws(()=>ledger.transition({...context,request:request('start'),now}));
+  for(const now of [999,5000])assert.throws(()=>ledger.transition({...context,request:request('start','invalid-'+now),now}));
   ledger.transition({...context,request:request('start'),now:1000});
   for(const req of [request('end'),request('end','end','  '),{...request('end','end','Test reason'),confirmed:false}])assert.throws(()=>ledger.transition({...context,request:req,now:2000}));
   assert.equal(ledger.db.prepare('SELECT clocked_out FROM shift_sessions').get().clocked_out,null);
-  const end=ledger.transition({...context,request:request('end','end','Synthetic early exit'),now:2000});assert.equal(end.early_exit,true);assert.equal(end.reason,'Synthetic early exit');
+  const end=ledger.transition({...context,request:request('end','valid-end','Synthetic early exit'),now:2000});assert.equal(end.early_exit,true);assert.equal(end.reason,'Synthetic early exit');
  }finally{ledger.close();}
 });
 test('shared vendor grants no shared identity or simultaneous phone shift',()=>{
@@ -49,4 +49,18 @@ test('capture authority closes at confirmed end but retains historical observati
   ledger.transition({...context,request:request('end','end','Synthetic reason'),now:3000});
   assert.equal(ledger.permitsCapture(scope,2999),true);assert.equal(ledger.permitsCapture(scope,3000),false);assert.equal(ledger.permitsCapture(scope,2999,{live:true}),false);
  }finally{ledger.close();}
+});
+
+
+test('definitive rejection survives restart and cannot later execute the same intent',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'shift-rejection-')),path=join(dir,'state.db');let ledger=new ShiftLifecycle(path);
+ try{
+  let receipt;try{ledger.transition({...context,request:request('start'),now:999});assert.fail('Early start accepted');}catch(e){assert.equal(e.receipt?.code,'shift_cannot_start');receipt=e.receipt;}
+  ledger.close();ledger=new ShiftLifecycle(path);
+  try{ledger.transition({...context,request:request('start'),now:2000});assert.fail('Rejected intent executed');}catch(e){assert.deepEqual(e.receipt,receipt);}
+  assert.equal(ledger.db.prepare('SELECT count(*) AS n FROM shift_sessions').get().n,0);
+  assert.throws(()=>ledger.transition({...context,request:{...request('start'),reason:'changed'},now:2000}));
+  const fresh=ledger.transition({...context,request:request('start','new-confirmation'),now:2000});assert.equal(fresh.clocked_in_at_ms,2000);
+  assert.equal(ledger.dashboardAfter(0,10).length,1);
+ }finally{ledger.close();rmSync(dir,{recursive:true,force:true});}
 });

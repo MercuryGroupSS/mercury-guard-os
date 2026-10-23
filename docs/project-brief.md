@@ -284,3 +284,11 @@ Local APK/test APK build, JVM tests and lint pass. Added instrumentation checks 
 The exact v0.28 source 53fbbaa passed all jobs in run 39999653726: build, API 28, API 35 and HTTPS. The saved Preview APK checksum remains unchanged. An additive CI verification supplement and cumulative-brief update record this result without rewriting the immutable source/review bundles. This is emulator/source verification, not physical acceptance or live provisioning.
 
 Subsequent source now reuses the existing Mercury One particle-face renderer in configured guard sign-in. The decorative visual is separate from the accessible biometric button and never represents facial recognition. Motion stops when leaving the screen, pausing or destroying the activity, and biometric cancellation resets the animation. Repeated taps cannot open concurrent biometric prompts. The existing reduced-motion renderer remains in use. New configured-screen visual acceptance is still pending and this later source is not included in the saved v0.28 APK.
+
+## Definitive shift rejection recovery
+
+Business-rule refusals now have immutable, scope-bound service receipts: an early/invalid start, active-phone/guard conflict, invalid end, or missing early-exit reason cannot remain an ambiguous network outcome. A refused request ID cannot later execute, even after restart or after its schedule becomes valid. Changing the same ID's content is rejected. Authentication, proof, transport and malformed-response failures still do not become a definitive business rejection.
+
+Android accepts only the exact bounded rejection receipt returned for its pending request and scope. It retains encrypted rejection history, migrates the shift store from schema 1 to 2 without dropping pending intents, and creates a new ID only after another explicit confirmation. Success receipts cannot overwrite rejections and stale rejection replies cannot clear a newer intent. The UI distinguishes a declined request from an unresolved network request and does not sign out or stop reminders for a rejected clock-out.
+
+108 server tests pass, including persisted rejection replay and the actual HTTP response. Local Android build/JVM/lint pass; new migration/history and HTTPS early-exit correction assertions compile and await CI execution. Physical testing and live operational integration remain incomplete.

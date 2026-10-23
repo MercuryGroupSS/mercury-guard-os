@@ -67,13 +67,13 @@ class GuardAccountClient(endpoint: String) {
     connection.doOutput = true; connection.setRequestProperty("Content-Type","application/json"); connection.setFixedLengthStreamingMode(bytes.size)
     connection.outputStream.use { it.write(bytes) }
    }
-   val status=connection.responseCode;if(status!=200)throw HttpFailure(status)
-   val raw = connection.inputStream.use { input ->
+   val status=connection.responseCode;val rejectedTransition=status==409&&path=="/v1/shift-transition";if(status!=200&&!rejectedTransition)throw HttpFailure(status)
+   val raw = (if(rejectedTransition)connection.errorStream?:error("Missing rejection receipt") else connection.inputStream).use { input ->
     val out = java.io.ByteArrayOutputStream(); val buffer = ByteArray(4096)
     while(true) { val count = input.read(buffer); if(count < 0) break; check(out.size()+count <= 262144); out.write(buffer,0,count) }
     out.toString("UTF-8")
    }
-   return JSONObject(raw)
+   return JSONObject(raw).also{if(rejectedTransition)require(it.optString("status")=="shift_rejected_local_only")}
   } finally { connection.disconnect() }
  }
  private fun integer(value: JSONObject, name: String): Long {

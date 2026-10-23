@@ -164,7 +164,7 @@ class GuardAccountActivity : Activity() {
   val state=item.getJSONObject("shift_state").getString("state")
   screen("SHIFT · ${item.getString("siteId")}","Service status: ${state.replace('_',' ')}. Attendance records remain local to the pilot service; payroll is not connected.")
   try{
-   val pending=ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(scope,action)?.takeIf{!it.has("receipt")}}}
+   val pending=ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(scope,action)?.takeIf{!it.has("receipt")&&!it.has("rejection")}}}
    for(saved in pending){val request=saved.getJSONObject("request");button("Resolve pending ${request.getString("action")}"){submitShift(item,scope,request.getString("action"),request.getString("reason"))}}
    if(pending.isEmpty()){
     when(state){
@@ -198,22 +198,23 @@ class GuardAccountActivity : Activity() {
   busy=true;captureGrant=null;captureBinding=null;captureAnchor=null
   status.text="Confirming shift $action with the service…"
   Thread{
-   var success=false
+   var success=false;var definitiveRejection=false
    try{
     active.bearer()
     ShiftTransitionStore(this).use{db->
      val request=db.prepare(scope,action,reason)
      val receipt=GuardAccountClient(c.endpoint).transition(active,c.deviceId,scope.binding.assignmentId,DeviceIdentity(this),c.audience,request)
-     db.accept(scope,action,receipt);success=true
+     success=db.accept(scope,action,receipt);definitiveRejection=!success
     }
-    if(action=="end")AuthorizedReminders(this).stop()
+    if(success&&action=="end")AuthorizedReminders(this).stop()
    }catch(_:Exception){}
-   val accepted=success
+   val accepted=success;val declined=definitiveRejection
    runOnUiThread{
     if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
     busy=false
     if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed by the pilot service. You are signed out; queued records remain preserved."}
     else if(accepted)loadAssignments()
+    else if(declined){assignmentOverview(item);status.text="The service declined this request. No clock time was recorded. Refresh assignments before confirming a corrected request."}
     else{assignmentOverview(item);status.text="Confirmation is unresolved. Use Resolve pending to retry the same request; no new clock time will be substituted."}
    }
   }.start()

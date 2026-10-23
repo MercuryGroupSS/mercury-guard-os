@@ -115,6 +115,9 @@ class HttpsAccountIntegrationTest {
    assertEquals(0,delivery.getInt("total_deadlines_missed"))
    val endName="https-end-${UUID.randomUUID()}.db"
    try{ShiftTransitionStore(context,endName).use{pending->
+    val invalid=pending.prepare(shiftScope,"end","")
+    val refusal=client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",invalid)
+    assertFalse(pending.accept(shiftScope,"end",refusal));assertEquals("early_exit_reason_required",refusal.getString("code"))
     val intent=pending.prepare(shiftScope,"end","Synthetic integration early exit")
     val ended=client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",intent)
     pending.accept(shiftScope,"end",ended);assertTrue(ended.getBoolean("early_exit"))

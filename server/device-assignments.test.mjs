@@ -84,6 +84,9 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
   const startBody=body('a','start');const start=await send(startBody);assert.equal(start.status,200);const original=await start.json();
   assert.equal((await send(startBody)).status,400);
   assert.equal((await (await states()).json()).assignments[0].shift_state.state,'active');
+  const declined=await send(body('a','end','invalid-end'));assert.equal(declined.status,409);const rejection=await declined.json();assert.equal(rejection.code,'early_exit_reason_required');
+  assert.deepEqual(await (await send(body('a','end','invalid-end'))).json(),rejection);
+
   now=999999;
   assert.deepEqual(await (await send(body('a','start'))).json(),original);
   const ordinary=db.list(identity,proof(k,db.challenge(identity,'phone',now)),now);assert.equal(ordinary.assignments.length,0);

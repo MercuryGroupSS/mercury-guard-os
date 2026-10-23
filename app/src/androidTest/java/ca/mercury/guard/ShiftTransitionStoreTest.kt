@@ -26,4 +26,20 @@ class ShiftTransitionStoreTest{
    ShiftTransitionStore(context,name).use{assertTrue(it.saved(scope,"start")!!.has("receipt"));assertFalse(it.saved(scope,"end")!!.has("receipt"))}
   }finally{context.deleteDatabase(name)}
  }
+ @Test fun rejectedIntentIsArchivedBeforeNewConfirmationAndOldSchemaMigrates(){
+  val name="shift-rejected-${UUID.randomUUID()}.db"
+  try{
+   val first=ShiftTransitionStore(context,name).use{db->val req=db.prepare(scope,"start","");db.writableDatabase.execSQL("DROP TABLE rejected_history");db.writableDatabase.version=1;req}
+   ShiftTransitionStore(context,name).use{db->
+    val rejection=JSONObject().put("request_id",first.getString("request_id")).put("scope",scope.json().apply{remove("revocation_version")}).put("action","start").put("code","shift_cannot_start").put("server_time_ms",900).put("status","shift_rejected_local_only")
+    assertFalse(db.accept(scope,"start",rejection));assertFalse(db.accept(scope,"start",rejection))
+    rejected{db.accept(scope,"start",receipt(first))}
+    val next=db.prepare(scope,"start","");assertNotEquals(first.getString("request_id"),next.getString("request_id"))
+    assertFalse(db.saved(scope,"start")!!.has("rejection"))
+    rejected{db.accept(scope,"start",rejection)}
+    db.readableDatabase.rawQuery("SELECT count(*) FROM rejected_history",null).use{assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))}
+    assertTrue(db.accept(scope,"start",receipt(next)))
+   }
+  }finally{context.deleteDatabase(name)}
+ }
 }

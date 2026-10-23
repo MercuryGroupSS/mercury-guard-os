@@ -1,3 +1,4 @@
+import {ShiftTransitionRejected} from './shift-lifecycle.mjs';
 import {DispatchCursorError} from './dispatch-feed.mjs';
 import {reconcileCheckIns} from './check-in-status.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
@@ -62,7 +63,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     result.server_time_ms=at;
    }
    return reply(200,result);
-  }catch(error){return error instanceof DispatchCursorError?reply(409,{error:'cursor_reset_required'}):reply(400,{error:'device_request_rejected'});}
+  }catch(error){if(error instanceof ShiftTransitionRejected)return reply(409,error.receipt);return error instanceof DispatchCursorError?reply(409,{error:'cursor_reset_required'}):reply(400,{error:'device_request_rejected'});}
   finally{reader.releaseLock();}
  };
 }
