@@ -1,8 +1,6 @@
 import {DatabaseSync} from 'node:sqlite';
 import {createHash,randomUUID} from 'node:crypto';
-const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
-const fields=['guardId','vendorId','siteId','assignmentId'];
-function scopeKey(scope){if(!scope||fields.some(k=>!stable(scope[k])))throw Error('Trusted message scope required');return createHash('sha256').update(JSON.stringify(fields.map(k=>scope[k]))).digest('hex');}
+import {scopeKey,prepareDispatchVersion,stable} from './dispatch-input.mjs';
 export class DispatchCursorError extends Error {}
 export class DispatchFeed {
  constructor(path){this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -10,10 +8,7 @@ export class DispatchFeed {
  CREATE INDEX IF NOT EXISTS dispatch_latest ON dispatch_changes(scope,id,sequence);
  CREATE TABLE IF NOT EXISTS dispatch_cursors(token TEXT PRIMARY KEY,scope TEXT NOT NULL,sequence INTEGER NOT NULL,expires INTEGER NOT NULL,UNIQUE(scope,sequence));`);}
  publish(scope,value){
-  const key=scopeKey(scope);
-  if(!value||!stable(value.message_id)||!Number.isSafeInteger(value.version)||value.version<1||!['active','retracted'].includes(value.state)||!Number.isSafeInteger(value.issued_at)||value.issued_at<=0||value.due_at!==null&&(!Number.isSafeInteger(value.due_at)||value.due_at<value.issued_at))throw Error('Invalid dispatch version');
-  if(typeof value.title!=='string'||typeof value.body!=='string'||value.title.length>200||value.body.length>8000||value.state==='active'&&(!value.title.trim()||!value.body.trim())||value.state==='retracted'&&(value.title!==''||value.body!==''))throw Error('Invalid dispatch content');
-  const record=Object.fromEntries(['message_id','version','state','title','body','issued_at','due_at'].map(k=>[k,value[k]])),body=JSON.stringify(record);
+  const {key,body}=prepareDispatchVersion(scope,value);
   this.db.exec('BEGIN IMMEDIATE');try{
    const old=this.db.prepare('SELECT body FROM dispatch_changes WHERE scope=? AND id=? AND version=?').get(key,value.message_id,value.version);
    if(old){if(old.body!==body)throw Error('Message version content conflict');this.db.exec('COMMIT');return;}

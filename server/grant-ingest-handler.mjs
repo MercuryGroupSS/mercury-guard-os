@@ -39,7 +39,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
     const saved=await grantIssuer.lookup(event.data.capture_grant_id),g=saved?.claims;
     if(!g||saved.subject!==identity.subject||saved.vendorId!==identity.vendorId||g.issuer!==c.issuer||g.audience!==c.audience||g.guard_id!==c.guard_id||g.site_id!==c.site_id||g.assignment_id!==c.assignment_id||g.device_thumbprint!==c.device_thumbprint||g.revocation_version!==c.revocation_version||!g.actions.includes(required[event.kind])||event.at<g.not_before_ms||event.at>=g.expires_at_ms||event.at>at)throw Error('Capture grant mismatch');
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id,deviceThumbprint:c.device_thumbprint},event.at))throw Error('Observation outside confirmed shift');
-    if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
+    if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');await dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
     if(event.kind==='photo_evidence')photoMetadata(event.data);
     if(event.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy.patrolRoute,event.data))throw Error('Checkpoint not authorized');
    }
