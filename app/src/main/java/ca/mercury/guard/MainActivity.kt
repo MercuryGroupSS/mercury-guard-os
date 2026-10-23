@@ -109,7 +109,7 @@ class MainActivity : Activity() {
   val pending = localPrefs.getString("camera_pending", null)
   if (pending != null && !shiftActive) {
    File(File(cacheDir, "capture"), pending).takeIf { it.parentFile == File(cacheDir, "capture") }?.delete()
-   localPrefs.edit().remove("camera_pending").commit()
+   localPrefs.edit().remove("camera_pending").remove("camera_session").remove("duty_camera_id").commit()
   }
   File(cacheDir, "capture").listFiles()?.filter { it.name != pending && System.currentTimeMillis() - it.lastModified() > 86400000L }?.forEach { it.delete() }
  }
@@ -612,10 +612,10 @@ class MainActivity : Activity() {
    addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
   }
   try {
-   localPrefs.edit().putString("camera_pending", file.name).commit()
+   check(localPrefs.edit().putString("camera_pending", file.name).putString("camera_session",session.identity()).commit())
    startActivityForResult(intent, 202)
   } catch (_: Exception) {
-   localPrefs.edit().remove("camera_pending").commit(); file.delete()
+   localPrefs.edit().remove("camera_pending").remove("camera_session").remove("duty_camera_id").commit(); file.delete()
    revokeUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
    Toast.makeText(this, "No available camera could open. Your incident notes still work offline.", Toast.LENGTH_LONG).show()
   }
@@ -624,30 +624,29 @@ class MainActivity : Activity() {
   super.onActivityResult(requestCode, resultCode, data)
   if (requestCode != 202) return
   val name = localPrefs.getString("camera_pending", null) ?: return
-  localPrefs.edit().remove("camera_pending").commit()
-  if (!name.matches(Regex("[a-f0-9-]{36}\\.jpg"))) return
+  val captureSession = localPrefs.getString("camera_session", null)
+  val dutyId = localPrefs.getString("duty_camera_id",null)
+  localPrefs.edit().remove("camera_pending").remove("camera_session").remove("duty_camera_id").commit()
+  val valid = try { name.endsWith(".jpg") && UUID.fromString(name.removeSuffix(".jpg")).toString()+".jpg" == name } catch (_: Exception) { false }
+  if (!valid) return
   val file = File(File(cacheDir, "capture"), name)
   val uri = FileProvider.getUriForFile(this, "$packageName.files", file)
   var retainedId: String? = null
+  var committed = false
   try {
-   if (resultCode == RESULT_OK && shiftActive) {
+   if (resultCode == RESULT_OK && shiftActive && captureSession == session.identity()) {
     val metadata = EvidenceStore(this).savePhoto(file)
     retainedId = metadata.getString("evidence_id")
-    if (!log("photo_evidence", metadata)) EvidenceStore(this).remove(metadata.getString("evidence_id"))
-    else {
-     val id = localPrefs.getString("duty_camera_id",null)
-     val p = duty.pending(session.identity()).firstOrNull { it.id == id }
-     if (p != null && duty.has("duty_biometric",p.id) && duty.has("duty_gps",p.id)) {
-      store.recordOnce("duty_photo",p.id,metadata); duty.complete(p)
-     }
-    }
-   } else Toast.makeText(this, if (!shiftActive) "Shift ended; photo was not retained." else "Photo cancelled.", Toast.LENGTH_SHORT).show()
+    val complete = store.recordRetainedPhoto(metadata,captureSession,dutyId)
+    committed = true
+    Toast.makeText(this,if (complete) "Photo saved · check-in complete" else "Recorded: photo_evidence",Toast.LENGTH_LONG).show()
+   } else Toast.makeText(this, if (!shiftActive || captureSession != session.identity()) "Shift changed or ended; photo was not retained." else "Photo cancelled.", Toast.LENGTH_SHORT).show()
   } catch (_: Exception) {
-   retainedId?.let { EvidenceStore(this).remove(it) }
+   if (!committed) retainedId?.let { EvidenceStore(this).remove(it) }
    Toast.makeText(this, "Photo could not be saved. Retake it while on shift.", Toast.LENGTH_LONG).show()
   } finally {
    revokeUriPermission(uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
-   file.delete(); localPrefs.edit().remove("duty_camera_id").commit()
+   file.delete()
   }
   showDashboard()
  }

@@ -90,6 +90,7 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
  }
  fun record(kind: String, body: JSONObject = JSONObject()) {
   writableDatabase.insertOrThrow("event", null, protectedValues(System.currentTimeMillis(), kind, body))
+  cachedEventMax = -1L // A rolled-back row ID can be reused with different event data.
  }
  /** Manual demo checkpoints may be recorded in any order, once per session. */
  fun completedCheckpoints(sessionId: String): Set<Int> {
@@ -144,6 +145,25 @@ class GuardStore(context: Context, databaseName: String = "mercury_demo.db") : S
   return recordOnce("patrol_point_completed", "$sessionId:$index", JSONObject()
    .put("session", sessionId).put("index", index).put("checkpoint", DemoRoute.checkpoints[index])
    .put("completed_at", System.currentTimeMillis()).put("gps", gps).put("presence_verified", false))
+ }
+ /** File retention happens first; photo audit/link/completion then commit or roll back together.
+  * Caller removes the retained encrypted file only when this transaction fails. */
+ fun recordRetainedPhoto(metadata: JSONObject, sessionId: String, dutyId: String?): Boolean {
+  require(sessionId.isNotBlank())
+  val db = writableDatabase
+  db.beginTransaction()
+  try {
+   record("photo_evidence", JSONObject(metadata.toString()).put("capture_session",sessionId))
+   val duty = DutyPrompts(this)
+   val prompt = duty.pending(sessionId).firstOrNull { it.id == dutyId && it.kind == "check_in" }
+   var completed = false
+   if (prompt != null && duty.has("duty_biometric",prompt.id) && duty.has("duty_gps",prompt.id)) {
+    recordOnce("duty_photo",prompt.id,JSONObject(metadata.toString()))
+    completed = duty.complete(prompt)
+   }
+   db.setTransactionSuccessful()
+   return completed
+  } finally { db.endTransaction() }
  }
  /** Transport-neutral outbox only. No network caller or simulated delivery acknowledgement. */
  fun pendingCount(): Int = readableDatabase.rawQuery("SELECT count(*) FROM event WHERE synced=0", null).use { it.moveToFirst(); it.getInt(0) }

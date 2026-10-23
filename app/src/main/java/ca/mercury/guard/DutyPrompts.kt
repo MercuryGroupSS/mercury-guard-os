@@ -39,8 +39,11 @@ class DutyPrompts(private val store: GuardStore) {
   }
   return prompts.filter { it.id !in complete && it.stage(now) != "missed" }.sortedBy { it.due }
  }
- fun complete(p: DutyPrompt): Boolean {
-  if (has("duty_missed",p.id) || p.stage() == "missed" || !has("duty_biometric",p.id)) return false
+ fun complete(p: DutyPrompt, now: Long = SystemClock.elapsedRealtime()): Boolean {
+  val saved = store.eventsOf("duty_due").firstOrNull { it.optString("event_key") == p.id } ?: return false
+  if (saved.optString("kind") != p.kind || saved.optLong("due_elapsed",-1) != p.due ||
+      p.kind !in setOf("readiness","check_in") || p.stage(now) in setOf("scheduled","missed") ||
+      has("duty_missed",p.id) || !has("duty_biometric",p.id)) return false
   if (p.kind == "check_in" && (!has("duty_gps",p.id) || !has("duty_photo",p.id))) return false
   return store.recordOnce("duty_completed",p.id,JSONObject().put("kind",p.kind).put("completed_at",System.currentTimeMillis()))
  }
