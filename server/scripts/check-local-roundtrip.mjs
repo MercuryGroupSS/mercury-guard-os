@@ -1,3 +1,4 @@
+import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
 import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
@@ -48,7 +49,8 @@ try {
  const grantIssuer=new ShiftGrantIssuer({path:join(dir,'grants.sqlite'),privateKey:issuerKeys.privateKey,keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
  devices.enroll({deviceId:'synthetic-phone',mode:'site',siteId:'synthetic-site',active:true,revoked:false,publicKeySpki:authority.public_key_spki});
  devices.assign({assignmentId:'synthetic-shift',guardId:'synthetic-guard',vendorId:'synthetic-vendor',siteId:'synthetic-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000});
- let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices,grantIssuer}),started=false;
+ let shiftLifecycle=new ShiftLifecycle(join(dir,'shifts.sqlite'));
+ let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices,grantIssuer,shiftLifecycle}),started=false;
  try {
   let origin=await service.start();started=true;
   const loginResponse=await fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:'synthetic-guard',password})});
@@ -72,6 +74,17 @@ try {
   const assigned=await assignmentResponse.json();if(assigned.assignments.length!==1||assigned.assignments[0].assignmentId!=='synthetic-shift')throw Error('Assignment scope incorrect');
   if((await post('/v1/assignments',deviceProof)).status!==400)throw Error('Device proof replay accepted');
   console.log('PASS: enrolled device proof + scoped assignment delivery + replay denial');
+  const freshProof=async()=>{
+   const challenge=await post('/v1/device-challenge',{device_id:'synthetic-phone'});if(challenge.status!==200)throw Error('Challenge unavailable');const c=await challenge.json();
+   return {...deviceProof,request_id:c.request_id,challenge:c.challenge,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${thumbprint}`),privateKey).toString('base64url')};
+  };
+  const transition=async request=>post('/v1/shift-transition',{assignment_id:'synthetic-shift',transition:request,proof:await freshProof()});
+  if(assigned.assignments[0].shift_state.state!=='not_started')throw Error('Unexpected shift state');
+  if((await post('/v1/shift-grant',{assignment_id:'synthetic-shift',proof:await freshProof()})).status!==400)throw Error('Unstarted shift received grant');
+  const startRequest={request_id:randomUUID(),action:'start',reason:'',confirmed:true};
+  const startedResponse=await transition(startRequest);if(startedResponse.status!==200)throw Error('Clock-in failed');const startReceipt=await startedResponse.json();
+  if(JSON.stringify(await (await transition(startRequest)).json())!==JSON.stringify(startReceipt))throw Error('Clock-in retry changed time');
+  console.log('PASS: confirmed clock-in, exact retry and pre-start grant denial');
   const grantChallenge=await post('/v1/device-challenge',{device_id:'synthetic-phone'});
   const gc=await grantChallenge.json();
   const gp={...deviceProof,request_id:gc.request_id,challenge:gc.challenge,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${gc.audience}\n${gc.request_id}\n${gc.challenge}\n${thumbprint}`),privateKey).toString('base64url')};
@@ -94,12 +107,20 @@ try {
   directory.setGuardActive('synthetic-guard',false);if((await send()).status!==401)throw Error('Disabled guard uploaded');
   directory.setGuardActive('synthetic-guard',true);
   console.log('PASS: disabled roster identity denies batch retries');
-  await service.stop();started=false;store.close();store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices,grantIssuer});origin=await service.start();started=true;
+  await service.stop();started=false;store.close();shiftLifecycle.close();shiftLifecycle=new ShiftLifecycle(join(dir,'shifts.sqlite'));store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices,grantIssuer,shiftLifecycle});origin=await service.start();started=true;
   response=await send();if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Restart retry failed');
+  if(JSON.stringify(await (await transition(startRequest)).json())!==JSON.stringify(startReceipt))throw Error('Restart lost clock-in receipt');
+  const endRequest={request_id:randomUUID(),action:'end',reason:'Synthetic smoke test complete',confirmed:true};
+  const ended=await transition(endRequest);if(ended.status!==200)throw Error('Confirmed early exit failed');const endReceipt=await ended.json();
+  if(!endReceipt.early_exit||endReceipt.clocked_out_at_ms<startReceipt.clocked_in_at_ms)throw Error('Invalid clock-out');
+  if(JSON.stringify(await (await transition(endRequest)).json())!==JSON.stringify(endReceipt))throw Error('Clock-out retry changed time');
+  if((await post('/v1/shift-grant',{assignment_id:'synthetic-shift',proof:await freshProof()})).status!==400)throw Error('Ended shift received grant');
+  if((await send()).status!==200)throw Error('Valid pre-exit upload retry denied');
+  console.log('PASS: persisted shift recovery, confirmed early exit, post-exit grant denial and pre-exit upload');
   grantIssuer.revoke(claims.grant_id);
   if((await send()).status!==400)throw Error('Revoked grant accepted');
   console.log('PASS: real local Auth + issued grant history + signed HTTP ingestion + restart deduplication + revocation');
- } finally {if(started)await service.stop();store.close();directory.close();devices.close();grantIssuer.close();rmSync(dir,{recursive:true,force:true});}
+ } finally {if(started)await service.stop();store.close();directory.close();devices.close();grantIssuer.close();shiftLifecycle.close();rmSync(dir,{recursive:true,force:true});}
 
 } finally {
  if(id){await call('/admin/users/'+id,{method:'DELETE',headers:admin});console.log('PASS: synthetic account removed');}
