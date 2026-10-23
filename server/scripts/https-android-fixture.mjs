@@ -1,3 +1,4 @@
+import {DispatchFeed} from '../dispatch-feed.mjs';
 // Test-only synthetic Auth adapter + actual Guard service, behind localhost TLS.
 // Never run on production or expose beyond loopback. No real Supabase credentials.
 import {createServer as httpServer} from 'node:http';
@@ -32,9 +33,10 @@ const auth=httpServer(async(req,res)=>{
  res.writeHead(401);res.end('{}');
 });
 await new Promise((resolve,reject)=>{auth.once('error',reject);auth.listen(55321,'127.0.0.1',resolve);});
+const dispatch=new DispatchFeed(':memory:');
 const directory=new LocalGuardDirectory(':memory:'),devices=new LocalDeviceAssignments(':memory:'),store=new DurableIngest(':memory:');
 directory.addVendor({vendorId:'fixture-vendor',kind:'company',active:true});directory.addGuard({guardId:'fixture-guard',authSubject:subject,vendorId:'fixture-vendor',active:true});directory.setLoginEmail('fixture-guard',email);
-const service=createLocalService({config:{API_URL:'http://127.0.0.1:55321',PUBLISHABLE_KEY:'fixture-only',SERVICE_ROLE_KEY:'fixture-only'},directory,devices,store,grantIssuer});
+const service=createLocalService({config:{API_URL:'http://127.0.0.1:55321',PUBLISHABLE_KEY:'fixture-only',SERVICE_ROLE_KEY:'fixture-only'},directory,devices,store,grantIssuer,dispatch});
 const origin=await service.start();
 const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,res)=>{
  try{
@@ -44,6 +46,7 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
    const body=JSON.parse(raw);
    devices.enroll({deviceId:'fixture-phone',mode:'site',siteId:'fixture-site',active:true,revoked:false,publicKeySpki:body.public_key_spki});
    devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,checkInPolicy:{revision:1,interval_ms:1800000,window_ms:600000,max_evidence_age_ms:120000,max_accuracy_m:100},patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}]}});
+   dispatch.publish({guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',assignmentId:'fixture-shift'},{message_id:'fixture-message',version:1,state:'active',title:'Synthetic dispatch',body:'Inspect the test entrance.',issued_at:Date.now(),due_at:null});
    res.setHeader('content-type','application/json');res.end('{}');return;
   }
   if(req.url==='/test/receipts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({count:store.count(),media_count:store.db.prepare('SELECT count(*) AS n FROM media').get().n}));return;}
@@ -54,5 +57,5 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
 });
 await new Promise((resolve,reject)=>{tls.once('error',reject);tls.listen(55443,'127.0.0.1',resolve);});
 console.log('Synthetic HTTPS fixture ready on localhost:55443');
-let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();directory.close();devices.close();store.close();grantIssuer.close();}
+let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();directory.close();devices.close();store.close();grantIssuer.close();dispatch.close();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

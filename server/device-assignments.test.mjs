@@ -56,3 +56,16 @@ test('ingestion authority must match active enrollment and current assignment',(
   db.revoke('phone');assert.equal(db.authorizes(identity,a,201),false);
  }finally{db.close();}
 });
+
+test('dispatch route needs a fresh proof and rejects other assignments and invalid cursors',async()=>{
+ const {DispatchFeed}=await import('./dispatch-feed.mjs');const dispatch=new DispatchFeed(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);
+ const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
+ const handler=createAssignmentHandler({directory,devices:db,dispatch,now:()=>2000,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:1000})});
+ const send=async(assignment,cursor)=>handler(new Request('https://guard.test/v1/dispatch',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:assignment,cursor,proof:proof(k,db.challenge(identity,'phone',2000))})}));
+ try{
+  dispatch.publish({...identity,siteId:'site-1',assignmentId:'a'},{message_id:'m',version:1,state:'active',title:'Test',body:'Synthetic',issued_at:1000,due_at:null});
+  assert.equal((await send('b',null)).status,400);assert.equal((await send('a','invalid')).status,409);
+  const good=await send('a',null);assert.equal(good.status,200);assert.equal((await good.json()).changes.length,1);
+  db.cancel('a');assert.equal((await send('a',null)).status,400);
+ }finally{dispatch.close();db.close();}
+});

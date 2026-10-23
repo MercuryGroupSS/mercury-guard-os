@@ -66,3 +66,27 @@ test('real local HTTP delivery obtains a persisted inbox receipt without modifyi
   assert.equal(box.db.prepare('SELECT status FROM dashboard_outbox').get().status,'delivered');
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));box.close();inbox.close();}
 });
+
+test('lost response plus sender and receiver restart reuses the durable receipt without duplicate insert',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'dashboard-restart-')),outPath=join(dir,'out.db'),inPath=join(dir,'in.db');
+ let box=new DashboardOutbox(outPath),inbox=new DashboardInbox(inPath);const {record,mapping}=fixture();let firstReceipt;
+ try{
+  box.enqueue(record,mapping);
+  assert.equal(await deliverDashboardOnce(box,async job=>{firstReceipt=inbox.accept(JSON.parse(job.body),job.body);throw Error('response lost after commit')},()=>1000),'pending');
+  box.close();inbox.close();box=new DashboardOutbox(outPath);inbox=new DashboardInbox(inPath);
+  assert.equal(await deliverDashboardOnce(box,async job=>{const r=inbox.accept(JSON.parse(job.body),job.body);assert.deepEqual(r,firstReceipt);return r},()=>10000),'delivered');
+  box.close();box=new DashboardOutbox(outPath);
+  assert.deepEqual(JSON.parse(box.db.prepare('SELECT receipt FROM dashboard_outbox').get().receipt),firstReceipt);
+  assert.equal(inbox.db.prepare('SELECT count(*) AS n FROM mercury_one_inbox').get().n,1);
+ }finally{box.close();inbox.close();rmSync(dir,{recursive:true,force:true});}
+});
+test('acknowledgement uses the saved immutable payload rather than a modified in-memory job',()=>{
+ const box=new DashboardOutbox(':memory:'),{record,mapping}=fixture();try{
+  box.enqueue(record,mapping);const job=box.claim(1000);
+  const receipt={delivery_id:job.id,destination:mapping.destination,payload_sha256:'b'.repeat(64),status:'stored_in_integration_inbox'};
+  assert.throws(()=>box.accepted({...job,hash:receipt.payload_sha256},receipt));
+  assert.equal(box.db.prepare('SELECT status FROM dashboard_outbox').get().status,'pending');
+  box.db.prepare('UPDATE dashboard_outbox SET body=?').run('{}');box.retry(job,1000);
+  assert.throws(()=>box.claim(10000));
+ }finally{box.close();}
+});

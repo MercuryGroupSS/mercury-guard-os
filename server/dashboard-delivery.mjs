@@ -42,13 +42,19 @@ export class DashboardOutbox {
   this.db.exec('BEGIN IMMEDIATE');try{
    const row=this.db.prepare("SELECT * FROM dashboard_outbox WHERE status='pending' AND next_at<=? AND (lease_until IS NULL OR lease_until<=?) ORDER BY next_at,id LIMIT 1").get(now,now);
    if(!row){this.db.exec('COMMIT');return null;}
+   if(hash(row.body)!==row.hash)throw Error('Stored outbox content is corrupt');
    const lease=randomUUID();this.db.prepare('UPDATE dashboard_outbox SET lease=?,lease_until=?,attempts=attempts+1 WHERE id=?').run(lease,now+120000,row.id);
    this.db.exec('COMMIT');return {id:row.id,hash:row.hash,body:row.body,lease,attempts:row.attempts+1};
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  accepted(job,receipt){
-  validateDashboardReceipt(receipt,job);
-  if(this.db.prepare("UPDATE dashboard_outbox SET status='delivered',receipt=?,lease=NULL,lease_until=NULL WHERE id=? AND lease=? AND status='pending'").run(JSON.stringify(receipt),job.id,job.lease).changes!==1)throw Error('Delivery lease changed');
+  this.db.exec('BEGIN IMMEDIATE');try{
+   const saved=this.db.prepare("SELECT id,hash,body,lease FROM dashboard_outbox WHERE id=? AND status='pending'").get(job.id);
+   if(!saved||saved.lease!==job.lease||saved.hash!==job.hash||saved.body!==job.body||hash(saved.body)!==saved.hash)throw Error('Delivery lease or immutable payload changed');
+   validateDashboardReceipt(receipt,saved);
+   this.db.prepare("UPDATE dashboard_outbox SET status='delivered',receipt=?,lease=NULL,lease_until=NULL WHERE id=?").run(JSON.stringify(receipt),saved.id);
+   this.db.exec('COMMIT');
+  }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  retry(job,now=Date.now()){
   const delay=Math.min(3600000,1000*2**Math.min(job.attempts,12));
@@ -66,7 +72,7 @@ export function createDashboardTransport({endpoint,token,allowLocal=false,fetchI
  return async job=>{
   if(Buffer.byteLength(job.body)>64000)throw Error('Observation too large');
   const response=await fetchImpl(url,{method:'POST',redirect:'manual',signal:AbortSignal.timeout(10000),headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body:job.body});
-  if(response.status!==200)throw Error('Dashboard did not accept observation');
+  if(response.status!==200){await response.body?.cancel();throw Error('Dashboard did not accept observation');}
   const reader=response.body?.getReader();if(!reader)throw Error('Missing receipt');
   const chunks=[];let size=0;try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>4096){await reader.cancel();throw Error('Receipt too large');}chunks.push(Buffer.from(value));}}finally{reader.releaseLock();}
   const receipt=strictJson(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));validateDashboardReceipt(receipt,job);return receipt;
