@@ -52,4 +52,11 @@ class ScopedEventStoreTest {
   store.readableDatabase.rawQuery("SELECT body FROM captured",null).use{assertTrue(it.moveToFirst());assertFalse(it.getString(0).contains("PRIVATE-SYNTHETIC-NOTE"))}
   store.recordPilotReceipt(receipt(batch));assertEquals(0,store.pendingCount());assertNull(store.prepareSigned(identity,"mercury-local"))
  }}
+ @Test fun corruptedExistingCiphertextBlocksReopening(){isolated{store,identity,name->
+  val a=binding(identity);store.capture("incident",JSONObject(),a,grant(a),identity,10000)
+  store.writableDatabase.execSQL("UPDATE captured SET body='corrupt'")
+  store.close()
+  ScopedEventStore(context,name,{200},{1}).use{reopened->rejected{reopened.pendingCount()}}
+ }}
+
 }

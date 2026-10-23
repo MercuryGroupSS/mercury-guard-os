@@ -18,6 +18,16 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
   db.execSQL("CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
  }
+ override fun onConfigure(db: SQLiteDatabase) {
+  super.onConfigure(db)
+  db.rawQuery("PRAGMA secure_delete=ON",null).use {check(it.moveToFirst() && it.getInt(0)==1)}
+ }
+ override fun onOpen(db: SQLiteDatabase) {
+  super.onOpen(db)
+  // Never append with a newly generated encryption key if existing ciphertext is unreadable.
+  db.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence LIMIT 1",null).use {c->if(c.moveToFirst())decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")}
+  db.rawQuery("SELECT body FROM pending WHERE id=1",null).use {c->if(c.moveToFirst())decrypt(c.getString(0),"mercury-scoped-pending")}
+ }
  override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) { error("Unsupported scoped store version") }
  private fun decrypt(body: String,aad: String)=JSONObject(String(cipher.decrypt(body,aad),Charsets.UTF_8))
  private fun binding(b: GrantBinding)=JSONObject().put("guard_id",b.guardId).put("site_id",b.siteId).put("assignment_id",b.assignmentId).put("device_thumbprint",b.deviceThumbprint).put("revocation_version",b.revocationVersion)
