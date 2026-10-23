@@ -9,7 +9,7 @@ function snapshot(rows){
  });
 }
 export function createOpsRefreshWorker({loadBindings,readShifts,sync,directory,intervalMs=30000,schedule=setInterval,cancel=clearInterval,now=Date.now}){
- if(typeof loadBindings!=='function'||typeof readShifts!=='function'||typeof sync?.apply!=='function'||!Number.isSafeInteger(intervalMs)||intervalMs<1000)throw Error('Refresh dependencies required');
+ if(typeof loadBindings!=='function'||typeof readShifts!=='function'||typeof sync?.apply!=='function'||typeof sync?.revokeBinding!=='function'||!Number.isSafeInteger(intervalMs)||intervalMs<1000)throw Error('Refresh dependencies required');
  const resolve=createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)});
  let timer=null,inflight=null,generation=0,last={processed:0,missing:0,failed:0,changedMappings:0,at:null};
  function run(){
@@ -19,9 +19,17 @@ export function createOpsRefreshWorker({loadBindings,readShifts,sync,directory,i
    const result={processed:0,missing:0,failed:0,changedMappings:0,at:now()};
    try{
     const approved=snapshot(await loadBindings());
-    for(let offset=0;offset<approved.length;offset+=25){
+    for(const binding of approved.filter(b=>!b.active)){
      if(epoch!==generation)break;
-     const page=approved.slice(offset,offset+25);
+     const latest=snapshot(await loadBindings()).find(b=>b.opsShiftId===binding.opsShiftId);
+     if(epoch!==generation)break;
+     if(JSON.stringify(latest)!==JSON.stringify(binding)){result.changedMappings++;continue;}
+     try{sync.revokeBinding(binding);result.processed++;}catch{result.failed++;}
+    }
+    const active=approved.filter(b=>b.active);
+    for(let offset=0;offset<active.length;offset+=25){
+     if(epoch!==generation)break;
+     const page=active.slice(offset,offset+25);
      let fetched;
      try{fetched=await readShifts(page.map(b=>b.opsShiftId));}catch{result.failed+=page.length;continue;}
      if(epoch!==generation)break;

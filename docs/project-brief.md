@@ -344,3 +344,7 @@ Added opt-in bounded refresh orchestration connecting approved mappings, source 
 ### Persistent source binding approvals — October 23
 
 Added a bounded local store for versioned Ops-shift-to-guard/vendor/site/Auth-subject approvals. Current mapping and full approval history commit atomically, survive restart and support exact retries without permitting stale revisions. Disabling retains history. All 122 server tests pass. No real guard mapping was approved; production administrator authentication and storage remain outstanding.
+
+### Offline source-binding revocation — October 23
+
+Disabled approved mappings now revoke local assignment eligibility without waiting for upstream reads. A durable revision watermark prevents stale source retries from reactivating the revoked mapping; a later explicit approval must use a newer revision. Tests confirm no network read is needed for revocation and stale revocation cannot cancel a subsequent approval. All 123 server tests pass. Live worker deployment and physical acceptance remain outstanding.

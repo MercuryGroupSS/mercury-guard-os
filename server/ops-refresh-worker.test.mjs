@@ -28,3 +28,16 @@ test('changed approvals and stopping an in-flight read prevent activation; concu
   assert.equal(f.devices.db.prepare('SELECT count(*) n FROM assignments').get().n,0);
  }finally{f.close();}
 });
+test('approved revocation works without upstream access and stale snapshots cannot restore access',async()=>{
+ const f=fixture();let approved=[binding],reads=0;
+ const worker=createOpsRefreshWorker({...f,loadBindings:async()=>approved,readShifts:async()=>{reads++;if(reads>1)throw Error('offline');return {rows:[shift]};}});
+ try{
+  assert.equal((await worker.run()).processed,1);
+  approved=[{...binding,active:false,revision:2}];assert.equal((await worker.run()).processed,1);assert.equal(reads,1);
+  assert.equal(JSON.parse(f.devices.db.prepare('SELECT body FROM assignments').get().body).active,false);
+  assert.throws(()=>f.sync.apply(shift,binding),/Revoked/);
+  assert.throws(()=>f.sync.apply(shift,{...binding,revision:2}),/Revoked/);
+  assert.equal(f.sync.apply(shift,{...binding,revision:3}).status,'assignment_created');
+  assert.throws(()=>f.sync.revokeBinding(approved[0]),/Stale/);
+ }finally{f.close();}
+});
