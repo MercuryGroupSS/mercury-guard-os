@@ -368,3 +368,7 @@ Added asynchronous parameterized guard/vendor/login lookup against the private i
 ### Shared PostgreSQL login throttling — October 23
 
 Added a private database-time limiter with serialized global/account counters and expiry cleanup. PostgreSQL directory defaults to this limiter. Two concurrent service-role connections verified account and global limits, expiry, private execution grants and migration replay in a disposable database; cleanup passed. Local advisors are clear, migration history is aligned, directory integration passes and all 124 server regressions pass. Hosted deployment remains untouched.
+
+### PostgreSQL identity runtime option — October 23
+
+Local service can explicitly select PostgreSQL identity through MERCURY_IDENTITY_STORE=postgres. It validates loopback connection scope, service-role session and required schema, uses bounded pooling/timeouts and fails without fallback. Real local HTTP login/Auth/profile plus vendor suspension passed; synthetic fixtures were removed. All 125 server tests pass. No persistent service restart or hosted deployment occurred; remaining stores are still local SQLite.
