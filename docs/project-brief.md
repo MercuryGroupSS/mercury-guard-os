@@ -130,3 +130,19 @@ This completes the local pilot build for acceptance, not production integration 
 Preview v0.23 was updated and tested on the actual SM-F956W. Native sign-in, incident draft/save persistence, reverse-order GPS patrol and duplicate protection, biometric/GPS/photo check-in completion, camera cancellation, GPS retry, cover-screen recovery, timed readiness stages/miss, miss-reason preservation and confirmed early exit passed in the exercised paths. Android notification posting was observed, without claiming audible or prolonged background reliability. See [physical results and limits](fold6-physical-v0.23.md).
 
 Final state: test shift ended, GPS tracking stopped, no running Preview service or active Preview notifications. Original app remained installed. Eight-hour clock-out, prolonged battery/doze/reboot tests, forced permission/GPS loss, audible delivery and an unfold-back cycle remain unverified on hardware. Minor status-copy/refresh clarity and identification of historical missed checks are follow-up polish. No live integration, hosting charge, phone enrollment or flashing.
+
+## Ops Dashboard integration groundwork — 2026-10-22
+
+User selected Mercury Ops Dashboard as the connecting application. Read-only source and schema inspection identified name-based shift identity and WhatsApp-specific ingestion as integration boundaries. Added a pure local adapter and five tests; full Node suite passes 22 tests. No live writes, deployment, cloud project or additional hosting. See ops-dashboard-integration.md. The APK remains v0.23 and is not connected to the dashboard yet.
+
+## Durable local delivery continuation — 2026-10-22
+
+Added SQLite-backed v2 ingestion with transactionally persisted events and receipts. Authorization is rechecked before replay receipts, original scope is included in event deduplication, and late conflicts roll back. All 24 Node tests pass, including close/reopen persistence. Local synthetic data only; no hosted changes or charges. Android remains v0.23, with real identity, grant issuance and HTTP transport still outstanding. No additional physical test is claimed. During active phone tests, interact at least every five minutes to prevent the user's ten-minute automatic lock; deliberate lock/background tests require separate handling.
+
+## Local HTTP boundary — 2026-10-23
+
+Added a Request/Response ingestion handler with mandatory injected server authentication, bounded request bodies, no-store responses, and generic failure responses. Three handler tests bring the local suite to 27 passing tests. This does not implement Supabase authentication or start an HTTP listener; socket-based and Android transport tests remain outstanding. Changes remain local and uncommitted. Phone wake was attempted but ADB could not start its local socket listener (Operation not permitted); no phone interaction or physical test occurred. Manual unlock alone does not resolve the Mac sandbox restriction.
+
+## Composed delivery verification — 2026-10-23
+
+A signed synthetic batch now passes the HTTP Request/Response handler into SQLite; the same persisted receipt is returned after restart. Invalid credentials do not reach storage and revoked authorization prevents replay. All 28 local server tests pass. This remains an in-process transport test with injected authentication, not a real Supabase session or Android network round trip. ADB remains blocked by the Mac local-listener restriction. No new APK or physical verification in this continuation.

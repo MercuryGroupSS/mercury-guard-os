@@ -1,0 +1,45 @@
+import { DatabaseSync } from 'node:sqlite';
+import { createHash } from 'node:crypto';
+import { verifyScopedBatch } from './verify-batch.mjs';
+const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+// Local synthetic-data store. Plaintext SQLite: do not put real guard data here.
+export class DurableIngest {
+  constructor(path) {
+    this.db = new DatabaseSync(path);
+    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+      CREATE TABLE IF NOT EXISTS events(device TEXT, id TEXT, sequence INTEGER, digest TEXT, body TEXT,
+        PRIMARY KEY(device,id), UNIQUE(device,sequence));
+      CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));`);
+  }
+  ingest(raw, trustedContext, now) {
+    // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
+    const {batch,payloadHash} = verifyScopedBatch(raw,trustedContext,now);
+    const device = trustedContext.thumbprint;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const old = this.db.prepare('SELECT digest,body FROM receipts WHERE device=? AND id=?').get(device,batch.batch_id);
+      if (old) {
+        if (old.digest !== payloadHash) throw new Error('Batch ID content conflict');
+        this.db.exec('COMMIT'); return JSON.parse(old.body);
+      }
+      let last = this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM events WHERE device=?').get(device).n;
+      for (const event of batch.events) {
+        const body = JSON.stringify({scope:batch.scope,event});
+        const hash = digest({scope:batch.scope,event});
+        const prior = this.db.prepare('SELECT digest FROM events WHERE device=? AND id=?').get(device,event.event_id);
+        if (prior) {
+          if (prior.digest !== hash) throw new Error('Event ID content or scope conflict');
+          continue;
+        }
+        if (event.sequence <= last) throw new Error('Device sequence rollback');
+        this.db.prepare('INSERT INTO events VALUES(?,?,?,?,?)').run(device,event.event_id,event.sequence,hash,body);
+        last = event.sequence;
+      }
+      const receipt = {batch_id:batch.batch_id,event_ids:batch.events.map(e=>e.event_id),status:'accepted_local_only'};
+      this.db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(device,batch.batch_id,payloadHash,JSON.stringify(receipt));
+      this.db.exec('COMMIT'); return receipt;
+    } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  count() { return this.db.prepare('SELECT COUNT(*) AS n FROM events').get().n; }
+  close() { this.db.close(); }
+}
