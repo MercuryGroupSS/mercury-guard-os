@@ -1,6 +1,6 @@
+import {prepareShiftTransition} from './shift-transition-input.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createHash} from 'node:crypto';
-const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 // Called only after account, device proof and assignment authorization. Clock times
 // come from the service; no automatic attendance event is inferred from a schedule.
 export class ShiftTransitionRejected extends Error { constructor(receipt){super('Shift transition rejected');this.receipt=receipt;} }
@@ -12,10 +12,7 @@ export class ShiftLifecycle {
  CREATE TABLE IF NOT EXISTS shift_transitions(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS shift_rejections(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);`);}
  transition({identity,assignment,deviceThumbprint,request,now,allowStart=true}){
-  if(typeof allowStart!=='boolean'||!identity||!assignment||['guardId','vendorId'].some(k=>!stable(identity[k])||identity[k]!==assignment[k])||!stable(identity.subject)||!stable(assignment.assignmentId)||!stable(assignment.siteId)||assignment.active!==true||!/^[a-f0-9]{64}$/.test(deviceThumbprint)||!Number.isSafeInteger(now)||now<=0||!Number.isSafeInteger(assignment.startsAt)||!Number.isSafeInteger(assignment.endsAt)||assignment.startsAt>=assignment.endsAt)throw Error('Authorized shift scope required');
-  if(!request||Object.keys(request).sort().join()!=='action,confirmed,reason,request_id'||!stable(request.request_id)||!['start','end'].includes(request.action)||request.confirmed!==true||typeof request.reason!=='string'||request.reason.length>2000)throw Error('Explicit shift confirmation required');
-  const scope={guard_id:identity.guardId,vendor_id:identity.vendorId,site_id:assignment.siteId,assignment_id:assignment.assignmentId,device_thumbprint:deviceThumbprint};
-  const digest=createHash('sha256').update(JSON.stringify({scope,subject:identity.subject,request,starts_at:assignment.startsAt,ends_at:assignment.endsAt})).digest('hex');
+  const {scope,digest}=prepareShiftTransition({identity,assignment,deviceThumbprint,request,now,allowStart});
   let committed=false;this.db.exec('BEGIN IMMEDIATE');try{
    const denied=this.db.prepare('SELECT digest,receipt FROM shift_rejections WHERE request=?').get(request.request_id);
    if(denied){if(denied.digest!==digest)throw Error('Rejected request changed');this.db.exec('COMMIT');committed=true;throw new ShiftTransitionRejected(JSON.parse(denied.receipt));}

@@ -6,7 +6,7 @@ import {openLocalAssignmentStore} from '../local-assignment-factory.mjs';
 import {parseEnrollmentKey} from '../enrollment-key.mjs';
 import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {createLocalService} from '../local-service.mjs';
-import {ShiftLifecycle} from '../shift-lifecycle.mjs';
+import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
 import {DurableIngest} from '../durable-ingest.mjs';
 const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n');
@@ -30,7 +30,7 @@ try{
  await assignmentStore.devices.enroll({deviceId,mode:'site',siteId:site,active:true,revoked:false,publicKeySpki:spki});
  const now=Date.now(),shift={id:sourceId,updated_at:new Date(now).toISOString(),scheduled_start:new Date(now-60000).toISOString(),scheduled_end:new Date(now+3600000).toISOString(),status:'scheduled'},binding={opsShiftId:sourceId,guardId:guard,vendorId:vendor,siteId:site,revision:1,active:true};
  const imported=await assignmentStore.sync.apply(shift,binding);
- store=new DurableIngest(':memory:');shiftLifecycle=new ShiftLifecycle(':memory:');grantIssuer=new ShiftGrantIssuer({path:':memory:',privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer});const origin=await service.start();
+ store=new DurableIngest(':memory:');shiftLifecycle=new PostgresShiftLifecycle(assignmentStore.devices);grantIssuer=new ShiftGrantIssuer({path:':memory:',privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer});const origin=await service.start();
  const login=()=>fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:guard,password})});
  const response=await login();assert.equal(response.status,200);const session=await response.json();assert.equal('refresh_token' in session,false);
  const me=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
@@ -58,6 +58,9 @@ try{
   await admin.query('DELETE FROM mercury_guard.ops_assignment_history WHERE source_id=$1',[sourceId]);
   await admin.query('DELETE FROM mercury_guard.ops_assignment_sync WHERE source_id=$1',[sourceId]);
   await admin.query('DELETE FROM mercury_guard.ops_binding_revocations WHERE source_id=$1',[sourceId]);
+  await admin.query("DELETE FROM mercury_guard.shift_transitions WHERE receipt->'scope'->>'guard_id'=$1",[guard]);
+  await admin.query("DELETE FROM mercury_guard.shift_rejections WHERE receipt->'scope'->>'guard_id'=$1",[guard]);
+  await admin.query('DELETE FROM mercury_guard.shift_sessions WHERE guard=$1',[guard]);
   await admin.query('DELETE FROM mercury_guard.assignments WHERE guard_id=$1',[guard]);
   await admin.query('DELETE FROM mercury_guard.devices WHERE device_id=$1',[deviceId]);
   await admin.query('DELETE FROM mercury_guard.sites WHERE site_id=$1',[site]);

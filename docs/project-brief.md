@@ -408,3 +408,7 @@ Added explicit off/local/remote Ops refresh modes to the local runner, default o
 ### Shared PostgreSQL Ops approvals
 
 Added private centralized mapping approvals with revisioned audit history and shared input validation. PostgreSQL refresh now reads this store rather than a local approval file. Real database tests verified concurrent retries, capacity enforcement, audit rollback, and approval-to-refresh composition. 132 server tests pass; advisors clear. Corrected an unintended constraint drop in the prior, not-hosted Ops-sync migration and added direct database schedule-constraint checks to replay verification. Local running schema was unaffected. Authenticated administrator provisioning/UI and remaining shift/event persistence are still outstanding.
+
+### Shared confirmed shift lifecycle
+
+Moved PostgreSQL-mode confirmed shifts and transition/rejection receipts into the shared private database. Added one-active-guard/phone constraints, immutable receipts, current-authority locking, exact retry recovery and cancellation closeout. Updated HTTP capture checks, scheduled reconciliation and dashboard projection for asynchronous shift state. Real PostgreSQL concurrency/replay checks and local Auth/HTTP grant/closeout smoke passed; 132 server tests pass; advisors clear. Clock events currently serialize globally for reliable receipt cursor ordering; production throughput needs measurement. Grant/event/media/outbound persistence and authenticated administrator provisioning remain outstanding.

@@ -29,11 +29,11 @@ export function createDashboardBridge({store,bindings,outbox,shiftLifecycle,send
    const cursor=outbox.db.prepare('SELECT cursor FROM dashboard_bridge_state WHERE id=1').get()?.cursor??0;
    const rows=store.db.prepare('SELECT rowid AS cursor,body FROM events WHERE rowid>? ORDER BY rowid LIMIT ?').all(cursor,batchSize);
    const shiftCursor=outbox.db.prepare('SELECT cursor FROM dashboard_shift_bridge_state WHERE id=1').get()?.cursor??0;
-   const shifts=shiftLifecycle?shiftLifecycle.dashboardAfter(shiftCursor,batchSize):[];
+   const shifts=shiftLifecycle?await shiftLifecycle.dashboardAfter(shiftCursor,batchSize):[];
    const alertCursor=outbox.db.prepare('SELECT cursor FROM dashboard_alert_bridge_state WHERE id=1').get()?.cursor??0;
    const alerts=shiftLifecycle?store.db.prepare('SELECT rowid AS cursor,body FROM check_in_alert_outbox WHERE rowid>? ORDER BY rowid LIMIT ?').all(alertCursor,batchSize):[];
    const notices=[];
-   for(const row of alerts)try{const record=shiftLifecycle.dashboardNotice(JSON.parse(row.body));if(record)notices.push({body:JSON.stringify(record)});}catch{failed++;}
+   for(const row of alerts)try{const record=await shiftLifecycle.dashboardNotice(JSON.parse(row.body));if(record)notices.push({body:JSON.stringify(record)});}catch{failed++;}
    for(const row of [...rows,...shifts,...notices])try{
     const record=JSON.parse(row.body),scope=record.scope;
     if(!record.vendor_id)continue;

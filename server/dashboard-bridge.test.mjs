@@ -1,3 +1,4 @@
+const asyncShift=value=>value?new Proxy(value,{get(target,key){const member=target[key];return typeof member==='function'?async(...args)=>member.apply(target,args):member;}}):null;
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
@@ -28,7 +29,7 @@ test('confirmed attendance enters mapped queue once and preserves server times a
   const scope={identity:{subject:'u',guardId:'g',vendorId:'v'},assignment:{assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',startsAt:1000,endsAt:10000,active:true},deviceThumbprint:'a'.repeat(64)};
   const start={...scope,request:{request_id:'start',action:'start',confirmed:true,reason:''},now:2000};shiftLifecycle.transition(start);shiftLifecycle.transition({...start,now:3000});
   shiftLifecycle.transition({...scope,request:{request_id:'end',action:'end',confirmed:true,reason:'Synthetic early exit'},now:5000});
-  const bridge=createDashboardBridge({store,outbox,bindings,shiftLifecycle,batchSize:1});await bridge.run();await bridge.run();assert.equal(outbox.db.prepare('SELECT count(*) AS n FROM dashboard_outbox').get().n,0);
+  const bridge=createDashboardBridge({store,outbox,bindings,shiftLifecycle:asyncShift(shiftLifecycle),batchSize:1});await bridge.run();await bridge.run();assert.equal(outbox.db.prepare('SELECT count(*) AS n FROM dashboard_outbox').get().n,0);
   bindings.approve(mapping);for(let i=0;i<6;i++)await bridge.run();
   const rows=outbox.db.prepare('SELECT body FROM dashboard_outbox ORDER BY rowid').all().map(r=>JSON.parse(r.body));assert.equal(rows.length,2);
   const begin=rows.find(r=>r.observation.kind==='shift_start'),end=rows.find(r=>r.observation.kind==='shift_end');
@@ -44,7 +45,7 @@ test('missed-delivery notices retain confirmed attribution and queue once withou
   const assignment={assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',startsAt:1000,endsAt:121000,active:true,checkInPolicy:{revision:1,interval_ms:60000,window_ms:10000,max_evidence_age_ms:5000,max_accuracy_m:100}};
   shiftLifecycle.transition({identity:{subject:'u',guardId:'g',vendorId:'v'},assignment,deviceThumbprint:'a'.repeat(64),request:{request_id:'start',action:'start',confirmed:true,reason:''},now:1000});
   reconcileCheckIns(store,assignment,12000,{activeWindow:shiftLifecycle.checkInWindow(assignment)});
-  const bridge=createDashboardBridge({store,outbox,bindings,shiftLifecycle});await bridge.run();assert.equal(outbox.db.prepare('SELECT count(*) AS n FROM dashboard_outbox').get().n,0);
+  const bridge=createDashboardBridge({store,outbox,bindings,shiftLifecycle:asyncShift(shiftLifecycle)});await bridge.run();assert.equal(outbox.db.prepare('SELECT count(*) AS n FROM dashboard_outbox').get().n,0);
   bindings.approve({assignmentId:'a',guardId:'g',vendorId:'v',siteId:'s',dashboardShiftId:'upstream',destination:'isolated',revision:1,active:true});
   for(let i=0;i<3;i++)await bridge.run();
   const messages=outbox.db.prepare('SELECT body FROM dashboard_outbox').all().map(r=>JSON.parse(r.body));

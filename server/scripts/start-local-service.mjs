@@ -1,4 +1,5 @@
 import {openLocalOpsRefresh} from '../local-ops-refresh.mjs';
+import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
@@ -27,7 +28,7 @@ const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir)
 const dashboardBindings=new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
 // No send function is configured: explicit mappings can queue records locally only.
 const dispatch=new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
-const shiftLifecycle=new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
+const shiftLifecycle=identityMode==='postgres'?new PostgresShiftLifecycle(devices):new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
 const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}

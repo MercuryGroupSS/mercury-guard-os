@@ -19,7 +19,9 @@ export function createCheckInWorker({store,devices,shiftLifecycle,now=Date.now,i
      if(assignment.active!==true||!p||assignment.startsAt>at)continue;
      const prior=store.db.prepare('SELECT finalized FROM check_in_worker_runs WHERE assignment=? AND revision=?').get(assignment.assignmentId,p.revision);
      if(prior?.finalized)continue;
-     reconcileCheckIns(store,assignment,at,{activeWindow:shiftLifecycle?.checkInWindow(assignment)});
+     const activeWindow=await shiftLifecycle?.checkInWindow(assignment);
+     if(epoch!==generation)break;
+     reconcileCheckIns(store,assignment,at,{activeWindow});
      store.db.prepare('INSERT INTO check_in_worker_runs VALUES(?,?,?,?) ON CONFLICT(assignment,revision) DO UPDATE SET finalized=excluded.finalized,last_success=excluded.last_success').run(assignment.assignmentId,p.revision,Number(at>=assignment.endsAt),at);
      processed++;
     }catch{failed++;}

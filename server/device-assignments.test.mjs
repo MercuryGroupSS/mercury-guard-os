@@ -1,3 +1,4 @@
+const asyncShift=value=>value?new Proxy(value,{get(target,key){const member=target[key];return typeof member==='function'?async(...args)=>member.apply(target,args):member;}}):null;
 const asyncDevices=db=>new Proxy(db,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}});
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -74,7 +75,7 @@ test('dispatch route needs a fresh proof and rejects other assignments and inval
 test('shift route authenticates proofs and permits explicit scheduled end without reopening capture',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,now:()=>now,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:999999}:null});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle:asyncShift(shiftLifecycle),now:()=>now,verifySession:async token=>token==='valid'?{subject:identity.subject,active:true,expiresAt:999999}:null});
  const body=(assignment,action,id=action)=>({assignment_id:assignment,transition:{action,request_id:id,reason:'',confirmed:true},proof:proof(k,db.challenge(identity,'phone',now))});
  const send=(b,token='valid')=>handler(new Request('https://guard.test/v1/shift-transition',{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify(b)}));
  try{
@@ -100,7 +101,7 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
 test('configured lifecycle refuses capture grants before start and after confirmed end',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200,issued=0;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,grantIssuer:{issue:()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:{issue:()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
  const send=()=>handler(new Request('https://guard.test/v1/shift-grant',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:'a',proof:proof(k,db.challenge(identity,'phone',now))})}));
  const scope={identity,assignment:{assignmentId:'a',guardId:'guard-1',vendorId:'MG001',siteId:'site-1',startsAt:100,endsAt:999999,active:true},deviceThumbprint:db.device('phone').thumbprint};
  try{
@@ -115,7 +116,7 @@ test('configured lifecycle refuses capture grants before start and after confirm
 test('cancelled confirmed shift remains closeable without reopening capture or new clock-in',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle,grantIssuer:{issue:()=>{throw Error('Must not issue');}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:{issue:()=>{throw Error('Must not issue');}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
  const call=async(path,extra)=>{const p=proof(k,db.challenge(identity,'phone',now));return handler(new Request('https://guard.test'+path,{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify(extra?{...extra,proof:p}:p)}));};
  const transition=(action,request_id)=>call('/v1/shift-transition',{assignment_id:'a',transition:{action,request_id,reason:action==='end'?'Cancelled assignment':'',confirmed:true}});
  try{
