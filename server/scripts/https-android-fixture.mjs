@@ -13,23 +13,27 @@ import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
 import {DurableIngest} from '../durable-ingest.mjs';
 import {createLocalService} from '../local-service.mjs';
 const dir=new URL('../../app/build/https-test/',import.meta.url);
-for(const part of ['res/raw/','res/xml/','assets/'])mkdirSync(new URL(part,dir),{recursive:true});
+for(const part of ['res/raw/','res/xml/','assets/','main-assets/'])mkdirSync(new URL(part,dir),{recursive:true});
 const cert=new URL('res/raw/https_fixture_ca.pem',dir),key=new URL('tls-private.pem',dir);
 execFileSync('openssl',['req','-x509','-newkey','rsa:2048','-nodes','-keyout',key.pathname,'-out',cert.pathname,'-days','1','-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost','-addext','extendedKeyUsage=serverAuth'],{stdio:'ignore'});
 writeFileSync(new URL('res/xml/https_test_network.xml',dir),'<network-security-config><base-config cleartextTrafficPermitted="false"/><domain-config cleartextTrafficPermitted="false"><domain>localhost</domain><trust-anchors><certificates src="@raw/https_fixture_ca"/></trust-anchors></domain-config></network-security-config>');
 const rsa=generateKeyPairSync('rsa',{modulusLength:2048});
 const grantIssuer=new ShiftGrantIssuer({path:':memory:',privateKey:rsa.privateKey,keyId:'https-fixture',issuer:'mercury-local',audience:'mercury-local'});
 writeFileSync(new URL('assets/https-test-issuer.json',dir),JSON.stringify({public_key_spki:grantIssuer.publicKey()}));
+writeFileSync(new URL('main-assets/guard-service.json',dir),JSON.stringify({endpoint:'https://localhost:55443',issuer:'mercury-local',audience:'mercury-local',device_id:'fixture-phone',issuer_keys:{'https-fixture':grantIssuer.publicKey()}}));
 if(process.argv.includes('--prepare-only')){grantIssuer.close();console.log('Prepared isolated HTTPS test resources');process.exit(0);}
 if(process.env.MERCURY_HTTPS_FIXTURE!=='synthetic-only')throw Error('Explicit synthetic fixture mode required');
 const subject=randomUUID(),password='synthetic-password-only',email='https-fixture@example.invalid';
-const token='fixture.'+Buffer.from(JSON.stringify({sub:subject,exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.fixture';
+const sessions=new Set();
 const auth=httpServer(async(req,res)=>{
  res.setHeader('content-type','application/json');res.setHeader('cache-control','no-store');
- if(req.url==='/auth/v1/user'&&req.headers.authorization==='Bearer '+token){res.end(JSON.stringify({id:subject}));return;}
+ const token=/^Bearer ([^\s]+)$/.exec(req.headers.authorization??'')?.[1];
+ if(req.headers.apikey!=='fixture-only'){res.writeHead(401);res.end('{}');return;}
+ if(req.url==='/auth/v1/user'&&req.method==='GET'&&sessions.has(token)){res.end(JSON.stringify({id:subject}));return;}
+ if(req.url==='/auth/v1/logout?scope=local'&&req.method==='POST'&&sessions.has(token)){sessions.delete(token);res.writeHead(204);res.end();return;}
  if(req.url==='/auth/v1/token?grant_type=password'&&req.method==='POST'){
   let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>4096){res.writeHead(413);res.end('{}');return;}}
-  try{const b=JSON.parse(raw);if(b.email===email&&b.password===password){res.end(JSON.stringify({access_token:token,refresh_token:'never-return-this'}));return;}}catch{}
+  try{const b=JSON.parse(raw);if(b.email===email&&b.password===password){const token='fixture.'+Buffer.from(JSON.stringify({sub:subject,exp:Math.floor(Date.now()/1000)+3600,session_id:randomUUID()})).toString('base64url')+'.fixture';sessions.add(token);res.end(JSON.stringify({access_token:token,refresh_token:'never-return-this'}));return;}}catch{}
  }
  res.writeHead(401);res.end('{}');
 });
@@ -58,5 +62,5 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
 });
 await new Promise((resolve,reject)=>{tls.once('error',reject);tls.listen(55443,'127.0.0.1',resolve);});
 console.log('Synthetic HTTPS fixture ready on localhost:55443');
-let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();directory.close();devices.close();store.close();grantIssuer.close();dispatch.close();shiftLifecycle.close();}
+let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();sessions.clear();directory.close();devices.close();store.close();grantIssuer.close();dispatch.close();shiftLifecycle.close();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

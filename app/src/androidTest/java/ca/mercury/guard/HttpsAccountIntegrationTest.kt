@@ -31,9 +31,10 @@ class HttpsAccountIntegrationTest {
   assumeTrue(InstrumentationRegistry.getArguments().getString("httpsIntegration")=="true")
   val instrumentation=InstrumentationRegistry.getInstrumentation();val context=instrumentation.targetContext
   assertTrue(context.packageName.endsWith(".httpstest"))
-  val suffix=UUID.randomUUID().toString();val alias="test.https.$suffix";val marker="https-$suffix";val name="https-$suffix.db"
+  val suffix=UUID.randomUUID().toString();val alias="mercury.device.signing.v1";val marker="device-identity-v1";val name="mercury_scoped_events.db"
   val identity=DeviceIdentity(context,alias,marker);val db=ScopedEventStore(context,name)
-  var session:GuardAccountClient.Session?=null
+  assertEquals("Test-only HTTP application must start with an empty authorized queue",0,db.pendingCount())
+  var session:GuardAccountClient.Session?=null;var evidenceId:String?=null
   try{
    val public=identity.create();fixture("/test/enroll",JSONObject().put("public_key_spki",public.publicKeySpki))
    val client=GuardAccountClient("https://localhost:55443")
@@ -88,8 +89,9 @@ class HttpsAccountIntegrationTest {
    db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"))
    val bitmap=android.graphics.Bitmap.createBitmap(1,1,android.graphics.Bitmap.Config.ARGB_8888)
    val photoBytes=java.io.ByteArrayOutputStream().use{out->assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,out));out.toByteArray()};bitmap.recycle()
-   val photo=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("bytes",photoBytes.size).put("width",1).put("height",1).put("capture","camera_intent")
-    .put("sha256",java.security.MessageDigest.getInstance("SHA-256").digest(photoBytes).joinToString(""){"%02x".format(it.toInt() and 255)})
+   val temporary=File(context.cacheDir,"https-job-${UUID.randomUUID()}.jpg")
+   val photo=try{temporary.writeBytes(photoBytes);EvidenceStore(context).savePhoto(temporary)}finally{temporary.delete()}
+   evidenceId=photo.getString("evidence_id")
    val at=response.getLong("server_time_ms")
    val policy=AuthorizedCheckInPolicy.parse(response.getJSONObject("check_in_policy"))
    // Synthetic evidence exercises protocol linkage; this does not simulate hardware verification.
@@ -100,14 +102,24 @@ class HttpsAccountIntegrationTest {
    val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
    val photoEvent=(0 until events.length()).map{events.getJSONObject(it)}.single{it.getString("kind")=="photo_evidence"}.getString("event_id")
    val transport=GuardTransport("https://localhost:55443")
+   // Exercise the actual persisted JobService against HTTPS after foreground credential memory is cleared.
+   val trusted=GuardServiceConfig.load(context)?:error("HTTPS debug-only packaged trust required")
+   val uploadSession=GuardAccountClient.Session(session.bearer(),session.expiresElapsed)
+   UploadCoordinator(context).authorize(trusted,uploadSession,"fixture-guard","fixture-vendor");uploadSession.clear()
+   val command="cmd jobscheduler run -f ${context.packageName} ${UploadCoordinator.JOB_ID}"
+   instrumentation.uiAutomation.executeShellCommand(command).use{fd->java.io.FileInputStream(fd.fileDescriptor).use{it.readBytes()}}
+   val deadline=SystemClock.elapsedRealtime()+45000
+   while(SystemClock.elapsedRealtime()<deadline&&(db.pendingCount("fixture-guard")>0||db.pendingPhotos("fixture-guard").isNotEmpty()))SystemClock.sleep(100)
+   assertEquals("Scheduled JobService did not drain signed metadata",0,db.pendingCount("fixture-guard"))
+   assertTrue("Scheduled JobService did not upload private photo bytes",db.pendingPhotos("fixture-guard").isEmpty())
    val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids)
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
-   db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),"fixture-guard")
+   db.recordUploadReceipt("fixture-guard",JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
    assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(6,fixture("/test/receipts").getInt("count"))
    val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes)
    assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
    assertEquals(1,fixture("/test/receipts").getInt("media_count"))
-   db.recordMediaReceipt("fixture-guard",media);assertTrue(db.pendingPhotos("fixture-guard").isEmpty())
+   db.recordUploadMediaReceipt("fixture-guard",media);assertTrue(db.pendingPhotos("fixture-guard").isEmpty())
    val refreshed=client.grant(session,"fixture-phone",item.getString("assignmentId"),identity,"mercury-local")
    val delivery=refreshed.getJSONObject("check_in_status")
    assertEquals("fixture-shift",delivery.getString("assignment_id"))
@@ -126,9 +138,13 @@ class HttpsAccountIntegrationTest {
     assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    }}finally{context.deleteDatabase(endName)}
    var rejected=false;try{fixture("/test/receipts",host="127.0.0.1")}catch(_:javax.net.ssl.SSLException){rejected=true};assertTrue("Untrusted host accepted",rejected)
+   val independent=client.login("fixture-guard","synthetic-password-only".toCharArray())
+   client.logout(session)
+   try{client.profile(session);fail("Provider-revoked session reused")}catch(e:GuardAccountClient.HttpFailure){assertEquals(401,e.statusCode)}
+   assertEquals("fixture-guard",client.profile(independent).getString("guard_id"));client.logout(independent);independent.clear()
    session.clear();try{client.profile(session);fail("Cleared session reused")}catch(_:IllegalStateException){}
   }finally{
-   session?.clear();db.close();context.deleteDatabase(name)
+   UploadCoordinator(context).stop();session?.clear();db.close();context.deleteDatabase(name);evidenceId?.let{EvidenceStore(context).remove(it)}
    KeyStore.getInstance("AndroidKeyStore").apply{load(null);deleteEntry(alias)}
    File(context.noBackupFilesDir,marker).delete();File(context.noBackupFilesDir,"$marker.bak").delete()
   }

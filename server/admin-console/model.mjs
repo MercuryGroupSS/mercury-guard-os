@@ -17,6 +17,7 @@ export const actions={
  'dispatch.publish':{label:'Publish assignment message',help:'Publish or retract a versioned message for one assignment. The phone receives it on its next authorized refresh.',fields:[assignment,guard,vendor,site,id('messageId','Message ID'),{...revision,key:'version',label:'Message version'},{key:'state',label:'Message status',type:'select',options:[['active','Active'],['retracted','Retracted']]},{key:'title',label:'Title',type:'text',max:200,optional:true},{key:'body',label:'Message',type:'textarea',max:8000,optional:true},{key:'due',label:'Due at (your local time)',type:'datetime-local',optional:true}]}
 };
 export const catalogs={
+ received_reports:{label:'Reports',columns:[]},
  administrators:{label:'Administrators',columns:['auth_subject','email','active']},access_audit:{label:'Access audit',columns:['request_id','email','active','operator_label','reason','recorded_at','receipt']},
  vendors:{label:'Vendors',columns:['vendor_id','kind','active'],action:'vendor.status'},guards:{label:'Guards',columns:['guard_id','vendor_id','email','active','auth_subject'],action:'guard.status'},
  sites:{label:'Sites',columns:['site_id','active'],action:'site.status'},devices:{label:'Phones',columns:['device_id','mode','site_id','guard_id','active','revoked','revocation_version','thumbprint'],action:'device.revoke'},
@@ -76,6 +77,16 @@ const errors={401:'Sign in again to continue.',403:'Administrator access is unav
 export class AdminClient{
  constructor({fetchImpl=(...args)=>globalThis.fetch(...args),now=Date.now,onSessionLost=()=>{}}={}){this.fetch=fetchImpl;this.now=now;this.onSessionLost=onSessionLost;this.session=null;this.generation=0;}
  clear(){this.session=null;this.generation++;}
+ async logout(){
+  const session=this.session;this.clear();const generation=this.generation,finish=result=>generation===this.generation?result:null;
+  if(!session)return finish('session_unavailable');
+  try{
+   const response=await this.fetch('/v1/session/logout',{method:'POST',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:AbortSignal.timeout(15000),headers:{authorization:'Bearer '+session.token}});
+   if(response.status===401){await response.body?.cancel();return finish('session_unavailable');}
+   if(response.status!==200){await response.body?.cancel();return finish('unconfirmed');}
+   const result=await response.json();return finish(result&&Object.keys(result).join()==='status'&&result.status==='signed_out'?'signed_out':'unconfirmed');
+  }catch{return finish('unconfirmed');}
+ }
  async send(path,{method='GET',body,token,signal}={}){
   if(!/^\/v1\/admin\/(login|me|catalog(?:\?[^#]*)?|actions|resolve)$/.test(path))throw Error('Invalid administration path');
   let response;try{response=await this.fetch(path,{method,cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:signal??AbortSignal.timeout(15000),headers:{...(token?{authorization:'Bearer '+token}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});}catch{throw new ApiError('Connection interrupted. Keep this tab open and retry the same request.');}
@@ -97,6 +108,70 @@ export class AdminClient{
   try{const result=await this.send(path,{...options,token:session.token});if(generation!==this.generation)throw new ApiError('Session changed. Refresh before continuing.');return result;}
   catch(error){if([401,403].includes(error.status)&&generation===this.generation){this.clear();this.onSessionLost();}throw error;}
  }
+ async media(media,{signal}={}){
+  validateReportMedia(media);
+  const session=this.session,generation=this.generation;
+  if(!session||session.expiresAt*1000<=this.now()){this.clear();this.onSessionLost();throw new ApiError(errors[401],401);}
+  try{
+   const timeout=AbortSignal.timeout(30000),requestSignal=signal?AbortSignal.any([signal,timeout]):timeout;
+   let response;try{response=await this.fetch(media.path,{method:'GET',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:requestSignal,headers:{authorization:'Bearer '+session.token}});}catch{throw new ApiError('The private photo could not be loaded. Try again.');}
+   if(!response.ok){await response.body?.cancel();throw new ApiError(errors[response.status]??'The private photo is unavailable.',response.status);}
+   const blob=await readReportJpeg(response,media);
+   if(generation!==this.generation)throw new ApiError('Session changed. Reload the photo after signing in.');
+   if(session.expiresAt*1000<=this.now()){this.clear();this.onSessionLost();throw new ApiError(errors[401],401);}
+   return blob;
+  }catch(error){if([401,403].includes(error.status)&&generation===this.generation){this.clear();this.onSessionLost();}throw error;}
+ }
+}
+export const maxReportPhotoBytes=20*1024*1024;
+export function validateReportMedia(media){
+ if(media?.state!=='stored'||!/^\/v1\/admin\/media\/[a-f0-9]{64}$/.test(media.path)||!/^[a-f0-9]{64}$/.test(media.sha256)||!Number.isSafeInteger(media.bytes)||media.bytes<4||media.bytes>maxReportPhotoBytes)throw new ApiError('The saved photo reference is incomplete. Refresh the report.');
+}
+export async function readReportJpeg(response,media){
+ validateReportMedia(media);
+ const fail=async()=>{await response.body?.cancel();throw new ApiError('The private photo failed validation. Refresh the report before trying again.');};
+ if(response.headers.get('content-type')?.toLowerCase()!=='image/jpeg')return fail();
+ const length=response.headers.get('content-length');if(length!==null&&(!/^[0-9]+$/.test(length)||Number(length)!==media.bytes))return fail();
+ const reader=response.body?.getReader();if(!reader)throw new ApiError('The private photo has no contents.');
+ const chunks=[];let size=0;
+ try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>media.bytes||size>maxReportPhotoBytes){await reader.cancel();throw new ApiError('The private photo exceeded its saved size.');}chunks.push(value);}}
+ catch(error){if(error instanceof ApiError)throw error;throw new ApiError('The private photo transfer was interrupted. Try again.');}finally{reader.releaseLock();}
+ if(size!==media.bytes)throw new ApiError('The private photo transfer was incomplete. Try again.');
+ const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+ if(bytes[0]!==255||bytes[1]!==216||bytes[2]!==255||bytes[size-2]!==255||bytes[size-1]!==217)throw new ApiError('The saved photo is not a JPEG image.');
+ const digest=Array.from(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
+ if(digest!==media.sha256)throw new ApiError('The private photo does not match its saved fingerprint.');
+ return new Blob([bytes],{type:'image/jpeg'});
+}
+// One private object URL per visible report. A cleared or replaced request may
+// finish, but it cannot create a new URL or restore an image in the old view.
+export class ReportPhotoPreview{
+ constructor({client,createObjectURL=blob=>URL.createObjectURL(blob),revokeObjectURL=url=>URL.revokeObjectURL(url)}){this.client=client;this.createObjectURL=createObjectURL;this.revokeObjectURL=revokeObjectURL;this.version=0;this.url=null;this.controller=null;}
+ clear(){this.version++;this.controller?.abort();this.controller=null;if(this.url)this.revokeObjectURL(this.url);this.url=null;}
+ async load(media){
+  this.clear();const version=this.version,controller=new AbortController();this.controller=controller;
+  try{const blob=await this.client.media(media,{signal:controller.signal});if(version!==this.version)return null;this.url=this.createObjectURL(blob);return this.url;}
+  catch(error){if(version!==this.version)return null;throw error;}
+  finally{if(version===this.version)this.controller=null;}
+ }
+}
+const reportTitles={incident:'Incident report',check_in:'Timed check-in',patrol_checkpoint:'Patrol checkpoint',shift_start:'Shift started',shift_end:'Shift ended',dispatch_ack:'Message acknowledged',photo_evidence:'Photo evidence',check_in_miss_reason:'Missed check-in explanation',check_in_delivery_missing:'Check-in delivery overdue'};
+export const reportDate=value=>{const date=new Date(value);return Number.isFinite(date.getTime())?date.toLocaleString():'Unavailable';};
+export function reportPresentation(report){
+ const observation=report?.observation??{},data=observation.data??{},title=reportTitles[observation.kind]??'Received observation',rows=[];
+ let summary='Observation received.';
+ switch(observation.kind){
+  case 'incident':summary=String(data.description??'');rows.push(['Description',summary]);break;
+  case 'patrol_checkpoint':summary='Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'');rows.push(['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision]);break;
+  case 'check_in':summary='Slot '+String(data.slot??'')+' · GPS and local biometric recorded';rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Local biometric','Recorded on this device; individual identity comes from the signed-in guard account.'],['Biometric recorded',reportDate(data.biometric?.at)],['GPS recorded',reportDate(data.location?.at)],['Latitude',data.location?.latitude],['Longitude',data.location?.longitude],['GPS uncertainty',String(data.location?.accuracy_m??'—')+' metres'],['Evidence ID',data.evidence_id]);break;
+  case 'shift_start':summary='Clocked in '+reportDate(data.clocked_in_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)]);break;
+  case 'shift_end':summary=(data.early_exit?'Early clock-out':'Clocked out')+' · '+reportDate(data.clocked_out_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)],['Clocked out',reportDate(data.clocked_out_at_ms)],['Early exit',data.early_exit?'Yes':'No'],['Reason',data.reason||'No reason recorded']);break;
+  case 'dispatch_ack':summary='Message '+String(data.message_id??'')+' · Version '+String(data.message_version??'');rows.push(['Message ID',data.message_id],['Message version',data.message_version]);break;
+  case 'photo_evidence':summary='Camera evidence recorded';rows.push(['Evidence ID',data.evidence_id],['Dimensions',String(data.width??'—')+' × '+String(data.height??'—')],['Photo fingerprint',data.sha256]);break;
+  case 'check_in_miss_reason':summary=String(data.reason??'');rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Explanation',data.reason]);break;
+  case 'check_in_delivery_missing':summary='No complete delivery by '+reportDate(data.deadline_at);rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Delivery deadline',reportDate(data.deadline_at)],['Detected',reportDate(data.detected_at)]);break;
+ }
+ return {title,summary,rows,photoLabel:report.media?.state==='stored'?'Private photo stored':report.media?.state==='pending'?'Photo pending':'No photo attached'};
 }
 export class PendingChange{
  constructor({owner,action,reason,payload,requestId}){if(!owner||!actions[action]||!reason.trim()||reason.trim().length>500||/[\u0000-\u001f]/.test(reason))throw Error('Enter a clear reason of up to 500 characters.');this.owner=owner;this.body=JSON.stringify({request_id:requestId,action,reason:reason.trim(),payload});this.attempted=false;this.uncertain=false;}

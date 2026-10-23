@@ -9,6 +9,7 @@ import {createCheckInWorker} from './check-in-worker.mjs';
 import {createEvidenceHandler} from './evidence-handler.mjs';
 import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
 import {createLoginHandler} from './login-handler.mjs';
+import {createSessionLogoutHandler} from './session-logout-handler.mjs';
 import {createPasswordSession} from './password-session.mjs';
 import {createAssignmentHandler} from './assignment-handler.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
@@ -26,6 +27,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
  const loadSession=sessionPool?createPostgresAuthSessionReader(sessionPool):undefined;
  const authOptions={url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true,loadSession};
  const verifySession=createSupabaseSessionVerifier(authOptions),passwordSession=createPasswordSession(authOptions);
+ const logout=createSessionLogoutHandler({...authOptions,verifySession});
  const accountCredentials=sessionPool?createAccountCredentials({...authOptions,verifySession}):null;
  const accounts=accountCredentials?createAccountHandler({credentials:accountCredentials,consumeAttempt:createPostgresLoginLimiter(sessionPool)}):null;
  const authority=createSupabaseAuthority({url:config.API_URL,serviceKey:config.SERVICE_ROLE_KEY,allowLocal:true});
@@ -50,7 +52,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
    const request=new Request(new URL(req.url,'http://127.0.0.1'),{method:req.method,headers:req.headers,
     ...(['GET','HEAD'].includes(req.method)?{}:{body:Readable.toWeb(req),duplex:'half'})});
    const path=new URL(request.url).pathname;
-   const response=await (accounts&&(path==='/account'||path.startsWith('/account/'))?accountPageResponse(request):accounts&&path.startsWith('/v1/account/')?accounts(request):administration&&(path==='/admin'||path.startsWith('/admin/'))?adminConsoleResponse(request):administration&&path.startsWith('/v1/admin/')?administration(request):evidence&&path.startsWith('/v1/evidence/')?evidence(request):login&&path==='/v1/session/login'?login(request):profile&&path==='/v1/me'?profile(request):assignments&&['/v1/device-challenge','/v1/assignments','/v1/dispatch','/v1/shift-grant','/v1/shift-transition'].includes(path)?assignments(request):handler(request));
+   const response=await (accounts&&(path==='/account'||path.startsWith('/account/'))?accountPageResponse(request):accounts&&path.startsWith('/v1/account/')?accounts(request):administration&&(path==='/admin'||path.startsWith('/admin/'))?adminConsoleResponse(request):administration&&path.startsWith('/v1/admin/')?administration(request):evidence&&path.startsWith('/v1/evidence/')?evidence(request):path==='/v1/session/logout'?logout(request):login&&path==='/v1/session/login'?login(request):profile&&path==='/v1/me'?profile(request):assignments&&['/v1/device-challenge','/v1/assignments','/v1/dispatch','/v1/shift-grant','/v1/shift-transition'].includes(path)?assignments(request):handler(request));
    res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
   }catch{res.writeHead(500,{'content-type':'application/json','cache-control':'no-store'});res.end('{"error":"request_failed"}');}
  });

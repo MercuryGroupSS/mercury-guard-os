@@ -7,7 +7,7 @@ import java.net.URI
 import java.net.URL
 
 /** Explicit configured service only. No credentials, tokens or refresh tokens are persisted. */
-class GuardAccountClient(endpoint: String) {
+class GuardAccountClient(endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null) {
  private val origin = endpoint.trimEnd('/')
  init {
   val uri = URI(endpoint)
@@ -16,7 +16,11 @@ class GuardAccountClient(endpoint: String) {
  }
  class HttpFailure(val statusCode:Int):IllegalStateException("Request unavailable (HTTP $statusCode)")
  fun accountPageUrl():String = origin+"/account/"
- class Session internal constructor(private var token: String?, private val expiresElapsed: Long) {
+ fun logout(session:Session){
+  val result=request("/v1/session/logout",null,session,"POST")
+  require(result.keys().asSequence().toSet()==setOf("status")&&result.get("status")=="signed_out")
+ }
+ class Session internal constructor(private var token: String?, internal val expiresElapsed: Long) {
   internal fun bearer(): String {
    check(SystemClock.elapsedRealtime() < expiresElapsed) { "Sign in again" }
    return token ?: error("Signed out")
@@ -57,16 +61,19 @@ class GuardAccountClient(endpoint: String) {
   require(response.get("audience") == expectedAudience)
   return identity.signEnrollmentChallenge(expectedAudience,response.getString("request_id"),response.getString("challenge"))
  }
- private fun request(path: String, body: JSONObject?, session: Session? = null): JSONObject {
-  val connection = URL(origin+path).openConnection() as HttpURLConnection
+ private fun request(path: String, body: JSONObject?, session: Session? = null,method:String?=null): JSONObject {
+  cancellation?.check()
+  val url=URL(origin+path)
+  val connection = (network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
   try {
-   connection.requestMethod = if(body == null) "GET" else "POST"
+   cancellation?.attach(connection);cancellation?.check()
+   connection.requestMethod = method?:if(body == null) "GET" else "POST"
    connection.instanceFollowRedirects = false; connection.connectTimeout = 10000; connection.readTimeout = 10000
    session?.let { connection.setRequestProperty("Authorization", "Bearer ${it.bearer()}") }
    if(body != null) {
     val bytes = body.toString().toByteArray(Charsets.UTF_8); require(bytes.size <= 4096)
     connection.doOutput = true; connection.setRequestProperty("Content-Type","application/json"); connection.setFixedLengthStreamingMode(bytes.size)
-    connection.outputStream.use { it.write(bytes) }
+    cancellation?.check();connection.outputStream.use { cancellation?.check();it.write(bytes) }
    }
    val status=connection.responseCode;val rejectedTransition=status==409&&path=="/v1/shift-transition";if(status!=200&&!rejectedTransition)throw HttpFailure(status)
    val raw = (if(rejectedTransition)connection.errorStream?:error("Missing rejection receipt") else connection.inputStream).use { input ->
@@ -75,7 +82,7 @@ class GuardAccountClient(endpoint: String) {
     out.toString("UTF-8")
    }
    return JSONObject(raw).also{if(rejectedTransition)require(it.optString("status")=="shift_rejected_local_only")}
-  } finally { connection.disconnect() }
+  } finally { cancellation?.detach(connection);connection.disconnect() }
  }
  private fun integer(value: JSONObject, name: String): Long {
   val n=value.get(name); require(n is Int || n is Long); return (n as Number).toLong()

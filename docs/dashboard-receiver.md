@@ -42,7 +42,7 @@ Current official references used: [Supabase role separation](https://supabase.co
 
 ## Still required
 
-Protected Ops presentation, approved real source/destination credentials and mappings, production TLS/deployment and physical acceptance remain open. No hosted database, application, existing repository or phone was changed by this receiver work.
+Protected presentation now exists in the Guard administration console. Actual Ops presentation, approved real source/destination credentials and mappings, production TLS/deployment and physical acceptance remain open. No hosted database, application, existing repository or phone was changed by this receiver work.
 
 ## Private photo delivery
 
@@ -53,3 +53,8 @@ Photo observations retain their original immutable `media_delivery: not_transfer
 Migration `20261023224043_guard_dashboard_media.sql` adds independent media retry/receipt fields and the private receiver media table. Its marked receiver-only section can be reviewed without applying the sender schema. Complete replay passed. The projected-photo validator now restores the fixed local capture discriminator internally; it preserves the wire format and accepts valid queued photo metadata without exposing capture-grant fields.
 
 Integration checks used a signed source photo-byte fixture, transferred it over HTTP between independent PostgreSQL databases, compared the stored bytes, retried concurrently across receiver restart, rejected incorrect/false receipts and stale leases, and denied both observation and byte retries after a revocation committed during upload. The actual local receiver process/owner CLI smoke also passed separate photo receipts across process restart and removed its own fixtures. These synthetic byte fixtures do not replace viewing real camera images on the Fold and in the protected operations interface.
+
+
+## Protected report viewing
+
+The Guard administration service provides a current-session/admin-protected `received_reports` catalog and `/v1/admin/media/<delivery_id>` JPEG read. The catalog keeps exact original attribution and independent photo state. Check-in images link only across the exact original device/evidence/scope/mapping. Reads check immutable observation/receipt hashes and private byte identity; mapping withdrawal preserves historical administrator audit. The browser decodes a generated synthetic JPEG and removes its object URL on navigation, session loss or sign-out. This local console does not alter or establish rendering in the existing Ops Dashboard. See [administration](administration.md).

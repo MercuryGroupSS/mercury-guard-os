@@ -12,7 +12,7 @@ import java.util.UUID
 class ScopedEventStore internal constructor(context: Context, name: String = "mercury_scoped_events.db",
  private val elapsedNow: () -> Long = { android.os.SystemClock.elapsedRealtime() },
  private val bootNow: () -> Int = { android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1) }
-) : SQLiteOpenHelper(context,name,null,4),java.io.Closeable {
+) : SQLiteOpenHelper(context,name,null,5),java.io.Closeable {
  private val cipher = DeviceCipher()
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
@@ -20,6 +20,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   createGuardPending(db)
   createMediaReceipts(db)
   createCheckInIndex(db)
+  createUploads(db)
  }
  override fun onConfigure(db: SQLiteDatabase) {
   super.onConfigure(db)
@@ -34,10 +35,11 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  }
  private fun createGuardPending(db:SQLiteDatabase){db.execSQL("CREATE TABLE pending_by_guard (owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
-  check(oldVersion in 1..3 && newVersion==4)
+  check(oldVersion in 1..4 && newVersion==5)
   if(oldVersion==1)createGuardPending(db)
   createMediaReceipts(db)
   createCheckInIndex(db)
+  createUploads(db)
   db.rawQuery("SELECT sequence,body FROM captured",null).use{c->while(c.moveToNext()){
    val seq=c.getLong(0);val record=decrypt(c.getString(1),"mercury-scoped-event:$seq");val event=record.getJSONObject("event")
    if(event.getString("kind")=="check_in")indexCheckIn(db,binding(record.getJSONObject("scope")),event.getJSONObject("data"),seq)
@@ -55,6 +57,11 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   db.rawQuery("SELECT sequence FROM check_in_keys WHERE lookup=?",arrayOf(key)).use{check(it.moveToFirst()&&it.getLong(0)==sequence){"Duplicate check-in slot"}}
  }
  private fun createMediaReceipts(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS media_receipts (event_id TEXT PRIMARY KEY, body TEXT NOT NULL)")}
+ private fun createUploads(db:SQLiteDatabase){
+  db.execSQL("CREATE TABLE IF NOT EXISTS upload_snapshots(owner TEXT PRIMARY KEY, first_sequence INTEGER NOT NULL, body TEXT NOT NULL, review TEXT)")
+  db.execSQL("CREATE TABLE IF NOT EXISTS upload_media_review(event_id TEXT PRIMARY KEY, body TEXT NOT NULL)")
+  db.execSQL("CREATE TABLE IF NOT EXISTS upload_receipts(batch_id TEXT PRIMARY KEY, body TEXT NOT NULL)")
+ }
  private fun owner(guardId:String):String {
   require(guardId.isNotBlank() && guardId.length<=200)
   return java.security.MessageDigest.getInstance("SHA-256").digest(guardId.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
@@ -233,5 +240,136 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    if(binding(decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}").getJSONObject("scope")).guardId==guardId)count++
   }}
   return count
+ }
+
+ /** Original-scope snapshots allow one denied assignment to be retained without blocking another. */
+ private fun uploadOwner(scope:JSONObject)=java.security.MessageDigest.getInstance("SHA-256").digest(scope.toString().toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ private fun saveUpload(db:SQLiteDatabase,snapshot:JSONObject){
+  val id=uploadOwner(snapshot.getJSONObject("scope"));val events=snapshot.getJSONObject("batch").getJSONArray("events");require(events.length()>0)
+  val old=db.rawQuery("SELECT body FROM upload_snapshots WHERE owner=?",arrayOf(id)).use{if(it.moveToFirst())decrypt(it.getString(0),"mercury-upload-snapshot:$id") else null}
+  if(old!=null){check(old.toString()==snapshot.toString()){ "Conflicting original upload snapshot" };return}
+  db.insertOrThrow("upload_snapshots",null,ContentValues().apply{put("owner",id);put("first_sequence",events.getJSONObject(0).getLong("sequence"));put("body",cipher.encrypt(snapshot.toString().toByteArray(Charsets.UTF_8),"mercury-upload-snapshot:$id"))})
+ }
+ private fun migrateUpload(db:SQLiteDatabase,guardId:String){
+  val old=readSnapshot(db,guardId)?:return
+  check(binding(old.getJSONObject("scope")).guardId==guardId);saveUpload(db,old)
+  db.delete("pending_by_guard","owner=?",arrayOf(owner(guardId)))
+ }
+ internal fun prepareUpload(identity:DeviceIdentity,audience:String,guardId:String,generation:String):JSONObject? {
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   migrateUpload(db,guardId)
+   var selected:JSONObject?=null;val occupied=mutableSetOf<String>()
+   db.rawQuery("SELECT owner,body,review FROM upload_snapshots ORDER BY first_sequence",null).use{c->while(c.moveToNext()){
+    val id=c.getString(0);val snapshot=decrypt(c.getString(1),"mercury-upload-snapshot:$id")
+    if(binding(snapshot.getJSONObject("scope")).guardId!=guardId)continue
+    occupied.add(id)
+    val held=!c.isNull(2)&&decrypt(c.getString(2),"mercury-upload-review:$id").getString("generation")==generation
+    if(selected==null&&!held)selected=snapshot
+   }}
+   if(selected==null){
+    val events=JSONArray();var first:GrantBinding?=null;var size=0
+    db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0 ORDER BY sequence",null).use{c->while(c.moveToNext()){
+     val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
+     if(scope.guardId!=guardId||uploadOwner(record.getJSONObject("scope")) in occupied)continue
+     if(first!=null&&first!=scope)continue
+     val event=record.getJSONObject("event");check(event.getLong("sequence")==c.getLong(0));val bytes=event.toString().toByteArray(Charsets.UTF_8).size
+     if(events.length()>=100||size+bytes>250000)break
+     first=scope;events.put(event);size+=bytes
+    }}
+    if(events.length()>0){selected=JSONObject().put("scope",binding(first!!)).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events));saveUpload(db,selected!!)}
+   }
+   val snapshot=selected?:run{db.setTransactionSuccessful();return null}
+   val proof=identity.signScopedEventBatch(audience,snapshot.getJSONObject("batch"),binding(snapshot.getJSONObject("scope")))
+   db.setTransactionSuccessful();return proof
+  }finally{db.endTransaction()}
+ }
+ private fun findUpload(db:SQLiteDatabase,guardId:String,batchId:String):Pair<String,JSONObject>? {
+  db.rawQuery("SELECT owner,body FROM upload_snapshots",null).use{c->while(c.moveToNext()){
+   val id=c.getString(0);val snapshot=decrypt(c.getString(1),"mercury-upload-snapshot:$id")
+   if(binding(snapshot.getJSONObject("scope")).guardId==guardId&&snapshot.getJSONObject("batch").getString("batch_id")==batchId)return id to snapshot
+  }};return null
+ }
+ internal fun retainUploadForReview(guardId:String,batchId:String,generation:String,status:Int){
+  require(status in 300..499);val db=writableDatabase;db.beginTransaction()
+  try{val (id,_)=findUpload(db,guardId,batchId)?:error("No original snapshot")
+   val review=JSONObject().put("generation",generation).put("http_status",status).put("state","retained_for_review_not_permanent_rejection")
+   check(db.update("upload_snapshots",ContentValues().apply{put("review",cipher.encrypt(review.toString().toByteArray(Charsets.UTF_8),"mercury-upload-review:$id"))},"owner=?",arrayOf(id))==1)
+   db.setTransactionSuccessful()
+  }finally{db.endTransaction()}
+ }
+ internal fun recordUploadReceipt(guardId:String,receipt:JSONObject){
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   val batchId=receipt.getString("batch_id")
+   val prior=db.rawQuery("SELECT body FROM upload_receipts WHERE batch_id=?",arrayOf(batchId)).use{if(it.moveToFirst())decrypt(it.getString(0),"mercury-upload-receipt:$batchId") else null}
+   if(prior!=null){check(prior.getString("guard")==guardId&&prior.getJSONObject("receipt").toString()==receipt.toString());db.setTransactionSuccessful();return}
+   val (id,snapshot)=findUpload(db,guardId,batchId)?:error("No original snapshot")
+   val events=snapshot.getJSONObject("batch").getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
+   GuardTransport.validatePilotReceipt(receipt,batchId,ids)
+   for(i in 0 until events.length()){
+    val event=events.getJSONObject(i);val sequence=event.getLong("sequence")
+    val original=db.rawQuery("SELECT body FROM captured WHERE sequence=?",arrayOf(sequence.toString())).use{check(it.moveToFirst());decrypt(it.getString(0),"mercury-scoped-event:$sequence")}
+    check(original.getJSONObject("scope").toString()==snapshot.getJSONObject("scope").toString()&&original.getJSONObject("event").toString()==event.toString())
+    check(db.update("captured",ContentValues().apply{put("pilot_receipted",1)},"sequence=?",arrayOf(sequence.toString()))==1)
+   }
+   val record=JSONObject().put("guard",guardId).put("receipt",receipt)
+   db.insertOrThrow("upload_receipts",null,ContentValues().apply{put("batch_id",batchId);put("body",cipher.encrypt(record.toString().toByteArray(Charsets.UTF_8),"mercury-upload-receipt:$batchId"))})
+   check(db.delete("upload_snapshots","owner=?",arrayOf(id))==1);db.setTransactionSuccessful()
+  }finally{db.endTransaction()}
+ }
+ internal fun pendingUploadPhotos(guardId:String,generation:String,limit:Int=3):List<JSONObject>{
+  require(limit in 1..100);val result=mutableListOf<JSONObject>()
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1 ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");if(binding(record.getJSONObject("scope")).guardId!=guardId)continue
+   val event=record.getJSONObject("event");if(event.getString("kind")!="photo_evidence")continue
+   val id=event.getString("event_id")
+   val accepted=readableDatabase.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{r->if(!r.moveToFirst())false else{GuardTransport.validateEvidenceReceipt(decrypt(r.getString(0),"mercury-media-receipt:$id"),id,event.getJSONObject("data"));true}}
+   if(accepted)continue
+   val held=readableDatabase.rawQuery("SELECT body FROM upload_media_review WHERE event_id=?",arrayOf(id)).use{r->r.moveToFirst()&&decrypt(r.getString(0),"mercury-upload-media-review:$id").getString("generation")==generation}
+   if(!held)result.add(record);if(result.size>=limit)break
+  }};return result
+ }
+ internal fun retainPhotoForReview(guardId:String,eventId:String,generation:String,status:Int){
+  require(status in 300..499||status==0);val db=writableDatabase;db.beginTransaction()
+  try{
+   var exists=false
+   db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1",null).use{c->while(c.moveToNext()){
+    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val event=record.getJSONObject("event")
+    if(binding(record.getJSONObject("scope")).guardId==guardId&&event.getString("kind")=="photo_evidence"&&event.getString("event_id")==eventId){exists=true;break}
+   }};check(exists)
+   val value=JSONObject().put("guard",guardId).put("generation",generation).put("http_status",status).put("state","retained_for_review_not_permanent_rejection")
+   db.insertWithOnConflict("upload_media_review",null,ContentValues().apply{put("event_id",eventId);put("body",cipher.encrypt(value.toString().toByteArray(Charsets.UTF_8),"mercury-upload-media-review:$eventId"))},SQLiteDatabase.CONFLICT_REPLACE)
+   db.setTransactionSuccessful()
+  }finally{db.endTransaction()}
+ }
+ internal fun recordUploadMediaReceipt(guardId:String,receipt:JSONObject){
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   val id=receipt.getString("event_id")
+   val old=db.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{if(it.moveToFirst())decrypt(it.getString(0),"mercury-media-receipt:$id") else null}
+   // Look up the exact original record, independently of other pending photos or their reviews.
+   var found=false
+   db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1",null).use{c->while(c.moveToNext()){
+    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val event=record.getJSONObject("event")
+    if(binding(record.getJSONObject("scope")).guardId==guardId&&event.getString("event_id")==id&&event.getString("kind")=="photo_evidence"){GuardTransport.validateEvidenceReceipt(receipt,id,event.getJSONObject("data"));found=true;break}
+   }};check(found)
+   if(old!=null){check(old.toString()==receipt.toString());db.setTransactionSuccessful();return}
+   db.insertOrThrow("media_receipts",null,ContentValues().apply{put("event_id",id);put("body",cipher.encrypt(receipt.toString().toByteArray(Charsets.UTF_8),"mercury-media-receipt:$id"))})
+   db.delete("upload_media_review","event_id=?",arrayOf(id));db.setTransactionSuccessful()
+  }finally{db.endTransaction()}
+ }
+ internal fun uploadSummary(guardId:String):String {
+  var reviews=0;var photos=0
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val event=record.getJSONObject("event")
+   if(binding(record.getJSONObject("scope")).guardId==guardId&&event.getString("kind")=="photo_evidence"){
+    val id=event.getString("event_id");val accepted=readableDatabase.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{r->if(!r.moveToFirst())false else{GuardTransport.validateEvidenceReceipt(decrypt(r.getString(0),"mercury-media-receipt:$id"),id,event.getJSONObject("data"));true}}
+    if(!accepted)photos++
+   }
+  }}
+  readableDatabase.rawQuery("SELECT owner,body,review FROM upload_snapshots WHERE review IS NOT NULL",null).use{c->while(c.moveToNext())if(binding(decrypt(c.getString(1),"mercury-upload-snapshot:${c.getString(0)}").getJSONObject("scope")).guardId==guardId)reviews++}
+  readableDatabase.rawQuery("SELECT event_id,body FROM upload_media_review",null).use{c->while(c.moveToNext())if(decrypt(c.getString(1),"mercury-upload-media-review:${c.getString(0)}").getString("guard")==guardId)reviews++}
+  return "${pendingCount(guardId)} saved record(s) and $photos photo file(s) await service receipts. $reviews upload group(s) retained for review. Retained data is never discarded or reassigned; sign in again to retry after the connection or authorization is corrected."
  }
 }

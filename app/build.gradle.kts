@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
  namespace = "ca.mercury.guard"
  compileSdk = 35
- defaultConfig { applicationId = if (providers.gradleProperty("localPreview").orNull == "true") "ca.mercury.guard.preview" else "ca.mercury.guard"; minSdk = 28; targetSdk = 35; versionCode = 29; versionName = "0.29.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+ defaultConfig { applicationId = if (providers.gradleProperty("localPreview").orNull == "true") "ca.mercury.guard.preview" else "ca.mercury.guard"; minSdk = 28; targetSdk = 35; versionCode = 31; versionName = "0.31.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
  if (providers.gradleProperty("localPreview").orNull == "true") {
   sourceSets.getByName("debug").manifest.srcFile("src/preview/AndroidManifest.xml")
  }
@@ -11,6 +11,7 @@ android {
   buildTypes.getByName("debug").applicationIdSuffix = ".httpstest"
   sourceSets.getByName("debug").manifest.srcFile("src/httpsTest/AndroidManifest.xml")
   sourceSets.getByName("debug").res.srcDir("build/https-test/res")
+  sourceSets.getByName("debug").assets.srcDir("build/https-test/main-assets")
   sourceSets.getByName("androidTest").assets.srcDir("build/https-test/assets")
  }
  signingConfigs.getByName("debug") {

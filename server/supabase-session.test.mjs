@@ -18,7 +18,7 @@ test('insecure remote origins and implicit localhost are rejected',()=>{
 test('strict session checks follow remote verification and bind the exact subject and session ID',async()=>{
  const subject='aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',session='11111111-2222-3333-4444-555555555555';let calls=0,active=true;
  const verify=createSupabaseSessionVerifier({url:'https://example.supabase.co',publishableKey:'synthetic',now:()=>100,fetchImpl:async()=>Response.json({id:subject}),loadSession:async(s,id)=>{calls++;assert.equal(s,subject);assert.equal(id,session);return active;}});
- assert.equal((await verify(token({sub:subject,exp:200,session_id:session}))).subject,subject);active=false;assert.equal(await verify(token({sub:subject,exp:200,session_id:session})),null);assert.equal(calls,2);
+ assert.deepEqual(await verify(token({sub:subject,exp:200,session_id:session,user_metadata:{sessionId:'attacker'}})),{subject,active:true,expiresAt:200,sessionId:session});active=false;assert.equal(await verify(token({sub:subject,exp:200,session_id:session})),null);assert.equal(calls,2);
  for(const claims of [{sub:subject,exp:200},{sub:subject,exp:200,session_id:'invalid'},{sub:'other',exp:200,session_id:session}])assert.equal(await verify(token(claims)),null);assert.equal(calls,2);
 });
 test('remote failure cannot reach the session store, and session-store failure cannot authorize a token',async()=>{

@@ -31,3 +31,13 @@ test('pending request resolution is protected and retains explicit conflict outc
  let settled=0,member=true;const handler=createAdminHandler({now:()=>1000,verifySession:async()=>({active:true,expiresAt:1000}),admin:{member:async()=>member,settle:async value=>{settled++;return {status:'not_applied'};}}});
  assert.equal((await handler(request('resolve',{}))).status,200);assert.equal(settled,1);member=false;assert.equal((await handler(request('resolve',{}))).status,403);assert.equal(settled,1);assert.equal((await handler(request('resolve'))).status,405);assert.equal((await handler(request('resolve?request_id=secret',{}))).status,400);
 });
+test('private report photos require current verified administrator access and never accept URL credentials',async()=>{
+ const id='a'.repeat(64),bytes=Buffer.from([0xff,0xd8,0xff,0xe0,0xff,0xd9]);let member=true,valid=true,reads=0,deniedDuringRead=false;
+ const handler=createAdminHandler({now:()=>1000,verifySession:async()=>valid?{active:true,expiresAt:1000}:null,admin:{member:async()=>member,media:async(_session,deliveryId)=>{reads++;assert.equal(deliveryId,id);if(deniedDuringRead)throw new AdminDeniedError();return {bytes};}}});
+ assert.equal((await handler(request('media/'+id,undefined,null))).status,401);
+ valid=false;assert.equal((await handler(request('media/'+id))).status,401);valid=true;
+ member=false;assert.equal((await handler(request('media/'+id))).status,403);assert.equal(reads,0);member=true;
+ let response=await handler(request('media/'+id));assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'image/jpeg');assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('x-content-type-options'),'nosniff');assert.equal(response.headers.get('cross-origin-resource-policy'),'same-origin');assert.deepEqual(Buffer.from(await response.arrayBuffer()),bytes);
+ deniedDuringRead=true;assert.equal((await handler(request('media/'+id))).status,403);
+ assert.equal((await handler(request('media/'+id+'?token=secret'))).status,400);assert.equal((await handler(request('media/'+id,{}))).status,405);assert.equal((await handler(request('media/'+id.toUpperCase()))).status,404);assert.equal((await handler(request('media/'+id+'/extra'))).status,404);
+});

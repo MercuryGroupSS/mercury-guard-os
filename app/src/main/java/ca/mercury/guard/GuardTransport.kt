@@ -7,7 +7,8 @@ import java.net.URL
 
 /** HTTPS transport foundation. Caller owns verified capture scope and session lifecycle.
  * Local pilot receipts deliberately cannot acknowledge the operational demo outbox. */
-class GuardTransport(private val endpoint: String) {
+class GuardTransport(private val endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null) {
+ class HttpFailure(val statusCode:Int):IllegalStateException("Upload unavailable (HTTP $statusCode)")
  data class PilotReceipt(val batchId: String, val eventIds: Set<String>)
  init {
   val uri = URI(endpoint)
@@ -19,22 +20,24 @@ class GuardTransport(private val endpoint: String) {
   require(proof.getInt("version") == 2) { "Original capture scope required" }
   val bytes = proof.toString().toByteArray(Charsets.UTF_8)
   require(bytes.size <= 360000)
-  val connection = URL(endpoint.trimEnd('/') + "/v2/batches").openConnection() as HttpURLConnection
+  cancellation?.check();val url=URL(endpoint.trimEnd('/') + "/v2/batches")
+  val connection = (network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
   try {
+   cancellation?.attach(connection);cancellation?.check()
    connection.requestMethod = "POST"; connection.instanceFollowRedirects = false
    connection.connectTimeout = 10000; connection.readTimeout = 10000; connection.doOutput = true
    connection.setRequestProperty("Authorization", "Bearer $accessToken")
    connection.setRequestProperty("Content-Type", "application/json")
    connection.setFixedLengthStreamingMode(bytes.size)
-   connection.outputStream.use { it.write(bytes) }
-   check(connection.responseCode == 200) { "Report not accepted (HTTP ${connection.responseCode})" }
+   cancellation?.check();connection.outputStream.use { cancellation?.check();it.write(bytes) }
+   if(connection.responseCode!=200)throw HttpFailure(connection.responseCode)
    val body = connection.inputStream.use { input ->
     val buffer = java.io.ByteArrayOutputStream(); val chunk = ByteArray(4096)
     while (true) { val count = input.read(chunk); if (count < 0) break; check(buffer.size() + count <= 32768); buffer.write(chunk,0,count) }
     buffer.toString("UTF-8")
    }
    return validatePilotReceipt(JSONObject(body), expectedBatchId, expectedIds)
-  } finally { connection.disconnect() }
+  } finally { cancellation?.detach(connection);connection.disconnect() }
  }
  fun sendPilotEvidence(accessToken:String,eventId:String,metadata:JSONObject,bytes:ByteArray):JSONObject {
   require(java.util.UUID.fromString(eventId).toString()==eventId)
@@ -42,19 +45,21 @@ class GuardTransport(private val endpoint: String) {
   require(bytes.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES && metadata.getLong("bytes")==bytes.size.toLong())
   val hash=java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
   require(metadata.getString("sha256")==hash)
-  val connection=URL(endpoint.trimEnd('/')+"/v1/evidence/"+eventId).openConnection() as HttpURLConnection
+  cancellation?.check();val url=URL(endpoint.trimEnd('/')+"/v1/evidence/"+eventId)
+  val connection=(network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
   try{
+   cancellation?.attach(connection);cancellation?.check()
    connection.requestMethod="POST";connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=10000;connection.doOutput=true
    connection.setRequestProperty("Authorization","Bearer $accessToken");connection.setRequestProperty("Content-Type","image/jpeg");connection.setFixedLengthStreamingMode(bytes.size)
-   connection.outputStream.use{it.write(bytes)}
-   check(connection.responseCode==200){"Evidence not accepted (HTTP ${connection.responseCode})"}
+   cancellation?.check();connection.outputStream.use{cancellation?.check();it.write(bytes)}
+   if(connection.responseCode!=200)throw HttpFailure(connection.responseCode)
    val raw=connection.inputStream.use{input->
     val out=java.io.ByteArrayOutputStream();val chunk=ByteArray(1024)
     while(true){val count=input.read(chunk);if(count<0)break;check(out.size()+count<=8192);out.write(chunk,0,count)}
     out.toString("UTF-8")
    }
    return JSONObject(raw).also{validateEvidenceReceipt(it,eventId,metadata)}
-  }finally{connection.disconnect()}
+  }finally{cancellation?.detach(connection);connection.disconnect()}
  }
  companion object {
   fun validateEvidenceReceipt(receipt:JSONObject,eventId:String,metadata:JSONObject){

@@ -166,4 +166,49 @@ class ScopedEventStoreTest {
    reopened.recordPilotReceipt(receipt(batch));assertTrue(reopened.dispatchAcknowledged(a,"message",1));assertEquals(0,reopened.pendingCount())
   }
  }}
+
+ @Test fun originalScopeReviewDoesNotBlockNewAssignmentAndReauthenticationRetriesExactOriginal(){isolated{store,identity,name->
+  val a=binding(identity);val b=binding(identity,"shift-b")
+  store.capture("incident",JSONObject().put("note","RETAIN-ORIGINAL-A"),a,grant(a),identity,10000)
+  val legacy=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!)
+  store.capture("incident",JSONObject().put("note","CURRENT-B"),b,grant(b),identity,10001)
+  store.writableDatabase.version=4;store.close()
+  ScopedEventStore(context,name,{200},{1}).use{reopened->
+   val first=payload(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session-a")!!);assertEquals(legacy.toString(),first.toString())
+   reopened.retainUploadForReview(a.guardId,first.getString("batch_id"),"session-a",403)
+   val next=payload(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session-a")!!);assertEquals("shift-b",next.getJSONObject("scope").getString("assignment_id"))
+   rejected{reopened.recordUploadReceipt("other-guard",receipt(next))}
+   reopened.recordUploadReceipt(a.guardId,receipt(next));reopened.recordUploadReceipt(a.guardId,receipt(next))
+   assertEquals(1,reopened.pendingCount(a.guardId));assertNull(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session-a"))
+   assertTrue(reopened.uploadSummary(a.guardId).contains("1 upload group(s) retained"))
+   val retried=payload(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session-b")!!);assertEquals(first.toString(),retried.toString())
+   reopened.readableDatabase.rawQuery("SELECT body FROM captured",null).use{c->while(c.moveToNext())assertFalse(c.getString(0).contains("RETAIN-ORIGINAL-A"))}
+   reopened.recordUploadReceipt(a.guardId,receipt(retried));assertEquals(0,reopened.pendingCount(a.guardId))
+  }
+ }}
+ @Test fun concurrentUploadPreparationAcrossHelpersKeepsOneExactSnapshot(){isolated{store,identity,name->
+  val a=binding(identity);store.capture("incident",JSONObject().put("note","same"),a,grant(a),identity,10000)
+  val pool=java.util.concurrent.Executors.newFixedThreadPool(2);val start=java.util.concurrent.CountDownLatch(1)
+  try{
+   val tasks=(1..2).map{pool.submit<String>{start.await();ScopedEventStore(context,name,{200},{1}).use{db->payload(db.prepareUpload(identity,"mercury-local",a.guardId,"session")!!).toString()}}}
+   start.countDown();val one=tasks[0].get(20,java.util.concurrent.TimeUnit.SECONDS);val two=tasks[1].get(20,java.util.concurrent.TimeUnit.SECONDS);assertEquals(one,two)
+   store.readableDatabase.rawQuery("SELECT COUNT(*) FROM upload_snapshots",null).use{assertTrue(it.moveToFirst());assertEquals(1,it.getInt(0))}
+   store.recordUploadReceipt(a.guardId,receipt(JSONObject(one)));assertEquals(0,store.pendingCount(a.guardId))
+  }finally{pool.shutdownNow()}
+ }}
+ @Test fun retainedPhotoDoesNotBlockOtherPhotosAndReceiptsAreGuardBound(){isolated{store,identity,name->
+  val a=binding(identity);val permission=VerifiedShiftGrant("photos",a,setOf("photo"),100,1000,1)
+  val data=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("sha256","a".repeat(64)).put("bytes",100)
+  val first=store.capture("photo_evidence",data,a,permission,identity,10000)
+  val second=store.capture("photo_evidence",JSONObject(data.toString()).put("evidence_id",UUID.randomUUID().toString()),a,permission,identity,10001)
+  val batch=payload(store.prepareUpload(identity,"mercury-local",a.guardId,"session")!!);store.recordUploadReceipt(a.guardId,receipt(batch))
+  store.retainPhotoForReview(a.guardId,first,"session",400)
+  assertEquals(second,store.pendingUploadPhotos(a.guardId,"session",1).single().getJSONObject("event").getString("event_id"))
+  val event=store.pendingUploadPhotos(a.guardId,"session",1).single().getJSONObject("event")
+  val media=JSONObject(event.getJSONObject("data").toString()).apply{remove("capture_grant_id")}.put("event_id",second).put("status","evidence_accepted_local_only")
+  rejected{store.recordUploadMediaReceipt("other-guard",media)};store.recordUploadMediaReceipt(a.guardId,media);store.recordUploadMediaReceipt(a.guardId,media)
+  rejected{store.recordUploadMediaReceipt("other-guard",media)}
+  assertTrue(store.pendingUploadPhotos(a.guardId,"session",10).isEmpty())
+  store.close();ScopedEventStore(context,name,{200},{1}).use{reopened->assertEquals(first,reopened.pendingUploadPhotos(a.guardId,"new-session",1).single().getJSONObject("event").getString("event_id"))}
+ }}
 }

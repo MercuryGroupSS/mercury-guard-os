@@ -4,6 +4,7 @@ import {PostgresOpsAssignmentSync} from './postgres-ops-assignment-sync.mjs';
 import {PostgresOpsBindingStore} from './postgres-ops-binding-store.mjs';
 import {PostgresDashboardBindings} from './postgres-dashboard-delivery.mjs';
 import {PostgresDispatchFeed} from './postgres-dispatch-feed.mjs';
+import {receivedReportsCatalog,receivedReportMedia} from './received-reports.mjs';
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
 const exact=(x,keys,optional=[])=>{if(!x||typeof x!=='object'||Array.isArray(x)||keys.some(k=>!Object.hasOwn(x,k))||Object.keys(x).some(k=>![...keys,...optional].includes(k)))throw Error('Unexpected administration fields');};
@@ -44,6 +45,7 @@ export class PostgresAdministration{
  }
  async loginAccount(email){const r=(await this.pool.query('SELECT auth_subject,email FROM mercury_guard.admin_accounts WHERE email=$1 AND active',[email])).rows[0];return r?{subject:r.auth_subject,email:r.email}:null;}
  async catalog(session,kind,after=''){
+  if(kind==='received_reports')return this.devices.transaction(async client=>{if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');return receivedReportsCatalog(client,after);});
   const catalog={audit:['request_id',"SELECT request_id,actor_subject,action,recorded_at,input->>'reason' AS reason,receipt->>'status' AS status,receipt FROM mercury_guard.admin_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],vendors:['vendor_id','SELECT vendor_id,kind,active FROM mercury_guard.vendors WHERE vendor_id>$1 ORDER BY vendor_id LIMIT 51'],
    administrators:['auth_subject',"SELECT auth_subject,email,active FROM mercury_guard.admin_accounts WHERE auth_subject>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY auth_subject LIMIT 51"],
    access_audit:['request_id',"SELECT request_id,auth_subject,email,active,operator_label,reason,recorded_at,receipt FROM mercury_guard.admin_membership_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],
@@ -57,6 +59,7 @@ export class PostgresAdministration{
   if(!Object.hasOwn(catalog,kind)||(after!==''&&!stable(after)))throw Error('Bounded catalog required');
   return this.devices.transaction(async client=>{if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');const [key,sql]=catalog[kind],rows=(await client.query(sql,[after])).rows,items=rows.slice(0,50);return {kind,items,next_cursor:rows.length>50?items.at(-1)[key]:null};});
  }
+ async media(session,deliveryId){return this.devices.transaction(async client=>{if(!await this.member(session,client,true))throw new AdminDeniedError('Administrator unavailable');return receivedReportMedia(client,deliveryId);});}
  async settle(session,value){
   const {request,input,digest}=prepareRequest(value,session?.subject);
   return this.devices.transaction(async client=>{

@@ -1,7 +1,8 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
 import {adminConsoleResponse} from './admin-console-handler.mjs';
-import {buildPayload,PendingChange,AdminClient,valuesForRow} from './admin-console/model.mjs';
+import {buildPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,maxReportPhotoBytes} from './admin-console/model.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
 const session={access_token:'synthetic-access',expires_at:1000},member={subject:'individual-admin',role:'guard_os_admin',expires_at:1000};
 test('console serves only approved static assets with no framing, script injection or credential directory access',async()=>{
@@ -9,6 +10,7 @@ test('console serves only approved static assets with no framing, script injecti
  for(const path of ['/admin/','/admin/console.css','/admin/console.mjs','/admin/model.mjs']){const r=adminConsoleResponse(req(path));assert.equal(r.status,200);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(r.headers.get('x-content-type-options'),'nosniff');assert.match(r.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(r.headers.get('content-security-policy'),/script-src 'self'/);assert.doesNotMatch(r.headers.get('content-security-policy'),/unsafe-inline|unsafe-eval/);assert.ok((await r.text()).length>100);}
  for(const path of ['/admin/.env','/admin/../supabase-start.log','/admin/%2e%2e%2fsupabase-start.log','/admin/index.html','/admin/?token=secret'])assert.equal(adminConsoleResponse(req(path)).status,404);
  assert.equal(adminConsoleResponse(req('/admin/','POST')).status,405);assert.equal(adminConsoleResponse(req('/admin')).headers.get('location'),'/admin/');assert.equal(await adminConsoleResponse(req('/admin/','HEAD')).text(),'');
+ assert.match(adminConsoleResponse(req('/admin/')).headers.get('content-security-policy'),/img-src 'self' blob:;/);
 });
 test('operator forms preserve individual account identity, explicit device scope and message time',()=>{
  const g=buildPayload('guard.link',{guardId:'guard-1',vendorId:'company-1',authSubject:'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE',email:'Person@Example.test',active:'true'});assert.equal(g.authSubject,'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');assert.equal(g.email,'person@example.test');assert.equal(g.vendorId,'company-1');
@@ -44,4 +46,58 @@ test('interrupted writes stay distinguishable from rejected writes and untrusted
 });
 test('default browser transport preserves the global fetch receiver',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=function(path){assert.equal(this,globalThis);return Promise.resolve(json(path.endsWith('/login')?session:member));};const client=new AdminClient({now:()=>1000});await client.login('a@example.test','password');assert.equal(client.session.subject,member.subject);}finally{globalThis.fetch=original;}
+});
+test('explicit sign-out clears local credentials immediately and posts only the captured bearer to the fixed same-origin endpoint',async()=>{
+ let release;const calls=[],client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{calls.push({path,options});if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);return new Promise(resolve=>{release=resolve;});}});await client.login('a@example.test','password');const generation=client.generation,confirmation=client.logout();assert.equal(client.session,null);assert.equal(client.generation,generation+1);
+ const {path,options}=calls.at(-1);assert.equal(path,'/v1/session/logout');assert.equal(options.method,'POST');assert.deepEqual(options.headers,{authorization:'Bearer synthetic-access'});assert.equal(options.body,undefined);assert.equal(options.credentials,'omit');assert.equal(options.cache,'no-store');assert.equal(options.redirect,'error');assert.equal(options.mode,'same-origin');assert.equal(path.includes('synthetic-access'),false);release(json({status:'signed_out'}));assert.equal(await confirmation,'signed_out');assert.equal(client.session,null);
+});
+test('explicit sign-out distinguishes unavailable sessions from unconfirmed provider outcomes without restoring local credentials',async()=>{
+ for(const [reply,expected]of [[()=>json({status:'signed_out'}),'signed_out'],[()=>json({},401),'session_unavailable'],[()=>json({},503),'unconfirmed'],[()=>Promise.reject(Error('offline')),'unconfirmed'],[()=>new Response('not json'),'unconfirmed'],[()=>json({status:'other'}),'unconfirmed'],[()=>json({status:'signed_out',extra:true}),'unconfirmed']]){
+  const client=new AdminClient({now:()=>1000,fetchImpl:async path=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):reply()});await client.login('a@example.test','password');assert.equal(await client.logout(),expected);assert.equal(client.session,null);
+ }
+ let calls=0;const empty=new AdminClient({fetchImpl:async()=>{calls++;throw Error('Unexpected request');}});assert.equal(await empty.logout(),'session_unavailable');assert.equal(calls,0);
+});
+test('late sign-out completion cannot clear or publish an outcome over a newer sign-in or local navigation',async()=>{
+ for(const status of [200,401,503]){
+  let release;const client=new AdminClient({now:()=>1000,fetchImpl:async path=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):new Promise(resolve=>{release=resolve;})});await client.login('a@example.test','password');const confirmation=client.logout();await client.login('b@example.test','password');const current=client.session;release(json({status:'signed_out'},status));assert.equal(await confirmation,null);assert.equal(client.session,current);
+ }
+ let release;const client=new AdminClient({now:()=>1000,fetchImpl:async path=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):new Promise(resolve=>{release=resolve;})});await client.login('a@example.test','password');const confirmation=client.logout();client.clear();release(json({status:'signed_out'}));assert.equal(await confirmation,null);assert.equal(client.session,null);
+});
+const jpeg=new Uint8Array([255,216,255,224,0,2,255,217]),photo={state:'stored',path:'/v1/admin/media/'+'a'.repeat(64),sha256:createHash('sha256').update(jpeg).digest('hex'),bytes:jpeg.length};
+const imageResponse=(bytes=jpeg,headers={})=>new Response(bytes,{headers:{'content-type':'image/jpeg','content-length':String(bytes.length),...headers}});
+test('private evidence fetch sends credentials only to its exact protected same-origin path and verifies bytes and fingerprint',async()=>{
+ const calls=[],client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{calls.push({path,options});return path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):imageResponse();}});await client.login('a@example.test','password');
+ const blob=await client.media(photo);assert.equal(blob.type,'image/jpeg');assert.equal(blob.size,jpeg.length);assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),jpeg);const call=calls.at(-1);assert.equal(call.path,photo.path);assert.equal(call.options.headers.authorization,'Bearer synthetic-access');assert.equal(call.options.credentials,'omit');assert.equal(call.options.cache,'no-store');assert.equal(call.options.redirect,'error');assert.equal(call.options.mode,'same-origin');assert.equal(call.path.includes('synthetic-access'),false);
+ for(const invalid of [{...photo,path:'https://external.test/'+photo.path},{...photo,path:photo.path+'?token=secret'},{...photo,path:photo.path+'#fragment'},{...photo,state:'pending'},{...photo,bytes:maxReportPhotoBytes+1},{...photo,sha256:'bad'}])await assert.rejects(client.media(invalid),/reference/);
+ assert.equal(calls.length,3);
+});
+test('private evidence rejects wrong type, length, truncated data, non-JPEG contents and mismatched hash before displaying',async()=>{
+ await assert.rejects(readReportJpeg(imageResponse(jpeg,{'content-type':'text/html'}),photo),/validation/);
+ await assert.rejects(readReportJpeg(imageResponse(jpeg,{'content-length':'999'}),photo),/validation/);
+ await assert.rejects(readReportJpeg(imageResponse(jpeg.slice(0,6),{'content-length':String(photo.bytes)}),photo),/incomplete/);
+ await assert.rejects(readReportJpeg(imageResponse(),{...photo,sha256:'b'.repeat(64)}),/fingerprint/);
+ const other=new Uint8Array(jpeg);other[0]=0;await assert.rejects(readReportJpeg(imageResponse(other),{...photo,sha256:createHash('sha256').update(other).digest('hex')}),/not a JPEG/);
+ let cancelled=false;const body=new ReadableStream({start(controller){controller.enqueue(jpeg);controller.enqueue(new Uint8Array([1]));},cancel(){cancelled=true;}});await assert.rejects(readReportJpeg(new Response(body,{headers:{'content-type':'image/jpeg'}}),photo),/exceeded/);assert.equal(cancelled,true);
+});
+test('photo authorization revocation and expiry clear the session, while stale photo responses cannot cross sign-ins',async()=>{
+ let lost=0,now=1000,release,started;const waiting=new Promise(resolve=>{started=resolve;});let denied=false;
+ const client=new AdminClient({now:()=>now,onSessionLost:()=>lost++,fetchImpl:async path=>{if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);if(denied)return json({},403);started();return new Promise(resolve=>{release=resolve;});}});await client.login('a@example.test','password');const pending=client.media(photo);await waiting;client.clear();release(imageResponse());await assert.rejects(pending,/Session changed/);assert.equal(client.session,null);
+ await client.login('a@example.test','password');denied=true;await assert.rejects(client.media(photo),e=>e.status===403);assert.equal(client.session,null);assert.equal(lost,1);
+ denied=false;await client.login('a@example.test','password');const expiring=client.media(photo);now=1000000;release(imageResponse());await assert.rejects(expiring,e=>e.status===401);assert.equal(client.session,null);assert.equal(lost,2);
+});
+test('changing reports, closing the view and signing out revoke object URLs and prevent late photo requests from restoring images',async()=>{
+ const requests=[],created=[],revoked=[],client={media:(_media,{signal})=>new Promise((resolve,reject)=>{requests.push({resolve,reject,signal});})};const preview=new ReportPhotoPreview({client,createObjectURL:blob=>{created.push(blob);return 'blob:private-'+created.length;},revokeObjectURL:url=>revoked.push(url)});
+ const first=preview.load(photo),second=preview.load(photo);assert.equal(requests[0].signal.aborted,true);requests[1].resolve(new Blob([jpeg]));assert.equal(await second,'blob:private-1');requests[0].resolve(new Blob([jpeg]));assert.equal(await first,null);assert.equal(created.length,1);
+ preview.clear();assert.deepEqual(revoked,['blob:private-1']);assert.equal(preview.url,null);
+ const abandoned=preview.load(photo);preview.clear();assert.equal(requests[2].signal.aborted,true);requests[2].resolve(new Blob([jpeg]));assert.equal(await abandoned,null);assert.equal(created.length,1);
+ const revokedRequest=preview.load(photo);preview.clear();requests[3].reject(Error('No longer authorized'));assert.equal(await revokedRequest,null);assert.equal(preview.url,null);
+});
+test('a late photo denial from an older session cannot revoke the administrator who has since signed in',async()=>{
+ let release,lost=0;const client=new AdminClient({now:()=>1000,onSessionLost:()=>lost++,fetchImpl:async path=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):new Promise(resolve=>{release=resolve;})});await client.login('a@example.test','password');const old=client.media(photo);await client.login('b@example.test','password');const current=client.session;release(json({},403));await assert.rejects(old,e=>e.status===403);assert.equal(client.session,current);assert.equal(lost,0);
+});
+test('report presentation preserves literal incident text and distinguishes delivered metadata, pending photos and local biometric evidence',()=>{
+ const incident=reportPresentation({observation:{kind:'incident',data:{description:'<script>alert(1)</script>\nTest only'}},media:{state:'not_applicable'}});assert.equal(incident.title,'Incident report');assert.equal(incident.summary,'<script>alert(1)</script>\nTest only');assert.equal(incident.photoLabel,'No photo attached');
+ const checkin=reportPresentation({observation:{kind:'check_in',data:{slot:2,policy_revision:1,biometric:{at:1000},location:{at:1001,latitude:45,longitude:-73,accuracy_m:12},evidence_id:'evidence-1'}},media:{state:'pending'}});assert.equal(checkin.photoLabel,'Photo pending');assert.ok(checkin.rows.some(([title,value])=>title==='Local biometric'&&/identity comes from the signed-in guard account/.test(value)));assert.ok(checkin.rows.some(([title,value])=>title==='GPS uncertainty'&&value==='12 metres'));
+ assert.equal(reportPresentation({observation:{kind:'photo_evidence',data:{}},media:{state:'stored'}}).photoLabel,'Private photo stored');
+ for(const [kind,title]of [['patrol_checkpoint','Patrol checkpoint'],['shift_start','Shift started'],['shift_end','Shift ended'],['dispatch_ack','Message acknowledged'],['check_in_delivery_missing','Check-in delivery overdue']])assert.equal(reportPresentation({observation:{kind,data:{}}}).title,title);
 });

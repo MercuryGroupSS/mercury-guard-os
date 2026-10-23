@@ -17,6 +17,6 @@ export function createSupabaseSessionVerifier({url,publishableKey,fetchImpl=fetc
   if(loadSession){
    if(typeof claims.session_id!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(claims.session_id)||!await loadSession(user.id,claims.session_id))return null;
   }
-  return {subject:user.id,active:true,expiresAt:claims.exp};
+  return {subject:user.id,active:true,expiresAt:claims.exp,...(loadSession?{sessionId:claims.session_id}:{})};
  };
 }

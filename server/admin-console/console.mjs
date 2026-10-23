@@ -1,10 +1,27 @@
-import {actions,catalogs,label,formatValue,buildPayload,valuesForRow,AdminClient,PendingChange} from './model.mjs';
+import {actions,catalogs,label,formatValue,buildPayload,valuesForRow,AdminClient,PendingChange,ReportPhotoPreview,reportPresentation,reportDate} from './model.mjs';
 const $=id=>document.getElementById(id);
 const node=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
-let pending=null,kind='vendors',page=0,cursors=[''],items=[],nextCursor=null,readVersion=0,loading=false,applying=false;
+let pending=null,kind='vendors',page=0,cursors=[''],items=[],nextCursor=null,readVersion=0,loading=false,applying=false,selectedReport=null,reportVersion=0;
 function notice(text,error=false){$('notice').textContent=text;$('notice').dataset.error=String(error);}
-function signedOut(){readVersion++;items=[];if(pending?.attempted)pending.uncertain=true;$('records').replaceChildren();$('review-details').replaceChildren();$('request-id').textContent='';$('receipt-details').replaceChildren();$('receipt-title').textContent='';$('reason').value='';renderFields();$('workspace').hidden=true;$('session').hidden=true;$('sign-in').hidden=false;$('password').value='';$('email').focus();}
+function signedOut(){readVersion++;items=[];clearReport();if(pending?.attempted)pending.uncertain=true;$('records').replaceChildren();$('review-details').replaceChildren();$('request-id').textContent='';$('receipt-details').replaceChildren();$('receipt-title').textContent='';$('reason').value='';renderFields();$('workspace').hidden=true;$('session').hidden=true;$('sign-in').hidden=false;$('password').value='';$('email').focus();}
 const client=new AdminClient({onSessionLost:()=>{signedOut();notice('Your session or administrator access is unavailable. Sign in again to continue.',true);}});
+const photoPreview=new ReportPhotoPreview({client});
+function clearReport(){
+ reportVersion++;selectedReport=null;photoPreview.clear();$('report-image').removeAttribute('src');$('report-image').hidden=true;$('report-title').textContent='Select a report';$('report-state').replaceChildren(node('p','Choose a received report to review its details and private evidence.','muted'));$('report-observation').replaceChildren();$('report-attribution').replaceChildren();$('report-attribution').parentElement.hidden=true;$('report-photo').hidden=true;$('photo-status').textContent='';$('load-photo').disabled=false;$('report-panel').hidden=true;
+}
+function syncPanels(){const reports=kind==='received_reports';$('reports-help').hidden=!reports;$('records-title').textContent=reports?'Received reports':'Directory';$('report-panel').hidden=!reports;$('change-panel').hidden=reports||!!pending&&pending.owner!==client.session?.subject;}
+function reportRows(parent,rows){parent.replaceChildren();for(const [title,value]of rows)parent.append(node('dt',title),node('dd',value===undefined||value===null?'—':String(value)));}
+function selectReport(report){
+ clearReport();selectedReport=report;const view=reportPresentation(report);syncPanels();$('report-title').textContent=view.title;$('report-state').replaceChildren(node('span','Report received','status'),node('span',view.photoLabel,'status'+(report.media.state==='pending'?' pending':'')));reportRows($('report-observation'),view.rows);
+ reportRows($('report-attribution'),[['Guard ID',report.guard_id],['Vendor ID',report.vendor_id],['Site ID',report.site_id],['Assignment ID',report.assignment_id],['Observed on device',reportDate(report.observation.occurred_at_ms)],['Received by inbox',reportDate(report.received_at)],['Destination',report.destination],['Dashboard shift ID',report.dashboard_shift_id],['Mapping revision',report.mapping_revision],['Report delivery ID',report.delivery_id],['Original event ID',report.observation.event_id],['Device fingerprint',report.observation.device_thumbprint],...(report.media.state==='stored'?[['Photo bytes',report.media.bytes],['Photo fingerprint',report.media.sha256]]:[])]);$('report-attribution').parentElement.hidden=false;
+ if(report.media.state!=='not_applicable'){$('report-photo').hidden=false;$('photo-status').textContent=report.media.state==='stored'?'Photo received and stored privately. Load it to view.':'The report is saved. A matching private photo is not available in this inbox yet. Refresh to check delivery.';$('load-photo').hidden=report.media.state!=='stored';$('photo-privacy').hidden=report.media.state!=='stored';}
+ renderTable();$('report-title').focus();
+}
+async function loadPhoto(){
+ const report=selectedReport,version=reportVersion;if(!report||kind!=='received_reports'||!client.session)return;$('load-photo').disabled=true;$('report-image').removeAttribute('src');$('report-image').hidden=true;$('photo-status').textContent='Loading and checking the private photo…';
+ try{const url=await photoPreview.load(report.media);if(!url||version!==reportVersion||selectedReport!==report||!client.session||kind!=='received_reports')return;$('report-image').src=url;$('report-image').hidden=false;$('load-photo').hidden=true;$('photo-status').textContent='Private photo loaded. Size and fingerprint match the received record.';}
+ catch(error){if(version!==reportVersion||selectedReport!==report)return;$('photo-status').textContent=error.message;$('load-photo').disabled=false;}
+}
 function textField(field,parent,values={}){
  const wrapper=node('label',field.label);let input;
  if(field.type==='select'){input=node('select');for(const [value,title]of field.options){const option=node('option',title);option.value=value;input.append(option);}}
@@ -47,6 +64,9 @@ function renderTable(){
  const filter=$('filter').value.trim().toLowerCase(),shown=filter?items.filter(row=>JSON.stringify(row).toLowerCase().includes(filter)):items,config=catalogs[kind];
  $('records').replaceChildren();$('page-info').textContent=`${config.label} · page ${page+1} · ${shown.length} of ${items.length} shown`;
  if(!shown.length){$('records').append(node('div',filter?'No records match this page’s filter.':'No records on this page.','empty'));return;}
+ if(kind==='received_reports'){
+  const list=node('div',undefined,'report-list');for(const report of shown){const view=reportPresentation(report),card=node('button',undefined,'report-card');card.type='button';card.setAttribute('aria-pressed',String(selectedReport?.delivery_id===report.delivery_id));card.setAttribute('aria-label',view.title+' from '+report.guard_id+' at '+report.site_id);const top=node('span',undefined,'report-card-top');top.append(node('strong',view.title),node('time','Received '+reportDate(report.received_at)));card.append(top,node('span',view.summary.length>180?view.summary.slice(0,177)+'…':view.summary,'report-summary'),node('span','Guard '+report.guard_id+' · Site '+report.site_id,'report-scope'));const states=node('span',undefined,'report-card-states');states.append(node('span','Report received','status'),node('span',view.photoLabel,'status'+(report.media?.state==='pending'?' pending':'')));card.append(states);card.addEventListener('click',()=>selectReport(report));list.append(card);}$('records').append(list);return;
+ }
  const table=node('table'),head=node('thead'),header=node('tr');for(const key of config.columns)header.append(node('th',label(key)));if(config.action)header.append(node('th','Action'));head.append(header);table.append(head);const body=node('tbody');
  for(const row of shown){const tr=node('tr');for(const key of config.columns){const td=node('td'),value=row[key];
    if(typeof value==='boolean')td.append(node('span',key==='active'?(value?'Active':'Inactive'):key==='revoked'?(value?'Revoked':'Valid'):(value?'Yes':'No'),'status'+(key==='revoked'?value?' off':'':value?'':' off')));
@@ -56,17 +76,18 @@ function renderTable(){
  }table.append(body);$('records').append(table);
 }
 async function loadPage(reset=false){
- if(!client.session)return;if(reset){page=0;cursors=[''];}const version=++readVersion,selected=kind,after=cursors[page]??'';loading=true;items=[];nextCursor=null;$('records').replaceChildren(node('div','Loading records…','empty'));$('filter').disabled=true;$('refresh').disabled=true;$('next').disabled=true;$('previous').disabled=true;
+ if(!client.session)return;clearReport();syncPanels();if(reset){page=0;cursors=[''];}const version=++readVersion,selected=kind,after=cursors[page]??'';loading=true;items=[];nextCursor=null;$('records').replaceChildren(node('div','Loading records…','empty'));$('filter').disabled=true;$('refresh').disabled=true;$('next').disabled=true;$('previous').disabled=true;
  $('page-info').textContent='Loading '+catalogs[kind].label.toLowerCase()+'…';
  try{const data=await client.request('/v1/admin/catalog?'+new URLSearchParams({kind:selected,...(after?{after}:{})}));if(version!==readVersion||selected!==kind)return;
-  if(data.kind!==selected||!Array.isArray(data.items)||data.items.length>50||data.next_cursor!==null&&typeof data.next_cursor!=='string')throw Error('The records response was incomplete. Refresh to try again.');
+  if(data.kind!==selected||!Array.isArray(data.items)||data.items.length>50||data.next_cursor!==null&&(typeof data.next_cursor!=='string'||data.next_cursor.length>4096))throw Error('The records response was incomplete. Refresh to try again.');
   items=data.items;nextCursor=data.next_cursor;renderTable();
  }catch(error){if(version!==readVersion)return;items=[];nextCursor=null;$('records').replaceChildren(node('div','Records unavailable. Refresh to try again.','empty'));notice(error.message,true);}
  finally{if(version===readVersion){loading=false;$('filter').disabled=false;$('refresh').disabled=false;$('previous').disabled=page===0;$('next').disabled=!nextCursor;}}
 }
 for(const [key,config]of Object.entries(catalogs)){const button=node('button',config.label);button.type='button';button.dataset.kind=key;button.setAttribute('aria-current',key===kind?'page':'false');button.addEventListener('click',()=>{kind=key;$('filter').value='';for(const b of $('catalog-nav').children)b.setAttribute('aria-current',b===button?'page':'false');loadPage(true);});$('catalog-nav').append(button);}
 for(const [key,schema]of Object.entries(actions)){const option=node('option',schema.label);option.value=key;$('action').append(option);}renderFields();
-$('action').addEventListener('change',()=>renderFields());$('filter').addEventListener('input',renderTable);$('refresh').addEventListener('click',()=>loadPage());
+$('action').addEventListener('change',()=>renderFields());$('filter').addEventListener('input',()=>{clearReport();syncPanels();renderTable();});$('refresh').addEventListener('click',()=>loadPage());$('close-report').addEventListener('click',()=>{clearReport();syncPanels();renderTable();});$('load-photo').addEventListener('click',loadPhoto);
+$('report-image').addEventListener('error',()=>{if(!selectedReport||!$('report-image').hasAttribute('src'))return;photoPreview.clear();$('report-image').removeAttribute('src');$('report-image').hidden=true;$('load-photo').hidden=false;$('load-photo').disabled=false;$('photo-status').textContent='This photo could not be displayed. Reload it or ask the owner to review the saved evidence.';});
 $('next').addEventListener('click',()=>{if(loading||!nextCursor)return;cursors[++page]=nextCursor;$('filter').value='';loadPage();});$('previous').addEventListener('click',()=>{if(loading||page===0)return;page--;$('filter').value='';loadPage();});
 $('login-form').addEventListener('submit',async event=>{
  event.preventDefault();$('login-submit').disabled=true;notice('Checking administrator access…');
@@ -77,7 +98,11 @@ $('login-form').addEventListener('submit',async event=>{
   else{notice('Administrator access confirmed.');startChange();}await loadPage(true);
  }catch(error){notice(error.message,true);}finally{$('login-submit').disabled=false;}
 });
-$('sign-out').addEventListener('click',()=>{client.clear();signedOut();notice(pending?'Signed out. The pending change remains in this tab. Sign in as the same administrator to confirm it.':'Signed out.');});
+$('sign-out').addEventListener('click',async()=>{
+ const confirmation=client.logout(),generation=client.generation;signedOut();const pendingHelp=pending?' The pending change remains in this tab. Sign in as the same administrator to confirm it.':'';notice('Signed out on this Mac. Confirming server sign-out…'+pendingHelp);
+ const result=await confirmation;if(generation!==client.generation||result===null||client.session)return;
+ notice((result==='signed_out'?'Signed out on this Mac and server sign-out confirmed.':result==='session_unavailable'?'Signed out on this Mac. The server session is already unavailable.':'Signed out on this Mac. Server sign-out could not be confirmed; the server session may remain valid until it expires.')+pendingHelp,result==='unconfirmed');
+});
 $('change-form').addEventListener('submit',event=>{
  event.preventDefault();if(!client.session||pending)return;
  try{const values=Object.fromEntries(new FormData($('change-form'))),action=$('action').value,payload=buildPayload(action,values);pending=new PendingChange({owner:client.session.subject,action,reason:$('reason').value,payload,requestId:crypto.randomUUID()});showReview();renderTable();notice('Review the change before applying.');}catch(error){notice(error.message,true);}
@@ -91,7 +116,8 @@ async function submitChange(resolve=false){
  }finally{applying=false;}
 }
 $('apply-change').addEventListener('click',()=>submitChange());$('resolve-change').addEventListener('click',()=>submitChange(true));
-$('new-change').addEventListener('click',()=>{startChange();$('change-panel').scrollIntoView({block:'start',behavior:'smooth'});$('action').focus();});$('another-change').addEventListener('click',()=>startChange());
-setInterval(()=>{if(!client.session)return;const seconds=Math.ceil((client.session.expiresAt*1000-Date.now())/1000);if(seconds<=0){client.clear();signedOut();notice('Session expired. Sign in again.'+(pending?' Your pending request remains in this tab.':''));return;}$('session-time').textContent='Session · '+Math.ceil(seconds/60)+' min';},1000);
+$('new-change').addEventListener('click',()=>{if(kind==='received_reports')$('catalog-nav').querySelector('[data-kind="vendors"]').click();startChange();$('change-panel').scrollIntoView({block:'start',behavior:'smooth'});$('action').focus();});$('another-change').addEventListener('click',()=>startChange());
+function checkSession(){if(!client.session)return;const seconds=Math.ceil((client.session.expiresAt*1000-Date.now())/1000);if(seconds<=0){client.clear();signedOut();notice('Session expired. Sign in again.'+(pending?' Your pending request remains in this tab.':''));return;}$('session-time').textContent='Session · '+Math.ceil(seconds/60)+' min';}
+setInterval(checkSession,1000);document.addEventListener('visibilitychange',checkSession);window.addEventListener('pageshow',checkSession);
 window.addEventListener('beforeunload',event=>{if(pending?.attempted){event.preventDefault();event.returnValue='';}});
 window.addEventListener('pagehide',()=>{client.clear();signedOut();});

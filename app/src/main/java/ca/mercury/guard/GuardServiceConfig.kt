@@ -10,6 +10,11 @@ import java.util.Base64
 
 /** Public trust configuration packaged by the administrator, never read from an Intent or login form. */
 class GuardServiceConfig private constructor(val endpoint: String, val issuer: String, val audience: String, val deviceId: String, val keys: Map<String,PublicKey>) {
+ internal fun uploadBinding():String {
+  val values=org.json.JSONArray().put(endpoint).put(issuer).put(audience).put(deviceId)
+  for(id in keys.keys.sorted())values.put(org.json.JSONArray().put(id).put(Base64.getUrlEncoder().withoutPadding().encodeToString(keys.getValue(id).encoded)))
+  return java.security.MessageDigest.getInstance("SHA-256").digest(values.toString().toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ }
  companion object {
   fun load(context: Context): GuardServiceConfig? {
    if (!context.assets.list("").orEmpty().contains("guard-service.json")) return null

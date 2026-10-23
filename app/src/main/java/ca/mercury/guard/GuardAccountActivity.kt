@@ -19,7 +19,7 @@ import android.view.*
 import android.widget.*
 import org.json.JSONObject
 
-/** Foreground-only account pilot. Leaving the activity discards the session. */
+/** Foreground identity locks on leaving; separately authorized short-lived upload work may continue. */
 class GuardAccountActivity : Activity() {
  private var config: GuardServiceConfig? = null
  private var loginParticles:ParticleLoginView?=null
@@ -45,7 +45,7 @@ class GuardAccountActivity : Activity() {
   window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
   // A recreated process has no verified capture authority. Discard abandoned temporary output.
   File(cacheDir,"capture/account").listFiles()?.forEach{it.delete()}
-  try { AuthorizedReminders(this).refresh();config=GuardServiceConfig.load(this); startScreen() }
+  try { AuthorizedReminders(this).refresh();config=GuardServiceConfig.load(this);UploadCoordinator(this).request(); startScreen() }
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Return"){finish()} }
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
@@ -86,13 +86,14 @@ class GuardAccountActivity : Activity() {
   }
   root.addView(loginParticles,2,LinearLayout.LayoutParams(-1,dp(280)))
   loginParticles?.startMotion()
-  button("Verify with biometrics") { biometric() };button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+  button("Verify with biometrics") { biometric() };button("Stop automatic uploads and sign out"){signOut()};button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
  }
+ private fun signOut(){UploadCoordinator(this).stop(session,config);startScreen();status.text="Signed out on this phone. Automatic delivery stopped; encrypted records remain preserved. Service sign-out was requested and can remain unconfirmed while offline."}
  private fun openAccountPage(){
   val c=config?:return
   try{
    val uri=Uri.parse(GuardAccountClient(c.endpoint).accountPageUrl())
-   clearSession()
+   UploadCoordinator(this).stop(session,config);clearSession()
    startActivity(Intent(Intent.ACTION_VIEW,uri).addCategory(Intent.CATEGORY_BROWSABLE))
   }catch(_:Exception){status.text="The account page could not be opened. Use your configured Mercury One service in a browser or contact your administrator."}
  }
@@ -119,6 +120,7 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){signal=null;loginParticles?.setSigningIn(false);status.text="This phone needs an initialized installation identity and an available secure biometric. Ask your administrator to complete setup."}
  }
  private fun credentials(){
+  UploadCoordinator(this).stop() // A new account attempt may belong to the next guard on a shared phone.
   screen("YOUR GUARD ACCOUNT","Device verified. Enter your individual guard ID, not a company vendor ID.")
   val user=EditText(this).apply{hint="Guard ID";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;isSingleLine=true;isSaveEnabled=false;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS}
   val secret=EditText(this).apply{hint="Password";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;isSingleLine=true;isSaveEnabled=false;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS}
@@ -154,7 +156,9 @@ class GuardAccountActivity : Activity() {
     try{
      check(p!=null&&a!=null)
      val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&(!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active")}.map{it.getString("assignmentId")}.toSet())
-     status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service."
+     UploadCoordinator(this).authorize(c,active,guard,vendor)
+     val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
+     status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
      button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
       val item=rows.getJSONObject(i);check(item.getString("guardId")==guard&&item.getString("vendorId")==vendor)
@@ -162,7 +166,7 @@ class GuardAccountActivity : Activity() {
       button("${item.getString("siteId")} · ${item.getString("assignmentId")}"){assignmentOverview(item)}
      }
     }catch(_:Exception){status.text="Assignments could not be verified. Check connectivity or ask your administrator to review this phone's enrollment."}
-    button("Refresh assignments"){loadAssignments()};button("Sign out"){startScreen()}
+    button("Refresh assignments"){loadAssignments()};button("Sign out"){signOut()}
    }
   }.start()
  }
@@ -199,7 +203,7 @@ class GuardAccountActivity : Activity() {
    }
   }catch(_:Exception){status.text="Shift status could not be opened. Refresh assignments; saved confirmation requests remain preserved."}
   button("Send my queued records"){sendScoped(scope.binding.guardId)}
-  button("Refresh assignments"){loadAssignments()};button("Sign out"){startScreen()}
+  button("Refresh assignments"){loadAssignments()};button("Sign out"){signOut()}
  }
  private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
   if(busy)return
@@ -221,7 +225,7 @@ class GuardAccountActivity : Activity() {
    runOnUiThread{
     if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
     busy=false
-    if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed by the pilot service. You are signed out; queued records remain preserved."}
+    if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed by the pilot service. This screen is locked. Queued records remain preserved and automatic delivery may continue until your upload session expires; Sign out stops it."}
     else if(accepted)loadAssignments()
     else if(declined){assignmentOverview(item);status.text="The service declined this request. No clock time was recorded. Refresh assignments before confirming a corrected request."}
     else{assignmentOverview(item);status.text="Confirmation is unresolved. Use Resolve pending to retry the same request; no new clock time will be substituted."}
@@ -266,7 +270,7 @@ class GuardAccountActivity : Activity() {
     val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
     val db=ScopedEventStore(this)
     try{db.capture("incident",JSONObject().put("description",note.text.toString()),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
-    note.text.clear();status.text="Incident saved encrypted on this phone. It has not been sent."
+    note.text.clear();UploadCoordinator(this).request();status.text="Incident saved encrypted on this phone. Automatic delivery is requested; a service receipt is still required."
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
   button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
@@ -278,7 +282,7 @@ class GuardAccountActivity : Activity() {
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
-  button("Sign out"){startScreen()}
+  button("Sign out"){signOut()}
  }
  private fun loadDispatch(item:JSONObject,refresh:Boolean,offset:Int=0){
   val c=config?:return;val active=session?:return;val binding=captureBinding?:return
@@ -320,7 +324,7 @@ class GuardAccountActivity : Activity() {
      if(result.size==30)button("Next messages"){loadDispatch(item,false,offset+30)}
      button("Refresh messages"){loadDispatch(item,true)}
     }
-    button("Back to assignment"){captureScreen(item)};button("Sign out"){startScreen()}
+    button("Back to assignment"){captureScreen(item)};button("Sign out"){signOut()}
    }
   }.start()
  }
@@ -344,7 +348,7 @@ class GuardAccountActivity : Activity() {
      val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
      DispatchInbox(this).use{it.markRead(scope,current.getString("message_id"),current.getLong("version"),observed)}
      ScopedEventStore(this).use{it.acknowledgeDispatch(scope.binding,grant,DeviceIdentity(this),current.getString("message_id"),current.getLong("version"),observed)}
-     viewDispatch(item,scope,current)
+     UploadCoordinator(this).request();viewDispatch(item,scope,current)
     }catch(_:Exception){status.text="Acknowledgement not added. Refresh authorization and messages; existing records remain preserved."}
    }
    button("Back to messages"){loadDispatch(item,false)};button("Refresh messages"){loadDispatch(item,true)}
@@ -399,7 +403,7 @@ class GuardAccountActivity : Activity() {
     val policy=AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy"));check(policy.revision==revision)
     val due=Math.addExact(policy.startsAt,Math.multiplyExact(slot,policy.interval));check(slot>=0&&due<policy.endsAt&&observed>=minOf(due+policy.window,policy.endsAt))
     val db=ScopedEventStore(this);try{db.capture("check_in_miss_reason",JSONObject().put("policy_revision",revision).put("slot",slot).put("reason",reason),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
-    dialog.dismiss();status.text="Reason saved locally. Send queued records to deliver it to the pilot service. The missed deadline remains recorded."
+    UploadCoordinator(this).request();dialog.dismiss();status.text="Reason saved locally. Automatic delivery is requested; the original missed deadline remains recorded."
    }catch(_:Exception){input.error="Enter a reason and refresh authorization if it has expired."}
   }};dialog.show()
  }
@@ -438,7 +442,7 @@ class GuardAccountActivity : Activity() {
         policy.validate(slot,biometricAt,location,observed(),observed())
         val evidence=AuthorizedCheckInEvidence(policy,slot,biometricAt,location)
         AlertDialog.Builder(this@GuardAccountActivity).setTitle("Check-in photo")
-         .setMessage("Take a consented test photo to complete this pilot check-in. It will be encrypted locally and uploaded when you send queued records. Opening the camera signs you out.")
+         .setMessage("Take a consented test photo to complete this pilot check-in. It will be encrypted locally and queued for automatic delivery while the verified upload session is valid. Opening the camera locks this screen.")
          .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation)openAuthorizedCamera(evidence)}.show()
        }catch(_:Exception){status.text="Check-in is incomplete. A fresh, non-mock GPS fix within the site's accuracy limit is required. Try again outdoors."}
       }
@@ -449,7 +453,7 @@ class GuardAccountActivity : Activity() {
  }
  private fun confirmPhoto(){
   AlertDialog.Builder(this).setTitle("Capture photo evidence")
-   .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Sending queued records uploads it to the configured pilot service. Camera use signs you out; sign in again to send it.")
+   .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Automatic delivery requests upload to the configured pilot service while the verified upload session is valid. Camera use locks this screen; a service receipt confirms acceptance.")
    .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->openAuthorizedCamera()}.show()
  }
  private fun openAuthorizedCamera(checkIn:AuthorizedCheckInEvidence?=null){
@@ -481,7 +485,7 @@ class GuardAccountActivity : Activity() {
     val observed=Math.addExact(pending.anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),pending.anchor.elapsedMillis))
     val db=ScopedEventStore(this)
     try{if(pending.checkIn==null)db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed) else db.captureCheckIn(pending.binding,pending.grant,DeviceIdentity(this),pending.checkIn,metadata,observed)}finally{db.close()}
-    committed=true;AuthorizedReminders(this).refresh();message=if(pending.checkIn==null) "Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records." else "Check-in and photo saved locally. Sign in again to send them; service delivery is pending."
+    committed=true;AuthorizedReminders(this).refresh();UploadCoordinator(this).request();message=if(pending.checkIn==null) "Photo saved encrypted. Automatic delivery is requested; service acceptance is pending." else "Check-in and photo saved locally. Automatic delivery is requested; service acceptance is pending."
    }
   }catch(_:Exception){message="Photo not saved. Authorization may have expired or the camera output was invalid. Sign in and try again."}
   finally{
@@ -506,49 +510,21 @@ class GuardAccountActivity : Activity() {
       val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
       val current=ScopedEventStore(this)
       try{current.captureCheckpoint(binding,grant,DeviceIdentity(this),routeId,revision,pointId,observed)}finally{current.close()}
-      patrolScreen(item);status.text="Checkpoint saved encrypted on this phone. It has not been sent."
+      UploadCoordinator(this).request();patrolScreen(item);status.text="Checkpoint saved encrypted. Automatic delivery is requested; service acceptance is pending."
      }catch(_:Exception){status.text="Checkpoint not recorded. It may already be saved, or authorization may have expired. Return to the assignment to refresh."}
     }
    }}finally{db.close()}
   }catch(_:Exception){status.text="The assigned route could not be opened. Existing records were preserved."}
   button("Send my queued records"){sendScoped(binding.guardId)}
   button("Back to assignment"){captureScreen(item)}
-  button("Sign out"){startScreen()}
+  button("Sign out"){signOut()}
  }
  private fun sendScoped(guardId:String){
-  val active=session?:return;val c=config?:return;val stamp=generation
-  busy=true;status.text="Checking queued records…"
-  Thread{
-   var message="Records remain queued. Check your connection and authorization, then try again."
-   try{
-    val db=ScopedEventStore(this)
-    try{
-     val proof=db.prepareSigned(DeviceIdentity(this),c.audience,guardId)
-     if(proof==null)message="No records are waiting to be sent."
-     else{
-      val batch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
-      val scope=batch.getJSONObject("scope")
-      if(scope.getString("guard_id")!=guardId)message="Earlier queued records belong to another guard. They remain preserved for their original account."
-      else{
-       val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
-       val receipt=GuardTransport(c.endpoint).sendPilotBatch(active.bearer(),proof,batch.getString("batch_id"),ids)
-       db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),guardId)
-       message="Pilot service accepted ${ids.size} record(s). Dashboard delivery is not yet connected. ${db.pendingCount(guardId)} of your record(s) remain queued."
-      }
-     }
-     var mediaSent=0
-     for(record in db.pendingPhotos(guardId)){
-      val event=record.getJSONObject("event");val data=event.getJSONObject("data")
-      val bytes=EvidenceStore(this).readPhoto(data.getString("evidence_id"))
-      val mediaReceipt=GuardTransport(c.endpoint).sendPilotEvidence(active.bearer(),event.getString("event_id"),data,bytes)
-      db.recordMediaReceipt(guardId,mediaReceipt);mediaSent++
-     }
-     if(mediaSent>0)message+=" $mediaSent photo file(s) accepted by the pilot service."
-    }finally{db.close()}
-   }catch(_:Exception){message="Some records or photo files remain queued. Existing receipts and local evidence were preserved; retry when authorized."}
-   val result=message
-   runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){busy=false;status.text=result}}
-  }.start()
+  try{
+   session?.bearer()?:error("Sign in again")
+   val requested=UploadCoordinator(this).request()
+   status.text=(if(requested)"Automatic upload requested. Android schedules network work and may delay it. " else "Sign in again to authorize automatic delivery. ")+ScopedEventStore(this).use{it.uploadSummary(guardId)}
+  }catch(_:Exception){status.text="Upload authority is unavailable. Sign in again; encrypted records and receipts remain preserved."}
  }
 
 }

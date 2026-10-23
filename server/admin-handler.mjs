@@ -9,9 +9,9 @@ async function body(request,max=65536){
 }
 export function createAdminHandler({admin,verifySession,passwordSession,now=Date.now}){
  return async request=>{
-  const url=new URL(request.url),path=url.pathname;
-  if(!['/v1/admin/login','/v1/admin/me','/v1/admin/catalog','/v1/admin/actions','/v1/admin/resolve'].includes(path))return reply(404,{error:'not_found'});
-  if(request.method!==(path==='/v1/admin/me'||path==='/v1/admin/catalog'?'GET':'POST'))return reply(405,{error:'method_not_allowed'});
+  const url=new URL(request.url),path=url.pathname,media=/^\/v1\/admin\/media\/([a-f0-9]{64})$/.exec(path);
+  if(!media&&!['/v1/admin/login','/v1/admin/me','/v1/admin/catalog','/v1/admin/actions','/v1/admin/resolve'].includes(path))return reply(404,{error:'not_found'});
+  if(request.method!==(media||path==='/v1/admin/me'||path==='/v1/admin/catalog'?'GET':'POST'))return reply(405,{error:'method_not_allowed'});
   if(path!=='/v1/admin/catalog'&&url.search)return reply(400,{error:'invalid_request'});
   if(path==='/v1/admin/login'){
    let input;
@@ -30,6 +30,7 @@ export function createAdminHandler({admin,verifySession,passwordSession,now=Date
   let session;
   try{session=await verifySession(token);if(!session||!Number.isSafeInteger(session.expiresAt)||session.expiresAt*1000<=now())return reply(401,{error:'authentication_required'});if(!await admin.member(session))return reply(403,{error:'administrator_required'});}catch{return reply(503,{error:'admin_authorization_unavailable'});}
   try{
+   if(media){const image=await admin.media(session,media[1]);if(!image)return reply(404,{error:'media_unavailable'});return new Response(image.bytes,{status:200,headers:{'content-type':'image/jpeg','content-length':String(image.bytes.length),'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','content-disposition':'inline'}});}
    if(path==='/v1/admin/me'){if(url.search)return reply(400,{error:'invalid_request'});return reply(200,{subject:session.subject,role:'guard_os_admin',expires_at:session.expiresAt});}
    if(path==='/v1/admin/catalog'){
     if([...url.searchParams.keys()].some(k=>!['kind','after'].includes(k))||url.searchParams.getAll('kind').length!==1||url.searchParams.getAll('after').length>1)return reply(400,{error:'invalid_request'});
