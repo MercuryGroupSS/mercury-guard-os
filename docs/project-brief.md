@@ -123,3 +123,10 @@ User requested completion of the software before returning to physical tests. An
 The white Mercury One UI and previously recovered workflows remain included. See [local pilot closeout and acceptance plan](local-pilot-closeout.md). Local Preview APK SHA-256: 8397f0beb4bf009aad60dac9d8f3f8d0a97bac9910e0f02e644e1883f87eb556. Preview v0.23 uses the same local debug certificate as v0.22, permitting a data-preserving update of the separate Preview package. No USB handset was connected at final packaging, so v0.23 installation and all new hardware acceptance tests remain pending. The original Mercury Guard app was not touched.
 
 This completes the local pilot build for acceptance, not production integration or firmware. Live authenticated identity/schedules/data exchange, approved server adapters, retention/recovery/revocation, production release signing, real site geometry and managed-device controls remain external implementation gates. No new Supabase hosted resource, hosting charge, existing-app change, device reset, flashing or enrollment. Dedicated-device research follows APK acceptance.
+
+
+## v2.9 continuation — Fold6 physical acceptance
+
+Preview v0.23 was updated and tested on the actual SM-F956W. Native sign-in, incident draft/save persistence, reverse-order GPS patrol and duplicate protection, biometric/GPS/photo check-in completion, camera cancellation, GPS retry, cover-screen recovery, timed readiness stages/miss, miss-reason preservation and confirmed early exit passed in the exercised paths. Android notification posting was observed, without claiming audible or prolonged background reliability. See [physical results and limits](fold6-physical-v0.23.md).
+
+Final state: test shift ended, GPS tracking stopped, no running Preview service or active Preview notifications. Original app remained installed. Eight-hour clock-out, prolonged battery/doze/reboot tests, forced permission/GPS loss, audible delivery and an unfold-back cycle remain unverified on hardware. Minor status-copy/refresh clarity and identification of historical missed checks are follow-up polish. No live integration, hosting charge, phone enrollment or flashing.

@@ -13,3 +13,8 @@ APK signature verified: v2, local debug certificate SHA-256 75bebfd6ec9e69a3e952
 No USB device is currently connected; v0.23 installation has not been attempted. Earlier v0.22 Preview launch/cover-screen visual evidence and old v0.13 user-confirmed workflows are historical observations, not v0.23 hardware acceptance. Reconnect the Fold6 to install the update without uninstalling either package. Physical acceptance follows the bundled checklist.
 
 Live auth, authoritative assignments, two-way existing-app data transport, real geometry, retention/revocation/recovery and dedicated-device management remain disconnected or pending. No additional hosting charge or existing app/database change. Full-screen notification special access is omitted from Preview. No device reset, flashing or enrollment.
+
+
+## Physical test follow-up
+
+The earlier no-device/pending-install state above is superseded: Preview v0.23 installed and core physical workflows passed on the Fold6. The test shift ended with tracking stopped and no Preview service/notifications. See [physical results](fold6-physical-v0.23.md) for evidence and uncompleted long-duration/hardware checks.
