@@ -360,7 +360,8 @@ class MainActivity : Activity() {
  private fun showEscalation() {
   currentPage = "escalate"
   heading("ESCALATE", "Available before sign-in · no alert is dispatched by this prototype")
-  root.addView(label("For immediate danger, use your phone's emergency calling or your established dispatch channel. This app cannot contact emergency services or a supervisor.", 16f))
+  root.addView(label("These prototype tools store demo records locally. For an attributed operator-inbox request, open Guard service escalation and sign in. For immediate help, use your established emergency or dispatch channel.", 16f))
+  action("Guard service escalation") { startActivity(Intent(this,GuardAccountActivity::class.java).putExtra("open_escalation",true)) }
   action("Pinpoint issue · demo property") { showIssueMap() }
   action("Incident report") { showIncident() }
   if (shiftActive) {

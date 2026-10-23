@@ -211,4 +211,34 @@ class ScopedEventStoreTest {
   assertTrue(store.pendingUploadPhotos(a.guardId,"session",10).isEmpty())
   store.close();ScopedEventStore(context,name,{200},{1}).use{reopened->assertEquals(first,reopened.pendingUploadPhotos(a.guardId,"new-session",1).single().getJSONObject("event").getString("event_id"))}
  }}
+
+ @Test fun checkpointsRepeatOnlyAcrossExplicitRoundsAndSurviveRetryRestart(){isolated{store,identity,name->
+  val a=binding(identity);val permission=VerifiedShiftGrant("rounds",a,setOf("patrol"),100,1000,1)
+  store.captureCheckpoint(a,permission,identity,"route",2,"perimeter",10000,"closing")
+  store.captureCheckpoint(a,permission,identity,"route",2,"entrance",10001,"opening")
+  store.captureCheckpoint(a,permission,identity,"route",2,"perimeter",10002,"opening")
+  rejected{store.captureCheckpoint(a,permission,identity,"route",2,"perimeter",10003,"closing")}
+  rejected{store.captureCheckpoint(a,permission,identity,"route",2,"entrance",10003,"")}
+  assertTrue(store.checkpointRecorded(a.copy(revocationVersion=2),"route",2,"perimeter","closing"))
+  assertFalse(store.checkpointRecorded(a,"route",2,"entrance","closing"));assertFalse(store.checkpointRecorded(a,"route",2,"perimeter"))
+  assertFalse(store.checkpointRecorded(a.copy(guardId="other"),"route",2,"perimeter","closing"))
+  val original=payload(store.prepareUpload(identity,"mercury-local",a.guardId,"session")!!)
+  assertEquals(listOf("closing","opening","opening"),(0 until original.getJSONArray("events").length()).map{original.getJSONArray("events").getJSONObject(it).getJSONObject("data").getString("round_id")})
+  store.close();ScopedEventStore(context,name,{200},{1}).use{reopened->
+   assertTrue(reopened.checkpointRecorded(a,"route",2,"perimeter","opening"));assertTrue(reopened.checkpointRecorded(a,"route",2,"perimeter","closing"))
+   assertEquals(original.toString(),payload(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session")!!).toString())
+   reopened.recordUploadReceipt(a.guardId,receipt(original));assertEquals(0,reopened.pendingCount(a.guardId))
+   assertTrue(reopened.checkpointRecorded(a,"route",2,"perimeter","closing"))
+  }
+ }}
+ @Test fun legacyCheckpointEventsAndSnapshotsKeepTheirOriginalMissingRoundField(){isolated{store,identity,name->
+  val a=binding(identity);val permission=VerifiedShiftGrant("legacy",a,setOf("patrol"),100,1000,1)
+  store.captureCheckpoint(a,permission,identity,"route",1,"entrance",10000)
+  val original=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!);assertFalse(original.getJSONArray("events").getJSONObject(0).getJSONObject("data").has("round_id"))
+  store.close();ScopedEventStore(context,name,{200},{1}).use{reopened->
+   assertTrue(reopened.checkpointRecorded(a,"route",1,"entrance"));assertFalse(reopened.checkpointRecorded(a,"route",1,"entrance","opening"))
+   assertEquals(original.toString(),payload(reopened.prepareUpload(identity,"mercury-local",a.guardId,"session")!!).toString())
+   rejected{reopened.captureCheckpoint(a,permission,identity,"route",1,"entrance",10001)}
+  }
+ }}
 }

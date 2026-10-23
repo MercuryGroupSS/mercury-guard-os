@@ -50,7 +50,7 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
    let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>4096)throw Error('large');}
    const body=JSON.parse(raw);
    devices.enroll({deviceId:'fixture-phone',mode:'site',siteId:'fixture-site',active:true,revoked:false,publicKeySpki:body.public_key_spki});
-   devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,checkInPolicy:{revision:1,interval_ms:1800000,window_ms:600000,max_evidence_age_ms:120000,max_accuracy_m:100},patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}]}});
+   devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,checkInPolicy:{revision:1,interval_ms:1800000,window_ms:600000,max_evidence_age_ms:120000,max_accuracy_m:100},patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}],rounds:[{id:'opening',label:'Opening patrol'},{id:'closing',label:'Closing patrol'}]}});
    dispatch.publish({guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',assignmentId:'fixture-shift'},{message_id:'fixture-message',version:1,state:'active',title:'Synthetic dispatch',body:'Inspect the test entrance.',issued_at:Date.now(),due_at:null});
    res.setHeader('content-type','application/json');res.end('{}');return;
   }

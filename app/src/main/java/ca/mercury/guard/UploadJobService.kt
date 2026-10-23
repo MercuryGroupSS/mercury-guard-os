@@ -26,14 +26,16 @@ internal object UploadRuntime {
 class UploadCoordinator(private val context:Context){
  companion object { const val JOB_ID=17804 }
  private val scheduler get()=context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler
- internal fun authorize(config:GuardServiceConfig,session:GuardAccountClient.Session,guard:String,vendor:String){
+ internal fun authorize(config:GuardServiceConfig,session:GuardAccountClient.Session,guard:String,vendor:String,subject:String){
   val identity=DeviceIdentity(context).publicIdentity()?:error("Phone identity required")
   val store=UploadAuthorityStore(context);val current=store.load(config,identity.thumbprint)
   // An ordinary assignment refresh does not reset retained review records or renew expiry.
-  if(current!=null&&current.guardId==guard&&current.vendorId==vendor&&current.session().bearer()==session.bearer()) {request();return}
-  clearLocal();store.authorize(config,session,guard,vendor,identity.thumbprint);request()
+  if(current!=null&&current.guardId==guard&&current.vendorId==vendor&&current.subject==subject&&current.session().bearer()==session.bearer()) {request();return}
+  val previous=current?.session()
+  clearLocal();store.authorize(config,session,guard,vendor,subject,identity.thumbprint);request()
+  if(previous!=null)logoutInBackground(config,previous)
  }
- private fun clearLocal(){UploadAuthorityStore(context).clear();UploadRuntime.cancel();scheduler.cancel(JOB_ID)}
+ private fun clearLocal(){UploadAuthorityStore(context).clear();UploadRuntime.cancel();EscalationForeground.cancel();scheduler.cancel(JOB_ID)}
  fun stop(foreground:GuardAccountClient.Session?=null,trusted:GuardServiceConfig?=null){
   // Copy only an unexpired bearer bound to this exact packaged origin/trust. Local cancellation is immediate.
   var previous:GuardAccountClient.Session?=null
@@ -45,7 +47,10 @@ class UploadCoordinator(private val context:Context){
   }catch(_:Exception){}
   clearLocal()
   val session=previous
-  if(config!=null&&session!=null)Thread({try{GuardAccountClient(config.endpoint).logout(session)}catch(_:Exception){}finally{session.clear()}},"mercury-session-logout").start()
+  if(config!=null&&session!=null)logoutInBackground(config,session)
+ }
+ private fun logoutInBackground(config:GuardServiceConfig,session:GuardAccountClient.Session){
+  Thread({try{GuardAccountClient(config.endpoint).logout(session)}catch(_:Exception){}finally{session.clear()}},"mercury-session-logout").start()
  }
  fun request():Boolean {
   return try{
@@ -77,7 +82,11 @@ class UploadJobService:JobService(){
   deadline=limit;main.postDelayed(limit,95000)
   Thread({
    var retry=false
-   try{if(network==null)retry=true else NativeUploadPort(applicationContext,config,authority,network,task.cancellation).use{retry=UploadDrain(it){SystemClock.elapsedRealtime()}.run()}}
+   try{if(network==null)retry=true else{
+    val escalationRetry=EscalationDelivery(applicationContext,config,authority,network,task.cancellation).use{it.run()}
+    val ordinaryRetry=NativeUploadPort(applicationContext,config,authority,network,task.cancellation).use{UploadDrain(it){SystemClock.elapsedRealtime()}.run()}
+    retry=escalationRetry||ordinaryRetry
+   }}
    catch(_:Exception){retry=store.current(authority,config)&&!task.cancellation.cancelled()}
    main.post{
     if(UploadRuntime.current(task)&&run===task){
@@ -113,7 +122,7 @@ internal class NativeUploadPort(private val context:Context,private val config:G
  override fun verify(){
   try{
    val s=session();val p=client.profile(s)
-   if(p.getString("guard_id")!=authority.guardId||p.getString("vendor_id")!=authority.vendorId)throw UploadRequestFailure(401)
+   if(p.getString("guard_id")!=authority.guardId||p.getString("vendor_id")!=authority.vendorId||p.getString("auth_subject")!=authority.subject)throw UploadRequestFailure(401)
    check();client.assignments(s,config.deviceId,identity,config.audience);check()
   }catch(e:GuardAccountClient.HttpFailure){throw UploadRequestFailure(e.statusCode)}
  }

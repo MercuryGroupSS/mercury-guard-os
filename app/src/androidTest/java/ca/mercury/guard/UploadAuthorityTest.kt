@@ -20,20 +20,20 @@ class UploadAuthorityTest {
   val name="upload-test-${UUID.randomUUID()}";val config=config();var now=android.os.SystemClock.elapsedRealtime();val base=now;var boot=3
   val store=UploadAuthorityStore(context,name,{now},{boot});val token="synthetic-upload-token-never-a-real-session"
   try{
-   val authority=store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","a".repeat(64))
+   val authority=store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","00000000-0000-4000-8000-000000000001","a".repeat(64))
    val raw=File(context.noBackupFilesDir,name).readText();assertFalse(raw.contains(token));assertFalse(raw.contains("guard-a"));assertFalse(raw.contains(config.endpoint))
    val reopened=UploadAuthorityStore(context,name,{now},{boot});assertEquals(authority.generation,reopened.load(config,"a".repeat(64))!!.generation)
    val touched=reopened.touch(config,"a".repeat(64))!!;assertEquals(authority.generation,touched.generation);assertEquals(authority.expiresElapsed,touched.expiresElapsed);assertEquals(1,touched.workVersion)
    now=base+60000;assertNull(reopened.load(config,"a".repeat(64)));assertFalse(File(context.noBackupFilesDir,name).exists())
-   now=base;store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","a".repeat(64));boot++;assertNull(reopened.load(config,"a".repeat(64)))
-   store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","a".repeat(64));assertNull(reopened.load(config("https://other.test"),"a".repeat(64)))
+   now=base;store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","00000000-0000-4000-8000-000000000001","a".repeat(64));boot++;assertNull(reopened.load(config,"a".repeat(64)))
+   store.authorize(config,GuardAccountClient.Session(token,base+60000),"guard-a","vendor-a","00000000-0000-4000-8000-000000000001","a".repeat(64));assertNull(reopened.load(config("https://other.test"),"a".repeat(64)))
   }finally{store.clear()}
  }
  @Test fun switchAndExplicitSignOutFenceOldWorkWithoutClearingAnotherGeneration(){
   val name="upload-test-${UUID.randomUUID()}";val c=config();val now=android.os.SystemClock.elapsedRealtime();val store=UploadAuthorityStore(context,name,{now},{1})
   try{
-   val a=store.authorize(c,GuardAccountClient.Session("synthetic-a",now+60000),"guard-a","vendor-company","a".repeat(64))
-   val b=store.authorize(c,GuardAccountClient.Session("synthetic-b",now+60000),"guard-b","vendor-company","a".repeat(64))
+   val a=store.authorize(c,GuardAccountClient.Session("synthetic-a",now+60000),"guard-a","vendor-company","00000000-0000-4000-8000-000000000001","a".repeat(64))
+   val b=store.authorize(c,GuardAccountClient.Session("synthetic-b",now+60000),"guard-b","vendor-company","00000000-0000-4000-8000-000000000002","a".repeat(64))
    assertFalse(store.current(a,c));assertTrue(store.current(b,c));assertEquals("guard-b",store.load(c,"a".repeat(64))!!.guardId)
    store.clear(a.generation);assertTrue(store.current(b,c));store.clear();assertFalse(store.current(b,c));assertNull(store.load(c,"a".repeat(64)))
   }finally{store.clear()}
@@ -41,8 +41,19 @@ class UploadAuthorityTest {
  @Test fun corruptedOrWrongInstallationAuthorityFailsClosed(){
   val name="upload-test-${UUID.randomUUID()}";val c=config();val now=android.os.SystemClock.elapsedRealtime();val store=UploadAuthorityStore(context,name,{now},{1})
   try{
-   store.authorize(c,GuardAccountClient.Session("synthetic",now+60000),"guard","vendor","a".repeat(64));assertNull(store.load(c,"b".repeat(64)))
+   store.authorize(c,GuardAccountClient.Session("synthetic",now+60000),"guard","vendor","00000000-0000-4000-8000-000000000001","a".repeat(64));assertNull(store.load(c,"b".repeat(64)))
    File(context.noBackupFilesDir,name).writeText("corrupt");assertNull(store.load(c,"a".repeat(64)))
+  }finally{store.clear()}
+ }
+ @Test fun oldAuthorityWithoutVerifiedIndividualSubjectRequiresReauthentication(){
+  val name="upload-test-${UUID.randomUUID()}";val c=config();val now=android.os.SystemClock.elapsedRealtime();val store=UploadAuthorityStore(context,name,{now},{1})
+  try{
+   val a=store.authorize(c,GuardAccountClient.Session("synthetic-old",now+60000),"guard","vendor","00000000-0000-4000-8000-000000000001","a".repeat(64))
+   val old=a.json().apply{remove("subject")}.toString().toByteArray(Charsets.UTF_8)
+   File(context.noBackupFilesDir,name).writeText(DeviceCipher().encrypt(old,"mercury-upload-authority:$name"))
+   assertNull(store.load(c,"a".repeat(64)));assertFalse(File(context.noBackupFilesDir,name).exists())
+   val b=store.authorize(c,GuardAccountClient.Session("synthetic-new",now+60000),"guard","vendor","00000000-0000-4000-8000-000000000002","a".repeat(64))
+   assertFalse(store.current(a,c));assertTrue(store.current(b,c));assertEquals("00000000-0000-4000-8000-000000000002",b.subject)
   }finally{store.clear()}
  }
  @Test fun persistedNetworkJobHasNoCredentialsAndOnlySystemCanBind(){

@@ -8,6 +8,7 @@ import java.net.URL
 
 /** Explicit configured service only. No credentials, tokens or refresh tokens are persisted. */
 class GuardAccountClient(endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null) {
+ companion object { private val possessionLock=java.util.concurrent.locks.ReentrantLock() }
  private val origin = endpoint.trimEnd('/')
  init {
   val uri = URI(endpoint)
@@ -45,23 +46,44 @@ class GuardAccountClient(endpoint: String,private val network:android.net.Networ
   return Session(token,Math.addExact(started,remaining)).also { it.bearer() }
  }
  fun profile(session: Session): JSONObject = request("/v1/me",null,session)
- fun assignments(session: Session, deviceId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject {
+ fun assignments(session: Session, deviceId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject = possession {
   val proof = proof(session,deviceId,identity,expectedAudience)
-  return request("/v1/assignments",proof,session)
+  request("/v1/assignments",proof,session)
  }
  fun grant(session: Session, deviceId: String, assignmentId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject =
-  request("/v1/shift-grant",JSONObject().put("assignment_id",assignmentId).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
+  possession{request("/v1/shift-grant",JSONObject().put("assignment_id",assignmentId).put("proof",proof(session,deviceId,identity,expectedAudience)),session)}
  fun dispatch(session:Session,deviceId:String,assignmentId:String,identity:DeviceIdentity,expectedAudience:String,cursor:String?):JSONObject =
-  request("/v1/dispatch",JSONObject().put("assignment_id",assignmentId).put("cursor",cursor?:JSONObject.NULL).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
+  possession{request("/v1/dispatch",JSONObject().put("assignment_id",assignmentId).put("cursor",cursor?:JSONObject.NULL).put("proof",proof(session,deviceId,identity,expectedAudience)),session)}
  fun transition(session:Session,deviceId:String,assignmentId:String,identity:DeviceIdentity,expectedAudience:String,transition:JSONObject):JSONObject =
-  request("/v1/shift-transition",JSONObject().put("assignment_id",assignmentId).put("transition",transition).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
+  possession{request("/v1/shift-transition",JSONObject().put("assignment_id",assignmentId).put("transition",transition).put("proof",proof(session,deviceId,identity,expectedAudience)),session)}
+ fun createEscalation(session:Session,deviceId:String,identity:DeviceIdentity,expectedAudience:String,raw:String):JSONObject=possession{
+  EscalationProtocol.parse(raw)
+  val signed=escalationProof(session,deviceId,identity,expectedAudience,"create",EscalationProtocol.hash(raw))
+  request("/v1/escalations",JSONObject().put("intent",EscalationProtocol.encode(raw)).put("proof",signed),session,maxRequestBytes=16384)
+ }
+ fun escalationStatus(session:Session,deviceId:String,identity:DeviceIdentity,expectedAudience:String,id:String):JSONObject=possession{
+  val hash=EscalationProtocol.hash(EscalationProtocol.statusPayload(id))
+  request("/v1/escalations/status",JSONObject().put("escalation_id",id).put("proof",escalationProof(session,deviceId,identity,expectedAudience,"status",hash)),session)
+ }
+ private fun <T> possession(action:()->T):T {
+  // The backend keeps one outstanding nonce per account/device. Keep its request paired
+  // with its proof while allowing a stopped job to leave a contended lock promptly.
+  while(!possessionLock.tryLock(100,java.util.concurrent.TimeUnit.MILLISECONDS))cancellation?.check()
+  try{cancellation?.check();return action()}finally{possessionLock.unlock()}
+ }
+ private fun escalationProof(session:Session,deviceId:String,identity:DeviceIdentity,audience:String,operation:String,hash:String):JSONObject {
+  require(PatrolPlan.identifier(deviceId))
+  val response=request("/v1/device-challenge",JSONObject().put("device_id",deviceId),session)
+  require(response.get("audience")==audience)
+  return identity.signEscalationChallenge(audience,operation,response.getString("request_id"),response.getString("challenge"),hash)
+ }
  private fun proof(session: Session, deviceId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject {
   require(deviceId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}")))
   val response = request("/v1/device-challenge",JSONObject().put("device_id",deviceId),session)
   require(response.get("audience") == expectedAudience)
   return identity.signEnrollmentChallenge(expectedAudience,response.getString("request_id"),response.getString("challenge"))
  }
- private fun request(path: String, body: JSONObject?, session: Session? = null,method:String?=null): JSONObject {
+ private fun request(path: String, body: JSONObject?, session: Session? = null,method:String?=null,maxRequestBytes:Int=4096): JSONObject {
   cancellation?.check()
   val url=URL(origin+path)
   val connection = (network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
@@ -71,7 +93,7 @@ class GuardAccountClient(endpoint: String,private val network:android.net.Networ
    connection.instanceFollowRedirects = false; connection.connectTimeout = 10000; connection.readTimeout = 10000
    session?.let { connection.setRequestProperty("Authorization", "Bearer ${it.bearer()}") }
    if(body != null) {
-    val bytes = body.toString().toByteArray(Charsets.UTF_8); require(bytes.size <= 4096)
+    val bytes = body.toString().toByteArray(Charsets.UTF_8); require(bytes.size <= maxRequestBytes)
     connection.doOutput = true; connection.setRequestProperty("Content-Type","application/json"); connection.setFixedLengthStreamingMode(bytes.size)
     cancellation?.check();connection.outputStream.use { cancellation?.check();it.write(bytes) }
    }

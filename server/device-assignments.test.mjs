@@ -101,7 +101,7 @@ test('shift route authenticates proofs and permits explicit scheduled end withou
 test('configured lifecycle refuses capture grants before start and after confirmed end',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200,issued=0;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
- const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:{issue:async()=>{issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:{issue:async context=>{assert.equal(context.allowedActions.includes('location'),false);assert.equal(context.allowedActions.includes('check_in'),true);issued++;return {test_only:true};}},now:()=>now,verifySession:async()=>({subject:identity.subject,active:true,expiresAt:999999})});
  const send=()=>handler(new Request('https://guard.test/v1/shift-grant',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:'a',proof:proof(k,db.challenge(identity,'phone',now))})}));
  const scope={identity,assignment:{assignmentId:'a',guardId:'guard-1',vendorId:'MG001',siteId:'site-1',startsAt:100,endsAt:999999,active:true},deviceThumbprint:db.device('phone').thumbprint};
  try{

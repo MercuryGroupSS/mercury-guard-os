@@ -24,6 +24,9 @@ class GuardAccountActivity : Activity() {
  private var config: GuardServiceConfig? = null
  private var loginParticles:ParticleLoginView?=null
  private var session: GuardAccountClient.Session? = null
+ private data class AccountIdentity(val subject:String,val guardId:String,val vendorId:String)
+ private var accountIdentity:AccountIdentity?=null
+ private var accountAnchor:ServerTimeAnchor?=null
  private var captureGrant: VerifiedShiftGrant? = null
  private var captureBinding: GrantBinding? = null
  private var captureAnchor: ServerTimeAnchor? = null
@@ -46,13 +49,14 @@ class GuardAccountActivity : Activity() {
   // A recreated process has no verified capture authority. Discard abandoned temporary output.
   File(cacheDir,"capture/account").listFiles()?.forEach{it.delete()}
   try { AuthorizedReminders(this).refresh();config=GuardServiceConfig.load(this);UploadCoordinator(this).request(); startScreen() }
-  catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Return"){finish()} }
+  catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Escalate"){unverifiedEscalation()};button("Return"){finish()} }
+  if(intent.getBooleanExtra("open_escalation",false)){intent.removeExtra("open_escalation");unverifiedEscalation()}
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()};loginParticles?.startMotion()}
  override fun onPause(){loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
  override fun onDestroy(){loginParticles?.stopMotion();super.onDestroy()}
- private fun clearSession(){captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ private fun clearSession(){accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun screen(title:String,detail:String){
   loginParticles?.stopMotion();loginParticles=null
   password=null
@@ -65,19 +69,19 @@ class GuardAccountActivity : Activity() {
   scroll.addView(root);setContentView(scroll)
   scroll.setOnApplyWindowInsetsListener{v,i->v.setPadding(i.systemWindowInsetLeft,i.systemWindowInsetTop,i.systemWindowInsetRight,i.systemWindowInsetBottom);i};scroll.requestApplyInsets()
  }
- private fun button(title:String,action:()->Unit){root.addView(Button(this).apply{text=title;isAllCaps=false;textSize=16f;minHeight=dp(56);setOnClickListener{if(!busy)action()}},LinearLayout.LayoutParams(-1,-2))}
+ private fun button(title:String,allowWhileBusy:Boolean=false,action:()->Unit){root.addView(Button(this).apply{text=title;isAllCaps=false;textSize=16f;minHeight=dp(56);setOnClickListener{if(allowWhileBusy||!busy)action()}},LinearLayout.LayoutParams(-1,-2))}
  private fun startScreen(){
   clearSession()
   val c=config
-  if(c==null){screen("ACCOUNT CONNECTION","No trusted service is configured for this build. Your local demo records remain on this phone.");button("Return"){finish()};return}
+  if(c==null){screen("ACCOUNT CONNECTION","No trusted service is configured for this build. Your local demo records remain on this phone.");button("Escalate"){unverifiedEscalation()};button("Return"){finish()};return}
   try{
    if(DeviceIdentity(this).publicIdentity()==null){
     screen("PHONE ENROLLMENT","Prepare this phone's signing identity, then have an administrator approve its public key. This does not enroll the phone or create a guard account.")
     button("Prepare phone identity"){
      try{DeviceIdentity(this).create();enrollmentDetails()}catch(_:Exception){status.text="Phone identity could not be prepared. Existing key material has not been replaced."}
-    };button("Set up or reset password"){openAccountPage()};button("Close"){finish()};return
+    };button("Escalate"){unverifiedEscalation()};button("Set up or reset password"){openAccountPage()};button("Close"){finish()};return
    }
-  }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Close"){finish()};return}
+  }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Escalate"){unverifiedEscalation()};button("Close"){finish()};return}
   screen("GUARD SIGN-IN","Verify on this device, then enter your individual guard ID and password. Device biometrics do not identify your guard account.\nService: ${c.endpoint}")
   loginParticles=ParticleLoginView(this).apply{
    contentDescription="Mercury One decorative particle face. Verify with biometrics to continue; this animation does not recognize your identity."
@@ -86,7 +90,7 @@ class GuardAccountActivity : Activity() {
   }
   root.addView(loginParticles,2,LinearLayout.LayoutParams(-1,dp(280)))
   loginParticles?.startMotion()
-  button("Verify with biometrics") { biometric() };button("Stop automatic uploads and sign out"){signOut()};button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+  button("Escalate"){unverifiedEscalation()};button("Verify with biometrics") { biometric() };button("Stop automatic uploads and sign out",true){signOut()};button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
  }
  private fun signOut(){UploadCoordinator(this).stop(session,config);startScreen();status.text="Signed out on this phone. Automatic delivery stopped; encrypted records remain preserved. Service sign-out was requested and can remain unconfirmed while offline."}
  private fun openAccountPage(){
@@ -147,8 +151,8 @@ class GuardAccountActivity : Activity() {
   screen("YOUR ASSIGNMENTS","Verifying your account and registered device…")
   val stamp=generation;busy=true
   Thread{
-   var profile:JSONObject?=null;var assignments:JSONObject?=null
-   try{val client=GuardAccountClient(c.endpoint);profile=client.profile(active);assignments=client.assignments(active,c.deviceId,DeviceIdentity(this),c.audience)}catch(_:Exception){}
+   var profile:JSONObject?=null;var assignments:JSONObject?=null;var receivedElapsed=0L
+   try{val client=GuardAccountClient(c.endpoint);profile=client.profile(active);assignments=client.assignments(active,c.deviceId,DeviceIdentity(this),c.audience);receivedElapsed=SystemClock.elapsedRealtime()}catch(_:Exception){}
    val p=profile;val a=assignments
    runOnUiThread{
     if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
@@ -156,17 +160,20 @@ class GuardAccountActivity : Activity() {
     try{
      check(p!=null&&a!=null)
      val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&(!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active")}.map{it.getString("assignmentId")}.toSet())
-     UploadCoordinator(this).authorize(c,active,guard,vendor)
+     val subject=p.getString("auth_subject");check(EscalationRules.uuid(subject))
+     val epoch=a.getLong("server_time_ms");val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1);check(epoch>0&&receivedElapsed>0&&boot>=0)
+     accountIdentity=AccountIdentity(subject,guard,vendor);accountAnchor=ServerTimeAnchor(epoch,receivedElapsed,boot)
+     UploadCoordinator(this).authorize(c,active,guard,vendor,subject)
      val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
-     button("Send my queued records"){sendScoped(guard)}
+     button("Escalate"){escalationScreen()};button("My escalation requests"){escalationList()};button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
       val item=rows.getJSONObject(i);check(item.getString("guardId")==guard&&item.getString("vendorId")==vendor)
       if(a.has("server_time_ms")){item.put("status_server_time_ms",a.getLong("server_time_ms"));item.put("status_elapsed_ms",SystemClock.elapsedRealtime())}
       button("${item.getString("siteId")} · ${item.getString("assignmentId")}"){assignmentOverview(item)}
      }
     }catch(_:Exception){status.text="Assignments could not be verified. Check connectivity or ask your administrator to review this phone's enrollment."}
-    button("Refresh assignments"){loadAssignments()};button("Sign out"){signOut()}
+    button("Refresh assignments"){loadAssignments()};button("Sign out",true){signOut()}
    }
   }.start()
  }
@@ -188,7 +195,7 @@ class GuardAccountActivity : Activity() {
       val now=Math.addExact(item.getLong("status_server_time_ms"),Math.subtractExact(SystemClock.elapsedRealtime(),item.getLong("status_elapsed_ms")))
       if(now<item.getLong("endsAt")){
        if(item.optBoolean("assignmentActive",true))button("Continue shift"){verifyAssignment(item)} else status.text="Assignment cancelled. Capture is unavailable; confirm your shift end below."
-       button("Escalate · end shift early"){
+       button("End shift early"){
         val reason=EditText(this).apply{hint="Reason for leaving early";isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(2000))}
         val dialog=AlertDialog.Builder(this).setTitle("End shift early").setMessage("Give a reason, then confirm. This records an early exit; it does not notify dispatch yet.").setView(reason).setNegativeButton("Cancel",null).setPositiveButton("Confirm early exit",null).create()
         dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else if(!ShiftTransitionStore.validReason(text))reason.error="Please shorten the reason before confirming" else{dialog.dismiss();submitShift(item,scope,"end",text)}}};dialog.show()
@@ -202,8 +209,10 @@ class GuardAccountActivity : Activity() {
     }
    }
   }catch(_:Exception){status.text="Shift status could not be opened. Refresh assignments; saved confirmation requests remain preserved."}
+  button("Escalate"){escalationScreen(if(item.optBoolean("assignmentActive",true))item else null)}
+  button("My escalation requests"){escalationList()}
   button("Send my queued records"){sendScoped(scope.binding.guardId)}
-  button("Refresh assignments"){loadAssignments()};button("Sign out"){signOut()}
+  button("Refresh assignments"){loadAssignments()};button("Sign out",true){signOut()}
  }
  private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
   if(busy)return
@@ -261,6 +270,7 @@ class GuardAccountActivity : Activity() {
  }
  private fun captureScreen(item:JSONObject){
   screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nAuthorized capture · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
+  button("Escalate"){escalationScreen(item)};button("My escalation requests"){escalationList()}
   val note=EditText(this).apply{hint="Describe the incident";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;minLines=3;isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(8000))}
   root.addView(note)
   button("Save authorized incident"){
@@ -282,7 +292,7 @@ class GuardAccountActivity : Activity() {
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
-  button("Sign out"){signOut()}
+  button("Sign out",true){signOut()}
  }
  private fun loadDispatch(item:JSONObject,refresh:Boolean,offset:Int=0){
   val c=config?:return;val active=session?:return;val binding=captureBinding?:return
@@ -324,7 +334,7 @@ class GuardAccountActivity : Activity() {
      if(result.size==30)button("Next messages"){loadDispatch(item,false,offset+30)}
      button("Refresh messages"){loadDispatch(item,true)}
     }
-    button("Back to assignment"){captureScreen(item)};button("Sign out"){signOut()}
+    button("Back to assignment"){captureScreen(item)};button("Sign out",true){signOut()}
    }
   }.start()
  }
@@ -494,30 +504,126 @@ class GuardAccountActivity : Activity() {
   }
   startScreen();Toast.makeText(this,message,Toast.LENGTH_LONG).show()
  }
- private fun patrolScreen(item:JSONObject){
+ private fun openDialer(){
+  try{startActivity(Intent(Intent.ACTION_DIAL,Uri.parse("tel:")))}catch(_:Exception){Toast.makeText(this,"No phone dialer is available on this device. Use your established emergency or dispatch channel.",Toast.LENGTH_LONG).show()}
+ }
+ private fun unverifiedEscalation(){
+  screen("ESCALATE · NOT SIGNED IN","No verified guard account is active on this screen. Opening this screen does not submit a request. Sign in to send an attributed request. For immediate help, use your established emergency or dispatch channel.")
+  button("Open phone dialer",true){openDialer()}
+  root.addView(TextView(this).apply{text="Approved fallback contact is not configured. The dialer opens without a prefilled number or an automatic call.";textSize=14f})
+  button("Return to sign-in"){startScreen()}
+ }
+ private fun escalationScope():EscalationScope {
+  session?.bearer()?:error("Sign in again")
+  val c=config?:error("Trusted service required");val who=accountIdentity?:error("Verified individual account required")
+  val thumbprint=DeviceIdentity(this).publicIdentity()?.thumbprint?:error("Phone identity required")
+  return EscalationScope(c.uploadBinding(),c.deviceId,thumbprint,who.subject,who.guardId,who.vendorId)
+ }
+ private fun escalationTime():Long {
+  val anchor=accountAnchor?:error("Refresh assignments")
+  val now=SystemClock.elapsedRealtime();check(now>=anchor.elapsedMillis&&anchor.bootCount==Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1))
+  return Math.addExact(anchor.epochMillis,now-anchor.elapsedMillis)
+ }
+ private fun recentEscalationLocation(at:Long):EscalationLocation? {
+  if(!DeviceReadiness(this).preciseLocationGranted())return null
+  return try{
+   val manager=getSystemService(LOCATION_SERVICE) as android.location.LocationManager
+   val fix=manager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)?:return null
+   EscalationLocationCapture.fromLocation(fix,at,SystemClock.elapsedRealtimeNanos())
+  }catch(_:Exception){null}
+ }
+ private fun escalationScreen(item:JSONObject?=null){
+  val scope=try{escalationScope()}catch(_:Exception){unverifiedEscalation();return}
+  val assignment=try{if(item==null)null else{check(item.getString("guardId")==scope.guardId&&item.getString("vendorId")==scope.vendorId);item.getString("assignmentId")}}catch(_:Exception){status.text="Assignment context could not be verified. Refresh assignments before opening escalation.";return}
+  screen("ESCALATE","Send an attributed request to the Mercury One operator inbox. Service receipt and operator acknowledgement are separate. This does not place an emergency call or confirm that anyone has been contacted.\n"+(if(assignment==null)"No assignment attached." else "Assignment: $assignment"))
+  button("Open phone dialer",true){openDialer()}
+  val urgency=RadioGroup(this);val assistance=RadioButton(this).apply{id=View.generateViewId();text="Assistance"};val urgent=RadioButton(this).apply{id=View.generateViewId();text="Urgent"};urgency.addView(assistance);urgency.addView(urgent);urgency.check(assistance.id);root.addView(urgency)
+  val description=EditText(this).apply{hint="Describe the help you need";minLines=4;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;isSaveEnabled=false;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS;filters=arrayOf(android.text.InputFilter.LengthFilter(4000))};root.addView(description)
+  val includeLocation=CheckBox(this).apply{text="Include a recent device location if available";isChecked=true};root.addView(includeLocation)
+  root.addView(TextView(this).apply{text="An unavailable, stale or simulated location is omitted. Location never blocks a request. Approved fallback contact is not configured; use your established channel or the dialer.";textSize=14f})
+  button("Save and send request"){
+   try{
+    check(escalationScope()==scope);val at=escalationTime();val location=if(includeLocation.isChecked)recentEscalationLocation(at)else null
+    val intent=EscalationIntent(UUID.randomUUID().toString(),scope.guardId,scope.vendorId,assignment,at,if(urgency.checkedRadioButtonId==urgent.id)"urgent"else"assistance",description.text.toString(),location)
+    EscalationStore(this).use{it.save(scope,intent)};description.text.clear();UploadCoordinator(this).request();showEscalation(intent.id,scope);sendEscalation(intent.id,scope)
+   }catch(_:Exception){description.error="Request not saved. Enter up to 2,000 characters and sign in or refresh assignments if your account has expired. Your text remains here."}
+  }
+  button("My escalation requests"){escalationList()};button("Back to assignments"){loadAssignments()};button("Sign out",true){signOut()}
+ }
+ private fun escalationList(){
+  val scope=try{escalationScope()}catch(_:Exception){unverifiedEscalation();return}
+  screen("MY ESCALATION REQUESTS","Saved locally, service received and operator acknowledged are distinct states. An acknowledgement does not establish that help has arrived or the issue is resolved.")
+  try{
+   val rows=EscalationStore(this).use{it.list(scope)}
+   if(rows.isEmpty())root.addView(TextView(this).apply{text="No saved requests for this individual account and phone configuration.";textSize=16f})
+   for(record in rows)button("${record.state} · ${java.util.Date(record.intent.occurredAt)}"){showEscalation(record.id,scope)}
+   if(rows.size==50)root.addView(TextView(this).apply{text="Showing the latest 50 requests. Older records remain encrypted on this phone."})
+  }catch(_:Exception){status.text="Saved requests could not be opened. Existing encrypted data remains preserved."}
+  button("New escalation request"){escalationScreen()};button("Open phone dialer",true){openDialer()};button("Back to assignments"){loadAssignments()};button("Sign out",true){signOut()}
+ }
+ private fun showEscalation(id:String,scope:EscalationScope){
+  try{
+   check(escalationScope()==scope);val r=EscalationStore(this).use{it.get(id,scope)}?:error("Saved request unavailable")
+   screen("ESCALATE · ${r.state.uppercase()}",when(r.state){"Operator acknowledged"->"An approved operator explicitly acknowledged this request. This does not establish that help arrived, external contacts were notified or the issue is resolved.";"Service received"->"The protected operator inbox received this exact request. No operator acknowledgement has been confirmed.";else->"Saved encrypted on this phone. Service receipt and operator acknowledgement are not confirmed. Use your established channel if you need immediate help."})
+   root.addView(TextView(this).apply{text="${r.intent.urgency.uppercase()} · ${java.util.Date(r.intent.occurredAt)}\n${r.intent.description}\n"+(r.intent.assignmentId?.let{"Assignment: $it"}?:"No assignment attached.")+"\n"+(if(r.intent.location==null)"No location attached."else"Device-reported location attached; physical presence is not verified.");textSize=17f;setTextIsSelectable(true)})
+   r.snapshot?.optJSONObject("acknowledgement")?.let{ack->root.addView(TextView(this).apply{text="Operator acknowledgement · ${java.util.Date(ack.getLong("acknowledged_at_ms"))}\n${ack.getString("note")}";textSize=17f;setTextIsSelectable(true)})}
+   if(r.review!=null)root.addView(TextView(this).apply{text="Delivery or status needs review. The original request and any verified receipt are retained unchanged. A generic failure is not proof of permanent rejection.";textSize=15f})
+   button(if(r.receipt==null)"Retry delivery and check status"else"Refresh operator status"){sendEscalation(id,scope)}
+   button("Open phone dialer",true){openDialer()};button("My escalation requests"){escalationList()};button("Back to assignments"){loadAssignments()};button("Sign out",true){signOut()}
+  }catch(_:Exception){status.text="This request could not be opened for the current account and phone configuration. Sign in again; encrypted records remain preserved."}
+ }
+ private fun sendEscalation(id:String,scope:EscalationScope){
+  val c=config?:return;val stamp=generation
+  val authority=try{
+   check(escalationScope()==scope)
+   UploadAuthorityStore(this).load(c,scope.thumbprint)?.also{check(it.subject==scope.subject&&it.guardId==scope.guardId&&it.vendorId==scope.vendorId)}?:error("Sign in again")
+  }catch(_:Exception){status.text="Request remains saved. Sign in again to authorize delivery and status checks.";return}
+  val cancellation=UploadCancellation();EscalationForeground.add(cancellation);busy=true
+  status.text="Trying delivery and protected status for the saved request. No new operator acknowledgement has been confirmed."
+  val timer=Handler(Looper.getMainLooper());val limit=Runnable{cancellation.cancel()};timer.postDelayed(limit,45000)
+  Thread{
+   try{EscalationDelivery(applicationContext,c,authority,null,cancellation).use{it.one(id)}}catch(_:Exception){}
+   finally{timer.removeCallbacks(limit);EscalationForeground.remove(cancellation)}
+   runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){busy=false;showEscalation(id,scope)}}
+  }.start()
+ }
+ private fun patrolScreen(item:JSONObject,selectedRoundId:String?=null){
   val binding=captureBinding?:return
   screen("ASSIGNED PATROL","Select checkpoints in any order. Each checkpoint is a manual observation; it does not prove physical presence.")
   try{
-   val route=item.getJSONObject("patrolRoute");val routeId=route.getString("routeId");val revision=route.getLong("revision");val points=route.getJSONArray("checkpoints")
-   require(points.length() in 1..100)
+   check(binding.assignmentId==item.getString("assignmentId")&&binding.guardId==item.getString("guardId")&&binding.siteId==item.getString("siteId"))
+   val plan=AuthorizedPatrolRoute.parse(item.getJSONObject("patrolRoute"))
    val db=ScopedEventStore(this)
-   try{for(i in 0 until points.length()){
-    val point=points.getJSONObject(i);val pointId=point.getString("id")
-    if(db.checkpointRecorded(binding,routeId,revision,pointId))root.addView(TextView(this).apply{text="Recorded · ${point.getString("label")}";textSize=16f;setPadding(0,dp(12),0,dp(12))})
-    else button("Record checkpoint: ${point.getString("label")}"){
-     try{
-      val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
-      val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
-      val current=ScopedEventStore(this)
-      try{current.captureCheckpoint(binding,grant,DeviceIdentity(this),routeId,revision,pointId,observed)}finally{current.close()}
-      UploadCoordinator(this).request();patrolScreen(item);status.text="Checkpoint saved encrypted. Automatic delivery is requested; service acceptance is pending."
-     }catch(_:Exception){status.text="Checkpoint not recorded. It may already be saved, or authorization may have expired. Return to the assignment to refresh."}
+   try{
+    val recorded=db.checkpointProgress(binding,plan.routeId,plan.revision)
+    if(plan.rounds!=null&&selectedRoundId==null){
+     status.text="Choose an assigned patrol round. You can switch rounds without completing them in sequence. Saved checkpoints remain attached to their original round."
+     for(round in plan.rounds){
+      val count=plan.checkpoints.count{PatrolCheckpointKey(round.id,it.id) in recorded}
+      button("${round.label} · $count/${plan.checkpoints.size} recorded"){patrolScreen(item,round.id)}
+     }
+    }else{
+     val round=plan.round(selectedRoundId)
+     if(round!=null){screen("PATROL · ${round.label}","Select checkpoints in any order for this assigned round. A saved checkpoint cannot be recorded twice in the same round.")}
+     for(point in plan.checkpoints){
+      if(PatrolCheckpointKey(selectedRoundId,point.id) in recorded)root.addView(TextView(this).apply{text="Recorded · ${point.label}";textSize=16f;setPadding(0,dp(12),0,dp(12))})
+      else button("Record checkpoint: ${point.label}"){
+       try{
+        val choice=plan.choice(point.id,selectedRoundId)
+        val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
+        val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+        ScopedEventStore(this).use{current->current.captureCheckpoint(binding,grant,DeviceIdentity(this),choice.routeId,choice.revision,choice.checkpointId,observed,choice.roundId)}
+        UploadCoordinator(this).request();patrolScreen(item,selectedRoundId);status.text="Checkpoint saved encrypted for ${round?.label?:"this patrol"}. Automatic delivery is requested; service acceptance is pending."
+       }catch(_:Exception){status.text="Checkpoint not recorded. It may already be saved in this round, or authorization may have expired. Return to the assignment to refresh."}
+      }
+     }
+     if(plan.rounds!=null)button("Choose another patrol round"){patrolScreen(item)}
     }
-   }}finally{db.close()}
-  }catch(_:Exception){status.text="The assigned route could not be opened. Existing records were preserved."}
+   }finally{db.close()}
+  }catch(_:Exception){status.text="The assigned route or round could not be verified. Existing records were preserved; refresh assignment authorization."}
   button("Send my queued records"){sendScoped(binding.guardId)}
   button("Back to assignment"){captureScreen(item)}
-  button("Sign out"){signOut()}
+  button("Sign out",true){signOut()}
  }
  private fun sendScoped(guardId:String){
   try{

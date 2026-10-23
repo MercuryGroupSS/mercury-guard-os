@@ -146,21 +146,34 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
  }
- fun checkpointRecorded(original:GrantBinding,routeId:String,revision:Long,checkpointId:String):Boolean {
+ fun checkpointRecorded(original:GrantBinding,routeId:String,revision:Long,checkpointId:String,roundId:String?=null):Boolean {
+  require(roundId==null||PatrolPlan.identifier(roundId))
+  return PatrolCheckpointKey(roundId,checkpointId) in checkpointProgress(original,routeId,revision)
+ }
+ /** One scan per rendered route, rather than one full encrypted-history scan for every button. */
+ internal fun checkpointProgress(original:GrantBinding,routeId:String,revision:Long):Set<PatrolCheckpointKey>{
+  val recorded=mutableSetOf<PatrolCheckpointKey>()
   readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
-   if(binding(record.getJSONObject("scope"))!=original)continue
+   val scope=binding(record.getJSONObject("scope"))
+   if(scope.guardId!=original.guardId||scope.assignmentId!=original.assignmentId)continue
    val event=record.getJSONObject("event");val data=event.getJSONObject("data")
-   if(event.getString("kind")=="patrol_checkpoint"&&data.optString("route_id")==routeId&&data.optLong("route_revision")==revision&&data.optString("checkpoint_id")==checkpointId)return true
+   if(event.getString("kind")!="patrol_checkpoint"||data.opt("route_id")!=routeId)continue
+   val version=data.opt("route_revision");if((version !is Int&&version !is Long)||(version as Number).toLong()!=revision)continue
+   val point=data.opt("checkpoint_id") as? String?:continue
+   val round=if(!data.has("round_id"))null else data.opt("round_id") as? String?:continue
+   if(PatrolPlan.identifier(point)&&(round==null||PatrolPlan.identifier(round)))recorded.add(PatrolCheckpointKey(round,point))
   }}
-  return false
+  return recorded
  }
- fun captureCheckpoint(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,routeId:String,revision:Long,checkpointId:String,observedAt:Long):String {
-  require(routeId.isNotBlank()&&checkpointId.isNotBlank()&&revision>0)
+ fun captureCheckpoint(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,routeId:String,revision:Long,checkpointId:String,observedAt:Long,roundId:String?=null):String {
+  require(routeId.isNotBlank()&&checkpointId.isNotBlank()&&revision>0&&(roundId==null||PatrolPlan.identifier(roundId)))
   val db=writableDatabase;db.beginTransaction()
   try{
-   check(!checkpointRecorded(original,routeId,revision,checkpointId)){"Checkpoint already recorded"}
-   val result=capture("patrol_checkpoint",JSONObject().put("route_id",routeId).put("route_revision",revision).put("checkpoint_id",checkpointId),original,grant,identity,observedAt)
+   check(!checkpointRecorded(original,routeId,revision,checkpointId,roundId)){"Checkpoint already recorded in this patrol round"}
+   val data=JSONObject().put("route_id",routeId).put("route_revision",revision).put("checkpoint_id",checkpointId)
+   roundId?.let{data.put("round_id",it)}
+   val result=capture("patrol_checkpoint",data,original,grant,identity,observedAt)
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
  }

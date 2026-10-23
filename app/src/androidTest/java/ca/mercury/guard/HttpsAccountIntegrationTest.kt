@@ -85,8 +85,10 @@ class HttpsAccountIntegrationTest {
    } finally { context.deleteDatabase(inboxName) }
    db.capture("incident",JSONObject().put("description","HTTPS integration synthetic incident"),binding,grant!!,identity,response.getLong("server_time_ms"))
    val route=response.getJSONObject("patrol_route");assertEquals("fixture-route",route.getString("routeId"))
-   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"))
-   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"))
+   val patrol=AuthorizedPatrolRoute.parse(route);assertEquals(listOf("opening","closing"),patrol.rounds!!.map{it.id})
+   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"),"closing")
+   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"),"opening")
+   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"),"opening")
    val bitmap=android.graphics.Bitmap.createBitmap(1,1,android.graphics.Bitmap.Config.ARGB_8888)
    val photoBytes=java.io.ByteArrayOutputStream().use{out->assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,out));out.toByteArray()};bitmap.recycle()
    val temporary=File(context.cacheDir,"https-job-${UUID.randomUUID()}.jpg")
@@ -105,7 +107,7 @@ class HttpsAccountIntegrationTest {
    // Exercise the actual persisted JobService against HTTPS after foreground credential memory is cleared.
    val trusted=GuardServiceConfig.load(context)?:error("HTTPS debug-only packaged trust required")
    val uploadSession=GuardAccountClient.Session(session.bearer(),session.expiresElapsed)
-   UploadCoordinator(context).authorize(trusted,uploadSession,"fixture-guard","fixture-vendor");uploadSession.clear()
+   UploadCoordinator(context).authorize(trusted,uploadSession,"fixture-guard","fixture-vendor",profile.getString("auth_subject"));uploadSession.clear()
    val command="cmd jobscheduler run -f ${context.packageName} ${UploadCoordinator.JOB_ID}"
    instrumentation.uiAutomation.executeShellCommand(command).use{fd->java.io.FileInputStream(fd.fileDescriptor).use{it.readBytes()}}
    val deadline=SystemClock.elapsedRealtime()+45000
@@ -115,7 +117,7 @@ class HttpsAccountIntegrationTest {
    val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids)
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    db.recordUploadReceipt("fixture-guard",JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
-   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(6,fixture("/test/receipts").getInt("count"))
+   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(7,fixture("/test/receipts").getInt("count"))
    val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes)
    assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
    assertEquals(1,fixture("/test/receipts").getInt("media_count"))

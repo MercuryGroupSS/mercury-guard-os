@@ -55,7 +55,9 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint},at,{live:true}))throw Error('Active shift required');
     const device=await devices.device(assignment.deviceId);
     const grant=await grantIssuer.issue({identity,assignment,device,sessionExpiresAt:session.expiresAt*1000,
-     allowedActions:['patrol','incident','photo','check_in','location',...(dispatch?['dispatch_ack']:[])],now:at});
+     // Continuous samples need a separately approved policy and explicit
+     // consent. Check-in GPS remains governed by its existing evidence policy.
+     allowedActions:['patrol','incident','photo','check_in',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?await reconcileCheckIns(store,assignment,at,{activeWindow:await shiftLifecycle?.checkInWindow(assignment)}):null});
    }
    const at=now(),result=await devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle});
