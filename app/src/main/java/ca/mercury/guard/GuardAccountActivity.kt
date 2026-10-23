@@ -30,8 +30,9 @@ class GuardAccountActivity : Activity() {
  private var stopped=false
  private var busy=false
  // One-shot capture authority survives the external camera; account credentials never do.
- private data class PendingPhoto(val file:File,val binding:GrantBinding,val grant:VerifiedShiftGrant,val anchor:ServerTimeAnchor)
+ private data class PendingPhoto(val file:File,val binding:GrantBinding,val grant:VerifiedShiftGrant,val anchor:ServerTimeAnchor,val checkIn:AuthorizedCheckInEvidence?=null)
  private var pendingPhoto:PendingPhoto?=null
+ private var locationPing:LocationPing?=null
  private var password: EditText?=null
  private lateinit var root: LinearLayout
  private lateinit var status: TextView
@@ -47,7 +48,7 @@ class GuardAccountActivity : Activity() {
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()}}
- private fun clearSession(){captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ private fun clearSession(){captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun screen(title:String,detail:String){
   password=null
   val scroll=ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.rgb(244,248,250))}
@@ -134,6 +135,7 @@ class GuardAccountActivity : Activity() {
    var verifiedBinding:GrantBinding?=null
    var verifiedAnchor:ServerTimeAnchor?=null
    var verifiedRoute:JSONObject?=null
+   var verifiedCheckIn:JSONObject?=null
    try{
     val identity=DeviceIdentity(this);val fingerprint=identity.publicIdentity()?.thumbprint?:error("Missing key")
     check(item.getString("deviceThumbprint")==fingerprint)
@@ -142,12 +144,12 @@ class GuardAccountActivity : Activity() {
     val response=GuardAccountClient(c.endpoint).grant(active,c.deviceId,binding.assignmentId,identity,c.audience)
     val anchor=ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot)
     verified=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,anchor,SystemClock.elapsedRealtime(),boot)
-    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime());verifiedRoute=response.optJSONObject("patrol_route")
+    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime());verifiedRoute=response.optJSONObject("patrol_route");verifiedCheckIn=response.optJSONObject("check_in_policy")
    }catch(_:Exception){}
    val grant=verified;val binding=verifiedBinding;val anchor=verifiedAnchor
    runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){
     busy=false
-    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;val current=JSONObject(item.toString());current.remove("patrolRoute");verifiedRoute?.let{current.put("patrolRoute",it)};captureScreen(current)}
+    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;val current=JSONObject(item.toString());current.remove("patrolRoute");verifiedRoute?.let{current.put("patrolRoute",it)};current.remove("checkInPolicy");verifiedCheckIn?.let{current.put("checkInPolicy",it)};captureScreen(current)}
     else status.text="Shift authorization could not be verified. The assignment may not have started, may have changed, or the connection may be unavailable."
    }}
   }.start()
@@ -167,18 +169,63 @@ class GuardAccountActivity : Activity() {
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
   button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
+  if(item.has("checkInPolicy"))button("Complete scheduled check-in"){if(note.text.toString().isNotBlank())status.text="Save your incident description before starting a check-in." else beginCheckIn(item)}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
   button("Sign out"){startScreen()}
  }
+ private fun beginCheckIn(item:JSONObject){
+  val anchor=captureAnchor?:return;val binding=captureBinding?:return;val grant=captureGrant?:return
+  fun observed()=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+  val policy:AuthorizedCheckInPolicy;val slot:Long
+  try{
+   policy=AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy"));slot=policy.slotAt(observed())
+   val due=Math.addExact(policy.startsAt,Math.multiplyExact(slot,policy.interval))
+   check(observed()<minOf(due+policy.window,policy.endsAt))
+   val db=ScopedEventStore(this);try{check(!db.checkInRecorded(binding,policy.revision,slot))}finally{db.close()}
+   check(grant.permits("check_in",binding,SystemClock.elapsedRealtime(),anchor.bootCount))
+  }catch(_:Exception){status.text="No open check-in window, this check-in is already saved, or authorization needs refreshing.";return}
+  if(checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
+   requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION),404)
+   status.text="Allow precise location, then tap Complete scheduled check-in again.";return
+  }
+  val stamp=generation;busy=true
+  try{
+   val cancellation=CancellationSignal();signal=cancellation
+   val builder=BiometricPrompt.Builder(this).setTitle("Verify check-in").setNegativeButton("Cancel",mainExecutor){_,_->if(stamp==generation){busy=false;signal=null}}
+   if(Build.VERSION.SDK_INT>=30)builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+   builder.build().authenticate(cancellation,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
+    override fun onAuthenticationError(code:Int,message:CharSequence){if(stamp==generation){busy=false;signal=null;status.text="Check-in verification cancelled or unavailable."}}
+    override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){
+     if(stamp!=generation)return
+     signal=null;val biometricAt=observed();status.text="Getting a fresh GPS fix…"
+     locationPing=LocationPing(this@GuardAccountActivity).also{ping->ping.request{fix->
+      if(stamp==generation){
+       busy=false;locationPing=null
+       try{
+        check(fix!=null)
+        val fixAt=Math.addExact(anchor.epochMillis,Math.subtractExact(fix.getLong("fix_elapsed_nanos")/1000000,anchor.elapsedMillis))
+        val location=JSONObject(fix.toString()).put("at",fixAt)
+        policy.validate(slot,biometricAt,location,observed(),observed())
+        val evidence=AuthorizedCheckInEvidence(policy,slot,biometricAt,location)
+        AlertDialog.Builder(this@GuardAccountActivity).setTitle("Check-in photo")
+         .setMessage("Take a consented test photo to complete this pilot check-in. It will be encrypted locally and uploaded when you send queued records. Opening the camera signs you out.")
+         .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation)openAuthorizedCamera(evidence)}.show()
+       }catch(_:Exception){status.text="Check-in is incomplete. A fresh, non-mock GPS fix within the site's accuracy limit is required. Try again outdoors."}
+      }
+     }}
+    }
+   })
+  }catch(_:Exception){busy=false;signal=null;status.text="Biometric check unavailable. No check-in was saved."}
+ }
  private fun confirmPhoto(){
   AlertDialog.Builder(this).setTitle("Capture photo evidence")
    .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Sending queued records uploads it to the configured pilot service. Camera use signs you out; sign in again to send it.")
    .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->openAuthorizedCamera()}.show()
  }
- private fun openAuthorizedCamera(){
+ private fun openAuthorizedCamera(checkIn:AuthorizedCheckInEvidence?=null){
   if(pendingPhoto!=null)return
   val binding=captureBinding?:return;val grant=captureGrant?:return;val anchor=captureAnchor?:return
   val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1)
@@ -186,7 +233,7 @@ class GuardAccountActivity : Activity() {
   val dir=File(cacheDir,"capture/account").apply{mkdirs()};val file=File(dir,"${UUID.randomUUID()}.jpg")
   val uri=FileProvider.getUriForFile(this,"$packageName.files",file)
   try{
-   pendingPhoto=PendingPhoto(file,binding,grant,anchor)
+   pendingPhoto=PendingPhoto(file,binding,grant,anchor,checkIn)
    clearSession() // Also clear credentials when a camera opens in multi-window without onStop.
    startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply{
     putExtra(MediaStore.EXTRA_OUTPUT,uri);clipData=ClipData.newRawUri("Camera output",uri)
@@ -206,8 +253,8 @@ class GuardAccountActivity : Activity() {
     val metadata=EvidenceStore(this).savePhoto(pending.file);retained=metadata.getString("evidence_id")
     val observed=Math.addExact(pending.anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),pending.anchor.elapsedMillis))
     val db=ScopedEventStore(this)
-    try{db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed)}finally{db.close()}
-    committed=true;message="Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records."
+    try{if(pending.checkIn==null)db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed) else db.captureCheckIn(pending.binding,pending.grant,DeviceIdentity(this),pending.checkIn,metadata,observed)}finally{db.close()}
+    committed=true;message=if(pending.checkIn==null) "Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records." else "Check-in and photo saved locally. Sign in again to send them; service delivery is pending."
    }
   }catch(_:Exception){message="Photo not saved. Authorization may have expired or the camera output was invalid. Sign in and try again."}
   finally{

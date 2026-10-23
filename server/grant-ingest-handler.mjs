@@ -1,3 +1,4 @@
+import {validateCheckIn} from './check-in-policy.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
 import {permitsCheckpoint} from './patrol-route.mjs';
 import {strictJson,verifyScopedBatch} from './verify-batch.mjs';
@@ -38,6 +39,15 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
     if(!g||saved.subject!==identity.subject||saved.vendorId!==identity.vendorId||g.issuer!==c.issuer||g.audience!==c.audience||g.guard_id!==c.guard_id||g.site_id!==c.site_id||g.assignment_id!==c.assignment_id||g.device_thumbprint!==c.device_thumbprint||g.revocation_version!==c.revocation_version||!g.actions.includes(required[event.kind])||event.at<g.not_before_ms||event.at>=g.expires_at_ms||event.at>at)throw Error('Capture grant mismatch');
     if(event.kind==='photo_evidence')photoMetadata(event.data);
     if(event.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy.patrolRoute,event.data))throw Error('Checkpoint not authorized');
+   }
+   // Resolve photo links only after every supplied event has passed its capture grant.
+   for(const event of batch.events)if(event.kind==='check_in'){
+    const saved=grantIssuer.lookup(event.data.capture_grant_id);
+    const linked=batch.events.find(e=>e.event_id===event.data.photo_event_id);
+    const photo=linked?{scope:batch.scope,event:linked,vendor_id:identity.vendorId}:store.photoForGuard(identity.guardId,event.data.photo_event_id);
+    if(photo?.vendor_id!==identity.vendorId)throw Error('Photo vendor mismatch');
+    if(photo&&!grantIssuer.lookup(photo.event.data.capture_grant_id))throw Error('Photo grant unavailable');
+    validateCheckIn(saved.policy.checkInPolicy,event,photo,batch.scope);
    }
    return reply(200,store.ingest(raw,context,seconds));
   }catch{return reply(400,{error:'batch_rejected'});}

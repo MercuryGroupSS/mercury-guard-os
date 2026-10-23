@@ -66,11 +66,11 @@ test('signed batch passes HTTP boundary into durable store and receipt survives 
 test('grant-authorized out-of-order delivery retains uniqueness and rejects sequence reuse',()=>{
  const f=fixture(),db=new DurableIngest(':memory:'),ctx={...f.ctx,allowHistoricalSequence:true,vendorId:'vendor'};
  try{
-  const second=f.event(2),first=f.event(1);
+  const second=f.event(2,'incident'),first=f.event(1,'incident');
   db.ingest(f.proof(f.batch([second])),ctx,1100);
   db.ingest(f.proof(f.batch([first])),ctx,1100);assert.equal(db.count(),2);
   db.ingest(f.proof(f.batch([first])),ctx,1100);assert.equal(db.count(),2);
-  assert.throws(()=>db.ingest(f.proof(f.batch([f.event(1)])),ctx,1100));
+  assert.throws(()=>db.ingest(f.proof(f.batch([f.event(1,'incident')])),ctx,1100));
   assert.throws(()=>db.ingest(f.proof(f.batch([{...first,data:{note:'changed'}}])),ctx,1100));
   assert.equal(db.count(),2);
  }finally{db.close();}

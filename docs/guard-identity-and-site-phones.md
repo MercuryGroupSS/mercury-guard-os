@@ -106,3 +106,13 @@ The assignment screen now offers explicit consent and external-camera capture. L
 This is a standalone authorized photo, not yet a timed check-in or an incident attachment. Physical camera testing remains deferred. The media delivery commit ef73dc7 passed server CI; Android media integration is running in 39989198947.
 
 Local camera APK/test APK compilation, unit checks and lint passed. Unsaved incident text prevents camera launch so credential-clearing cannot silently discard it. Camera lifecycle behavior still needs an attended device check.
+
+## Scheduled authorized check-in
+
+An administrator-supplied assignment checkInPolicy defines revision, interval, response window, maximum evidence age and accuracy. The issuer persists the policy snapshot with the grant and returns it over authenticated HTTPS. No policy means no authorized check-in; demo cadence is not silently copied into real assignments. Slot zero opens at assignment start, later slots at the configured interval, and every window is bounded by assignment end.
+
+The account screen now starts a scheduled check-in with a new local biometric prompt, then requests a fresh GPS observation. Server-time estimates use the authenticated monotonic anchor, not the editable phone clock. Mock fixes, insufficient accuracy, stale evidence and closed windows cannot complete capture. The final consented camera result retains the original grant and scope. Local check-in and photo metadata share one SQLite transaction, with duplicate slot protection and rollback on late failure. Credentials still clear before camera launch; sending requires sign-in again.
+
+The server checks ordered evidence timestamps, original scope, exact photo link and policy revision before ingestion. Its unique guard/assignment/revision/slot record prevents duplicate captures across devices. Photo bytes have a separate receipt; metadata acceptance never means the photo was delivered or that dispatch received the check-in. Biometric and GPS data are signed client observations, not hardware attestation, named-person biometric identification or proof of physical presence.
+
+69 Node tests pass. APK/test APK compilation, JVM checks and lint pass locally. The expanded HTTPS test now sends a scheduled synthetic check-in with its JPEG and separate media receipt; these new tests await CI execution. The prior photo/camera commit 026042d passed all jobs in Android run 39989616073, including HTTPS and API 28/API 35. No physical phone check is claimed. Background scheduled alerts, missed-check reasons and dashboard dispatch for this authorized flow remain to be connected; the existing demo implements those separately.

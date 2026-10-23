@@ -12,6 +12,7 @@ export class DurableIngest {
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
       CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
       CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));
+      CREATE TABLE IF NOT EXISTS check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,event_id TEXT,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS media(device TEXT,event_id TEXT,sha256 TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(device,event_id));`);
   }
   ingest(raw, trustedContext, now) {
@@ -38,6 +39,9 @@ export class DurableIngest {
           continue;
         }
         if (event.sequence <= last && trustedContext.allowHistoricalSequence !== true) throw new Error('Device sequence rollback');
+        if(event.kind==='check_in'&&trustedContext.allowHistoricalSequence===true){
+          this.db.prepare('INSERT INTO check_ins VALUES(?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.policy_revision,event.data.slot,event.event_id);
+        }
         if(event.kind==='patrol_checkpoint'&&trustedContext.allowHistoricalSequence===true){
           this.db.prepare('INSERT INTO checkpoints VALUES(?,?,?,?,?,?)').run(trustedContext.guardId,trustedContext.assignmentId,event.data.route_id,event.data.route_revision,event.data.checkpoint_id,event.event_id);
         }

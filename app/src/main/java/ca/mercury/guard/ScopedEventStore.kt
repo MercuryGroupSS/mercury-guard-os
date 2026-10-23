@@ -82,6 +82,28 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.setTransactionSuccessful();return eventId
   } finally {db.endTransaction()}
  }
+ fun checkInRecorded(original:GrantBinding,revision:Long,slot:Long):Boolean {
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
+   val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+   if(scope.guardId==original.guardId && scope.assignmentId==original.assignmentId && event.getString("kind")=="check_in" && data.optLong("policy_revision")==revision && data.optLong("slot",-1)==slot)return true
+  }}
+  return false
+ }
+ fun captureCheckIn(original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,evidence:AuthorizedCheckInEvidence,photo:JSONObject,observedAt:Long):String {
+  evidence.policy.validate(evidence.slot,evidence.biometricAt,evidence.location,observedAt,observedAt)
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(!checkInRecorded(original,evidence.policy.revision,evidence.slot)){"Check-in already recorded"}
+   val metadata=JSONObject(photo.toString()).put("check_in_slot",evidence.slot).put("check_in_policy_revision",evidence.policy.revision)
+   val photoId=capture("photo_evidence",metadata,original,grant,identity,observedAt)
+   val data=JSONObject().put("policy_revision",evidence.policy.revision).put("slot",evidence.slot)
+    .put("biometric",JSONObject().put("method","android_local_biometric").put("at",evidence.biometricAt))
+    .put("location",JSONObject(evidence.location.toString())).put("photo_event_id",photoId).put("evidence_id",metadata.getString("evidence_id"))
+   val result=capture("check_in",data,original,grant,identity,observedAt)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
  fun checkpointRecorded(original:GrantBinding,routeId:String,revision:Long,checkpointId:String):Boolean {
   readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")

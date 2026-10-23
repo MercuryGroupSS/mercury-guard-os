@@ -1,3 +1,4 @@
+import {checkInPolicy} from './check-in-policy.mjs';
 import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {createPrivateKey,createPublicKey,randomUUID,sign} from 'node:crypto';
@@ -30,13 +31,14 @@ export class ShiftGrantIssuer {
   const payload=Buffer.from(JSON.stringify(claims)).toString('base64url');
   const signature=sign('sha256',Buffer.from(`mercury-shift-grant-v1.${this.keyId}.${payload}`),this.key).toString('base64url');
   const policy=assignment.patrolRoute?{patrolRoute:patrolRoute(assignment.patrolRoute)}:{};
+  if(assignment.checkInPolicy)policy.checkInPolicy=checkInPolicy(assignment.checkInPolicy,assignment.startsAt,assignment.endsAt);
   this.db.exec('BEGIN IMMEDIATE');
   try{
    this.db.prepare('INSERT INTO issued_grants(id,subject,vendor_id,payload) VALUES(?,?,?,?)').run(claims.grant_id,identity.subject,identity.vendorId,payload);
    this.db.prepare('INSERT INTO grant_policies VALUES(?,?)').run(claims.grant_id,JSON.stringify(policy));
    this.db.exec('COMMIT');
   }catch(e){this.db.exec('ROLLBACK');throw e;}
-  return {key_id:this.keyId,payload,signature,server_time_ms:now,patrol_route:policy.patrolRoute??null};
+  return {key_id:this.keyId,payload,signature,server_time_ms:now,patrol_route:policy.patrolRoute??null,check_in_policy:policy.checkInPolicy??null};
  }
  lookup(grantId){
   if(typeof grantId!=='string'||grantId.length>100)return null;

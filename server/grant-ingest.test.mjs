@@ -84,3 +84,22 @@ test('patrol records must match issued route snapshot and cannot double-record a
   other.events[0].data.checkpoint_id='a';assert.equal((await f.send(other)).status,200);assert.equal(f.store.count(),2);
  }finally{f.close();}
 });
+
+
+test('check-in requires scheduled linked evidence and rejects duplicate slots atomically',async()=>{
+ const f=setup();try{
+  const policy={revision:1,interval_ms:60000,window_ms:10000,max_evidence_age_ms:5000,max_accuracy_m:100};
+  const issued=f.issuer.issue({identity:{subject:'u',guardId:'g',vendorId:'v'},device:f.devices.device('d'),assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true,checkInPolicy:policy},allowedActions:['photo','check_in'],sessionExpiresAt:100000,now:2000});
+  const claims=JSON.parse(Buffer.from(issued.payload,'base64url'));policy.revision=9;
+  assert.equal(issued.check_in_policy.revision,1);
+  const b=structuredClone(f.batch),photo={event_id:randomUUID(),sequence:1,at:2500,kind:'photo_evidence',data:{capture_grant_id:claims.grant_id,evidence_id:randomUUID(),sha256:'a'.repeat(64),bytes:4,width:1,height:1,capture:'camera_intent',check_in_slot:0,check_in_policy_revision:1}};
+  const check={event_id:randomUUID(),sequence:2,at:2600,kind:'check_in',data:{capture_grant_id:claims.grant_id,policy_revision:1,slot:0,biometric:{method:'android_local_biometric',at:2100},location:{at:2200,latitude:45,longitude:-73,accuracy_m:5,mock:false},photo_event_id:photo.event_id,evidence_id:photo.data.evidence_id}};
+  b.events=[photo,check];
+  const bad=structuredClone(b);bad.events[1].data.location.mock=true;
+  assert.equal((await f.send(bad)).status,400);assert.equal(f.store.count(),0);
+  assert.equal((await f.send(b)).status,200);assert.equal((await f.send(b)).status,200);assert.equal(f.store.count(),2);
+  const other=structuredClone(b);other.batch_id=randomUUID();other.events[0].event_id=randomUUID();other.events[0].sequence=3;other.events[1].event_id=randomUUID();other.events[1].sequence=4;other.events[1].data.photo_event_id=other.events[0].event_id;
+  assert.equal((await f.send(other)).status,400);assert.equal(f.store.count(),2); // Rolls back its photo too.
+  f.issuer.revoke(claims.grant_id);assert.equal((await f.send(b)).status,400);
+ }finally{f.close();}
+});

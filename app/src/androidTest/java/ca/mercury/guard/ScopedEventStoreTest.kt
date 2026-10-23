@@ -115,4 +115,30 @@ class ScopedEventStoreTest {
   try{assertTrue(reopened.pendingPhotos(a.guardId).isEmpty())}finally{reopened.close()}
  }}
 
+ @Test fun checkInAndPhotoCommitTogetherAndDuplicateSlotDoesNotAddPhoto(){isolated{store,identity,_->
+  val a=binding(identity)
+  val policy=AuthorizedCheckInPolicy.parse(JSONObject().put("revision",1).put("starts_at",1000).put("ends_at",100000).put("interval_ms",60000).put("window_ms",10000).put("max_evidence_age_ms",5000).put("max_accuracy_m",100))
+  val evidence=AuthorizedCheckInEvidence(policy,0,2000,JSONObject().put("at",3000).put("latitude",45).put("longitude",-73).put("accuracy_m",5).put("mock",false))
+  val photo=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("sha256","a".repeat(64)).put("bytes",4).put("width",1).put("height",1).put("capture","camera_intent")
+  // Photo insert succeeds, but forbidden check-in must roll the entire transaction back.
+  rejected{store.captureCheckIn(a,VerifiedShiftGrant("photo-only",a,setOf("photo"),100,1000,1),identity,evidence,photo,4000)}
+  assertEquals(0,store.pendingCount());assertFalse(store.checkInRecorded(a,1,0))
+  val both=VerifiedShiftGrant("both",a,setOf("photo","check_in"),100,1000,1)
+  store.captureCheckIn(a,both,identity,evidence,photo,4000)
+  assertEquals(2,store.pendingCount());assertTrue(store.checkInRecorded(a,1,0))
+  rejected{store.captureCheckIn(a,both,identity,evidence,photo,4001)}
+  assertEquals(2,store.pendingCount())
+  val batch=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!);val events=batch.getJSONArray("events")
+  assertEquals(events.getJSONObject(0).getString("event_id"),events.getJSONObject(1).getJSONObject("data").getString("photo_event_id"))
+ }}
+ @Test fun checkInRejectsStaleMockAndOutOfWindowEvidenceBeforeSaving(){isolated{store,identity,_->
+  val a=binding(identity);val both=VerifiedShiftGrant("both",a,setOf("photo","check_in"),100,1000,1)
+  val policy=AuthorizedCheckInPolicy.parse(JSONObject().put("revision",1).put("starts_at",1000).put("ends_at",100000).put("interval_ms",60000).put("window_ms",10000).put("max_evidence_age_ms",5000).put("max_accuracy_m",100))
+  fun evidence(mock:Boolean)=AuthorizedCheckInEvidence(policy,0,2000,JSONObject().put("at",3000).put("latitude",45).put("longitude",-73).put("accuracy_m",5).put("mock",mock))
+  rejected{store.captureCheckIn(a,both,identity,evidence(true),JSONObject(),4000)}
+  rejected{store.captureCheckIn(a,both,identity,evidence(false),JSONObject(),10000)}
+  rejected{store.captureCheckIn(a,both,identity,evidence(false),JSONObject(),11000)}
+  assertEquals(0,store.pendingCount())
+ }}
+
 }

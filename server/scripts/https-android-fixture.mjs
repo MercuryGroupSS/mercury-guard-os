@@ -43,7 +43,7 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
    let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>4096)throw Error('large');}
    const body=JSON.parse(raw);
    devices.enroll({deviceId:'fixture-phone',mode:'site',siteId:'fixture-site',active:true,revoked:false,publicKeySpki:body.public_key_spki});
-   devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}]}});
+   devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,checkInPolicy:{revision:1,interval_ms:1800000,window_ms:600000,max_evidence_age_ms:120000,max_accuracy_m:100},patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}]}});
    res.setHeader('content-type','application/json');res.end('{}');return;
   }
   if(req.url==='/test/receipts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({count:store.count(),media_count:store.db.prepare('SELECT count(*) AS n FROM media').get().n}));return;}
