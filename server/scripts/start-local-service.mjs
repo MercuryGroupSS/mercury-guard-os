@@ -11,6 +11,7 @@ import {openLocalAssignmentStore} from '../local-assignment-factory.mjs';
 import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {createLocalService} from '../local-service.mjs';
+import {PostgresDurableIngest} from '../postgres-durable-ingest.mjs';
 import {DurableIngest} from '../durable-ingest.mjs';
 const root=new URL('../../',import.meta.url);
 const lines=readFileSync(new URL('supabase-start.log',root),'utf8').split('\n');
@@ -23,7 +24,7 @@ try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,
 const {devices}=assignmentStore;
 let opsRefresh;
 try{opsRefresh=openLocalOpsRefresh({mode:process.env.MERCURY_OPS_REFRESH??'off',config,source:process.env.MERCURY_OPS_REFRESH==='remote'?{url:process.env.MERCURY_OPS_URL,serverKey:process.env.MERCURY_OPS_SERVER_KEY}:undefined,bindingsPath:new URL('ops-bindings.sqlite',dir).pathname,sync:assignmentStore.sync,directory});}catch(error){await assignmentStore.close();await directory.close();throw error;}
-const store=new DurableIngest(new URL('events.sqlite',dir).pathname);
+const store=identityMode==='postgres'?new PostgresDurableIngest(devices):new DurableIngest(new URL('events.sqlite',dir).pathname);
 const GrantIssuer=identityMode==='postgres'?PostgresShiftGrantIssuer:ShiftGrantIssuer;
 const grantIssuer=new GrantIssuer({devices,path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
 const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);

@@ -1,6 +1,7 @@
 import {checkInPolicy} from './check-in-policy.mjs';
 // Missing delivery is distinct from proving that a guard failed to capture offline.
 export function reconcileCheckIns(store,assignment,now=Date.now(),{activeWindow=undefined}={}){
+ if(typeof store.reconcileCheckIns==='function')return store.reconcileCheckIns(assignment,now,{activeWindow});
  if(!Number.isSafeInteger(now)||now<=0)throw Error('Trusted time required');
  const p=checkInPolicy(assignment.checkInPolicy,assignment.startsAt,assignment.endsAt);
  const count=Math.ceil((p.ends_at-p.starts_at)/p.interval_ms);

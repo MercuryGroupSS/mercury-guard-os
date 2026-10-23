@@ -73,7 +73,7 @@ test('async reads coalesce and stop waits without applying stale work',async()=>
   f.assign('a');const rows=f.devices.scheduledAfter('',20);
   const devices={scheduledAfter:()=>{reads++;return new Promise(resolve=>{release=resolve;});}};
   const worker=createCheckInWorker({store:f.store,devices,now:()=>11000});
-  const first=worker.run(),second=worker.run();assert.equal(first,second);assert.equal(reads,1);
+  const first=worker.run(),second=worker.run();assert.equal(first,second);await new Promise(resolve=>setImmediate(resolve));assert.equal(reads,1);
   let stopped=false;const stopping=worker.stop().then(()=>{stopped=true;});await Promise.resolve();assert.equal(stopped,false);
   release(rows);await stopping;await first;
   assert.equal(f.store.db.prepare('SELECT count(*) n FROM missed_check_ins').get().n,0);

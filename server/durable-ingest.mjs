@@ -72,6 +72,9 @@ export class DurableIngest {
     else this.db.prepare('INSERT INTO media(device,event_id,sha256,bytes,received_at) VALUES(?,?,?,?,?)').run(device,eventId,meta.sha256,bytes,receivedAt);
     return {event_id:eventId,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};
   }
+  hasMissedCheckIn(guard,assignment,revision,slot){return !!this.db.prepare('SELECT 1 FROM missed_check_ins WHERE guard=? AND assignment=? AND revision=? AND slot=?').get(guard,assignment,revision,slot);}
+  eventsAfter(cursor,limit){return this.db.prepare('SELECT rowid AS cursor,body FROM events WHERE rowid>? ORDER BY rowid LIMIT ?').all(cursor,limit);}
+  alertsAfter(cursor,limit){return this.db.prepare('SELECT rowid AS cursor,body FROM check_in_alert_outbox WHERE rowid>? ORDER BY rowid LIMIT ?').all(cursor,limit);}
   count() { return this.db.prepare('SELECT COUNT(*) AS n FROM events').get().n; }
   close() { this.db.close(); }
 }

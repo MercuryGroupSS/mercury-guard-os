@@ -75,3 +75,13 @@ Private `20261023193609_guard_events.sql` was exported, reviewed, replayed and c
 Disposable real PostgreSQL tests verify two-instance retry sharing, event/batch conflicts, atomic mid-batch rollback, scoped photo persistence, media retry, immutable grants and revocation denial on later event/evidence delivery. All 132 server tests passed after request handlers were updated to await store methods and supply the verified subject to ingestion.
 
 The event adapter is deliberately not selected by the runtime yet: check-in reconciliation, scheduler state and dashboard-alert reads still use SQLite-specific queries and must be adapted together. Existing runtime event storage therefore remains SQLite. This checkpoint does not claim hosted deployment, shared worker readiness or physical-device acceptance.
+
+## Shared check-in reconciliation and active event-store runtime
+
+PostgreSQL mode now selects `PostgresDurableIngest` in the local service. Check-in reconciliation, deadline records, pending alert records and scheduler cursor/finalization state are shared in PostgreSQL too. Dashboard event/alert projection uses asynchronous store methods rather than direct SQLite queries. SQLite default mode remains compatible.
+
+Reconciliation verifies the approved persisted policy and reads/locks the current confirmed shift window itself. It batches candidate deadline inserts and alert creation in one transaction under the event/media commit lock. It preserves the first missing-delivery detection even after late evidence arrives. A complete window outside confirmed attendance creates no new miss. This does not send an external alert: operational alert delivery is still unconfigured.
+
+Migration `20261023194505_guard_check_in_state.sql` was exported, reviewed and replayed with explicit private grants. Advisors found no issues. Disposable PostgreSQL tests verified concurrent reconciliation, on-time evidence, late delivery, first-detection retention, early-exit bounds, audit-write failure rollback and persistent worker finalization. Real local Auth/HTTP tests now use PostgreSQL events/grants/shifts and return reconciled check-in policy status. All 132 server tests pass after updating the worker test to await its new asynchronous cursor read.
+
+Dispatch, dashboard mappings/delivery queues and projection cursors remain SQLite. Signing-key distribution, authenticated administration, production retention/storage sizing, hosted deployment, live Ops integration and physical acceptance remain outstanding. Existing SQLite records are not automatically migrated by selecting PostgreSQL mode.

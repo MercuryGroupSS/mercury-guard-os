@@ -1,3 +1,5 @@
+import {reconcilePostgresCheckIns} from './postgres-check-in-status.mjs';
+import {postgresCheckInWorkerState} from './check-in-worker-state.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createHash} from 'node:crypto';
 import {verifyScopedBatch} from './verify-batch.mjs';
@@ -6,7 +8,7 @@ const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('h
 const actions={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location',dispatch_ack:'dispatch_ack'};
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
 export class PostgresDurableIngest{
- constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;}
+ constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.workerState=postgresCheckInWorkerState(this.pool);}
  async lockAuthority(client,c,batch){
   if(!uuid(c.subject)||typeof c.vendorId!=='string')throw Error('Verified individual identity required');
   const r=(await client.query(`SELECT h.clocked_in,h.clocked_out,h.ends_at FROM mercury_guard.assignments a
@@ -75,6 +77,9 @@ export class PostgresDurableIngest{
    return {event_id:eventId,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};
   });
  }
+ reconcileCheckIns(assignment,now){return reconcilePostgresCheckIns(this,assignment,now);}
+ async hasMissedCheckIn(guard,assignment,revision,slot){return (await this.pool.query('SELECT 1 FROM mercury_guard.missed_check_ins WHERE guard_id=$1 AND assignment_id=$2 AND revision=$3 AND slot=$4',[guard,assignment,revision,slot])).rowCount===1;}
+ async alertsAfter(cursor,limit){if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Bounded alert page required');return (await this.pool.query('SELECT cursor,body FROM mercury_guard.check_in_alert_outbox WHERE cursor>$1 ORDER BY cursor LIMIT $2',[cursor,limit])).rows.map(r=>({cursor:Number(r.cursor),body:JSON.stringify(r.body)}));}
  async count(){return Number((await this.pool.query('SELECT count(*) n FROM mercury_guard.ingested_events')).rows[0].n);}
  async eventsAfter(cursor,limit){if(!Number.isSafeInteger(cursor)||cursor<0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Bounded event page required');return (await this.pool.query('SELECT cursor,body FROM mercury_guard.ingested_events WHERE cursor>$1 ORDER BY cursor LIMIT $2',[cursor,limit])).rows.map(r=>({cursor:Number(r.cursor),body:JSON.stringify(r.body)}));}
  close(){}
