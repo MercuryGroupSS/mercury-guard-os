@@ -4,7 +4,7 @@ import {DashboardOutbox} from '../dashboard-delivery.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
 import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
 import {localIssuerKey} from '../local-issuer-key.mjs';
-import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
+import {openLocalAssignmentStore} from '../local-assignment-factory.mjs';
 import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {createLocalService} from '../local-service.mjs';
@@ -15,8 +15,10 @@ const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL
 const dir=new URL('.local-backend/',root);mkdirSync(dir,{recursive:true,mode:0o700});
 const identityMode=process.env.MERCURY_IDENTITY_STORE??'sqlite';
 const directory=await openLocalGuardDirectory({config,mode:identityMode,sqlitePath:new URL('directory.sqlite',dir).pathname});
+let assignmentStore;
+try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,sqlitePath:new URL('devices.sqlite',dir).pathname});}catch(error){await directory.close();throw error;}
+const {devices}=assignmentStore;
 const store=new DurableIngest(new URL('events.sqlite',dir).pathname);
-const devices=new LocalDeviceAssignments(new URL('devices.sqlite',dir).pathname);
 const grantIssuer=new ShiftGrantIssuer({path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
 const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
 const dashboardBindings=new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
@@ -25,8 +27,8 @@ const dispatch=new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
 const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
-try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity): '+await service.start());}
-catch(error){shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await directory.close();devices.close();grantIssuer.close();throw error;}
+try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());}
+catch(error){shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;
 function pumpBridge(){if(bridgeRun)return;bridgeRun=dashboardBridge.run().catch(()=>console.error('Local dashboard projection failed; source records retained.')).finally(()=>{bridgeRun=null;});}
 pumpBridge();const bridgeTimer=setInterval(pumpBridge,30000);bridgeTimer.unref();
@@ -35,5 +37,5 @@ let reportedFailures=0;
 const healthTimer=setInterval(()=>{const status=service.schedulerStatus();if(status&&status.totalFailures>reportedFailures){reportedFailures=status.totalFailures;console.error('Check-in scheduler recorded failures: '+JSON.stringify(status));}},60000);
 healthTimer.unref();
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await service.stop();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await directory.close();devices.close();grantIssuer.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await service.stop();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();process.exit(0);}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);

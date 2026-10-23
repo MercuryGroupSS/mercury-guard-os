@@ -396,3 +396,7 @@ Ops refresh now awaits assignment writes and approval revocations, reports rejec
 ### PostgreSQL Ops ledger implementation
 
 Added transactional PostgreSQL assignment synchronization, revocation watermarks and append-only sync history. Concurrent imports serialize per upstream shift, including first import. Failed replacement rolls back cancellation and history; revoked revisions cannot restore access. Verified real PostgreSQL concurrency, rollback, cancellation/reopen and restricted history privileges in a disposable database. Local advisors found no issues; exported migration replay and 129 server tests passed. The runtime still uses SQLite devices until the PostgreSQL composition is wired and tested. No hosted deployment, source-app write or handset action.
+
+### PostgreSQL local service composition verified
+
+The local runner can now select PostgreSQL identity/device/assignment/sync components together through MERCURY_IDENTITY_STORE=postgres, sharing one restricted pool. Default SQLite behavior remains; no existing records are migrated automatically. Real HTTP plus real local Supabase Auth verified device proof, assignment import, confirmed shift start, signed scoped capture grant, cancellation closeout, replay rejection, revocation and vendor suspension. Synthetic rows cleaned up; 130 server tests pass. Shift/event/grant persistence still uses SQLite, and recurring Ops imports are not yet configured in the runner. No hosted deployment or physical-device testing performed.
