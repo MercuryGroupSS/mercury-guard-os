@@ -18,12 +18,12 @@ export async function verifyPostgresEvents(connectionString,admin){
   const signed=await issuer.issue({identity,assignment,device,now,sessionExpiresAt:now+60000,allowedActions:['incident','photo']}),claims=JSON.parse(Buffer.from(signed.payload,'base64url'));
   const c={subject:identity.subject,guardId:identity.guardId,vendorId:identity.vendorId,siteId:assignment.siteId,assignmentId:assignment.assignmentId,thumbprint:device.thumbprint,publicKeySpki:spki,revocationVersion:1,enrolled:true,revoked:false,audience:'mercury-local',allowedKinds:['incident','photo_evidence'],notBefore:Math.floor(now/1000)-1,expiresAt:Math.floor(now/1000)+120,receivedAtMs:now+1000,allowHistoricalSequence:true};
   const scope={guard_id:c.guardId,site_id:c.siteId,assignment_id:c.assignmentId,device_thumbprint:c.thumbprint,revocation_version:1};
-  const event={event_id:randomUUID(),sequence:1,at:now,kind:'incident',data:{note:'Synthetic shared event',capture_grant_id:claims.grant_id}};
+  const event={event_id:randomUUID(),sequence:1,at:now,kind:'incident',data:{description:'Synthetic shared event',capture_grant_id:claims.grant_id}};
   const batch={batch_id:randomUUID(),schema_version:2,scope,events:[event]};
   const raw=b=>{const payload=Buffer.from(JSON.stringify(b)).toString('base64url');return JSON.stringify({version:2,algorithm:'SHA256withECDSA',audience:c.audience,device_thumbprint:c.thumbprint,public_key_spki:spki,payload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\n${c.audience}\n${c.thumbprint}\n${payload}`),keys.privateKey).toString('base64url')});};
   const results=await Promise.all([store.ingest(raw(batch),c,Math.floor(now/1000)),other.ingest(raw(batch),c,Math.floor(now/1000))]);assert.deepEqual(results[0],results[1]);assert.equal(await store.count(),1);
-  await assert.rejects(other.ingest(raw({...batch,events:[{...event,data:{...event.data,note:'changed'}}]}),c,Math.floor(now/1000)));
-  await assert.rejects(other.ingest(raw({...batch,batch_id:randomUUID(),events:[{...event,data:{...event.data,note:'changed'}}]}),c,Math.floor(now/1000)));
+  await assert.rejects(other.ingest(raw({...batch,events:[{...event,data:{...event.data,description:'changed'}}]}),c,Math.floor(now/1000)));
+  await assert.rejects(other.ingest(raw({...batch,batch_id:randomUUID(),events:[{...event,data:{...event.data,description:'changed'}}]}),c,Math.floor(now/1000)));
   await assert.rejects(store.ingest(raw({...batch,batch_id:randomUUID(),events:[{...event,event_id:randomUUID(),sequence:2},{...event,event_id:randomUUID(),sequence:1}]}),c,Math.floor(now/1000)));assert.equal(await store.count(),1);
   const bytes=Buffer.from([255,216,255,217]),photo={event_id:randomUUID(),sequence:3,at:now,kind:'photo_evidence',data:{capture_grant_id:claims.grant_id,evidence_id:randomUUID(),sha256:createHash('sha256').update(bytes).digest('hex'),bytes:bytes.length,width:1,height:1,capture:'camera_intent'}};
   await store.ingest(raw({...batch,batch_id:randomUUID(),events:[photo]}),c,Math.floor(now/1000));

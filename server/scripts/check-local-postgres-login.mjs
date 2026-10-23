@@ -8,6 +8,8 @@ import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {createLocalService} from '../local-service.mjs';
 import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
+import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
+import {createDashboardBridge} from '../dashboard-bridge.mjs';
 import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {scopeKey as dispatchScopeKey} from '../dispatch-input.mjs';
 import {PostgresDurableIngest} from '../postgres-durable-ingest.mjs';
@@ -18,7 +20,7 @@ const admin=new Client({connectionString:config.DB_URL}),vendor='smoke-'+randomU
 const authHeaders={apikey:config.SERVICE_ROLE_KEY,authorization:'Bearer '+config.SERVICE_ROLE_KEY,'content-type':'application/json'};
 const email=randomUUID()+'@example.invalid',password=randomBytes(32).toString('hex');
 const site='smoke-'+randomUUID(),deviceId='smoke-'+randomUUID(),sourceId='smoke-'+randomUUID();
-let subject,directory,service,store,assignmentStore,shiftLifecycle,grantIssuer,dispatch;
+let subject,directory,service,store,assignmentStore,shiftLifecycle,grantIssuer,dispatch,dashboardBindings,dashboardOutbox,dashboardBridge;
 await admin.connect();
 try{
  const created=await fetch(config.API_URL+'/auth/v1/admin/users',{method:'POST',headers:authHeaders,body:JSON.stringify({email,password,email_confirm:true})});assert.equal(created.status,200);subject=(await created.json()).id;assert.ok(subject);
@@ -32,7 +34,8 @@ try{
  await assignmentStore.devices.enroll({deviceId,mode:'site',siteId:site,active:true,revoked:false,publicKeySpki:spki});
  const now=Date.now(),shift={id:sourceId,updated_at:new Date(now).toISOString(),scheduled_start:new Date(now-60000).toISOString(),scheduled_end:new Date(now+3600000).toISOString(),status:'scheduled'},binding={opsShiftId:sourceId,guardId:guard,vendorId:vendor,siteId:site,revision:1,active:true,checkInPolicy:{revision:1,interval_ms:60000,window_ms:10000,max_evidence_age_ms:5000,max_accuracy_m:100}};
  const imported=await assignmentStore.sync.apply(shift,binding);
- store=new PostgresDurableIngest(assignmentStore.devices);shiftLifecycle=new PostgresShiftLifecycle(assignmentStore.devices);grantIssuer=new PostgresShiftGrantIssuer({devices:assignmentStore.devices,privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});dispatch=new PostgresDispatchFeed(assignmentStore.devices);service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer,dispatch});const origin=await service.start();
+ dashboardBindings=new PostgresDashboardBindings(assignmentStore.devices);dashboardOutbox=new PostgresDashboardOutbox(assignmentStore.devices);await dashboardBindings.approve({assignmentId:imported.assignmentId,guardId:guard,vendorId:vendor,siteId:site,dashboardShiftId:sourceId,destination:'isolated-test',revision:1,active:true});
+ store=new PostgresDurableIngest(assignmentStore.devices);shiftLifecycle=new PostgresShiftLifecycle(assignmentStore.devices);grantIssuer=new PostgresShiftGrantIssuer({devices:assignmentStore.devices,privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'smoke',issuer:'mercury-local',audience:'mercury-local'});dispatch=new PostgresDispatchFeed(assignmentStore.devices);service=createLocalService({config,store,directory,devices:assignmentStore.devices,shiftLifecycle,grantIssuer,dispatch});const origin=await service.start();dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
  const login=()=>fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:guard,password})});
  const response=await login();assert.equal(response.status,200);const session=await response.json();assert.equal('refresh_token' in session,false);
  const me=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
@@ -49,25 +52,26 @@ try{
  assert.equal((await grant()).status,400);
  const started=await post('/v1/shift-transition',{assignment_id:imported.assignmentId,proof:await proof(),transition:{action:'start',confirmed:true,request_id:randomUUID(),reason:''}});assert.equal(started.status,200);
  const issued=await grant();assert.equal(issued.status,200);const issuedBody=await issued.json();assert.equal(issuedBody.check_in_status.policy_revision,1);assert.equal(issuedBody.check_in_status.assignment_id,imported.assignmentId);assert.equal(verify('sha256',Buffer.from(`mercury-shift-grant-v1.${issuedBody.key_id}.${issuedBody.payload}`),createPublicKey({key:Buffer.from(grantIssuer.publicKey(),'base64url'),type:'spki',format:'der'}),Buffer.from(issuedBody.signature,'base64url')),true);const claims=JSON.parse(Buffer.from(issuedBody.payload,'base64url'));assert.equal(claims.guard_id,guard);assert.equal(claims.assignment_id,imported.assignmentId);assert.equal(claims.device_thumbprint,thumb);
- const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:guard,site_id:site,assignment_id:imported.assignmentId,device_thumbprint:thumb,revocation_version:1},events:[{event_id:randomUUID(),sequence:1,at:issuedBody.server_time_ms,kind:'incident',data:{note:'Synthetic PostgreSQL grant integration',capture_grant_id:claims.grant_id}}]};
+ const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:guard,site_id:site,assignment_id:imported.assignmentId,device_thumbprint:thumb,revocation_version:1},events:[{event_id:randomUUID(),sequence:1,at:issuedBody.server_time_ms,kind:'incident',data:{description:'Synthetic PostgreSQL grant integration',capture_grant_id:claims.grant_id}}]};
  const payload=Buffer.from(JSON.stringify(batch)).toString('base64url'),envelope={version:2,algorithm:'SHA256withECDSA',audience:'mercury-local',device_thumbprint:thumb,public_key_spki:spki,payload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${thumb}\n${payload}`),keys.privateKey).toString('base64url')};
  const ingested=await post('/v2/batches',envelope);assert.equal(ingested.status,200);assert.equal((await admin.query('SELECT count(*)::int n FROM mercury_guard.ingested_events WHERE guard_id=$1',[guard])).rows[0].n,1);
  await dispatch.publish(dispatchScope,{...message,version:2,body:'Updated synthetic instruction'});
  const ackBatch={...batch,batch_id:randomUUID(),events:[{event_id:randomUUID(),sequence:2,at:issuedBody.server_time_ms,kind:'dispatch_ack',data:{capture_grant_id:claims.grant_id,message_id:message.message_id,message_version:1}}]},ackPayload=Buffer.from(JSON.stringify(ackBatch)).toString('base64url');
  const acknowledged=await post('/v2/batches',{...envelope,payload:ackPayload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${thumb}\n${ackPayload}`),keys.privateKey).toString('base64url')});assert.equal(acknowledged.status,200);
- console.log('PASS: shared dispatch HTTP delivery and explicit historical-version acknowledgement');
+ const projected=await dashboardBridge.run();assert.equal(projected.delivery,'disabled');assert.equal((await admin.query('SELECT count(*)::int n FROM mercury_guard.dashboard_outbox WHERE assignment_id=$1',[imported.assignmentId])).rows[0].n,3);
+ console.log('PASS: shared dispatch HTTP delivery, historical-version acknowledgement and shared outbound projection');
  await grantIssuer.revoke(claims.grant_id);assert.equal((await post('/v2/batches',envelope)).status,400);
  console.log('PASS: signed incident HTTP ingest with shared PostgreSQL grant lookup and revocation');
  await assignmentStore.sync.apply({...shift,updated_at:new Date(now+1000).toISOString(),status:'cancelled'},binding);
  const cancelled=await post('/v1/assignments',await proof());assert.equal(cancelled.status,200);const cancelledRows=(await cancelled.json()).assignments;assert.equal(cancelledRows.length,1);assert.equal(cancelledRows[0].canStart,false);assert.equal(cancelledRows[0].assignmentActive,false);
  assert.equal((await grant()).status,400);
- const ended=await post('/v1/shift-transition',{assignment_id:imported.assignmentId,proof:await proof(),transition:{action:'end',confirmed:true,request_id:randomUUID(),reason:'Synthetic cancellation closeout'}});assert.equal(ended.status,200);
+ const ended=await post('/v1/shift-transition',{assignment_id:imported.assignmentId,proof:await proof(),transition:{action:'end',confirmed:true,request_id:randomUUID(),reason:'Synthetic cancellation closeout'}});assert.equal(ended.status,200);await dashboardBridge.run();assert.equal((await admin.query('SELECT count(*)::int n FROM mercury_guard.dashboard_outbox WHERE assignment_id=$1',[imported.assignmentId])).rows[0].n,4);
  await assignmentStore.devices.revoke(deviceId);assert.equal((await post('/v1/device-challenge',{device_id:deviceId})).status,400);
  console.log('PASS: real HTTP device proof, assignment import, confirmed shift, signed capture grant, cancellation closeout and revocation with PostgreSQL storage');
  await admin.query('UPDATE mercury_guard.vendors SET active=false WHERE vendor_id=$1',[vendor]);assert.equal((await me()).status,403);assert.equal((await login()).status,401);
  console.log('PASS: real HTTP login and Auth verification with PostgreSQL directory/pool/shared limiter; suspension denies existing session');
 }finally{
- if(service)await service.stop();await assignmentStore?.close();await directory?.close();store?.close();shiftLifecycle?.close();grantIssuer?.close();dispatch?.close();
+ if(service)await service.stop();await assignmentStore?.close();await directory?.close();store?.close();shiftLifecycle?.close();grantIssuer?.close();dispatch?.close();dashboardOutbox?.close();dashboardBindings?.close();
  try{
   await admin.query('DELETE FROM mercury_guard.device_challenges WHERE device_id=$1',[deviceId]);
   await admin.query('DELETE FROM mercury_guard.ops_assignment_history WHERE source_id=$1',[sourceId]);
@@ -87,6 +91,9 @@ try{
   const enrolled=(await admin.query('SELECT thumbprint FROM mercury_guard.devices WHERE device_id=$1',[deviceId])).rows[0];
   if(enrolled)for(const a of (await admin.query('SELECT assignment_id FROM mercury_guard.assignments WHERE guard_id=$1',[guard])).rows){const key=dispatchScopeKey({guardId:guard,vendorId:vendor,siteId:site,assignmentId:a.assignment_id}),owner=createHash('sha256').update(JSON.stringify([key,enrolled.thumbprint,1])).digest('hex');await admin.query('DELETE FROM mercury_guard.dispatch_cursors WHERE scope=$1',[owner]);}
   await admin.query('DELETE FROM mercury_guard.dispatch_changes WHERE guard_id=$1',[guard]);
+  await admin.query('DELETE FROM mercury_guard.dashboard_outbox WHERE guard_id=$1',[guard]);
+  await admin.query('DELETE FROM mercury_guard.dashboard_bindings WHERE guard_id=$1',[guard]);
+  await admin.query('DELETE FROM mercury_guard.dashboard_mapping_history WHERE guard_id=$1',[guard]);
   await admin.query('DELETE FROM mercury_guard.capture_grants WHERE subject=$1',[subject??'00000000-0000-0000-0000-000000000000']);
   await admin.query('DELETE FROM mercury_guard.assignments WHERE guard_id=$1',[guard]);
   await admin.query('DELETE FROM mercury_guard.devices WHERE device_id=$1',[deviceId]);

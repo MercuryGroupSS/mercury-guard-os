@@ -3,6 +3,7 @@ import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
+import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
 import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
@@ -28,8 +29,8 @@ try{opsRefresh=openLocalOpsRefresh({mode:process.env.MERCURY_OPS_REFRESH??'off',
 const store=identityMode==='postgres'?new PostgresDurableIngest(devices):new DurableIngest(new URL('events.sqlite',dir).pathname);
 const GrantIssuer=identityMode==='postgres'?PostgresShiftGrantIssuer:ShiftGrantIssuer;
 const grantIssuer=new GrantIssuer({devices,path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
-const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
-const dashboardBindings=new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
+const dashboardOutbox=identityMode==='postgres'?new PostgresDashboardOutbox(devices):new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
+const dashboardBindings=identityMode==='postgres'?new PostgresDashboardBindings(devices):new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
 // No send function is configured: explicit mappings can queue records locally only.
 const dispatch=identityMode==='postgres'?new PostgresDispatchFeed(devices):new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=identityMode==='postgres'?new PostgresShiftLifecycle(devices):new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);

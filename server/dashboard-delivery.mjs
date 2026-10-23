@@ -88,7 +88,7 @@ export function createDashboardTransport({endpoint,token,allowLocal=false,fetchI
  };
 }
 export async function deliverDashboardOnce(outbox,send,now=Date.now){
- const job=outbox.claim(now());if(!job)return 'idle';
- try{const receipt=await send(job);outbox.accepted(job,receipt);return 'delivered';}
- catch{outbox.retry(job,now());return 'pending';}
+ const job=await outbox.claim(now());if(!job)return 'idle';
+ try{const receipt=await send(job);await outbox.accepted(job,receipt);return 'delivered';}
+ catch{await outbox.retry(job,now());return 'pending';}
 }
