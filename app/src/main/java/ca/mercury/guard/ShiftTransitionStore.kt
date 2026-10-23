@@ -11,6 +11,17 @@ import java.util.UUID
 /** Durable confirmation intent: a lost reply retries the same request, never a new clock time. */
 class ShiftTransitionStore internal constructor(context:Context,name:String="mercury_shifts.db"):SQLiteOpenHelper(context,name,null,2),java.io.Closeable{
  private val cipher=DeviceCipher()
+ companion object{
+  internal fun validReason(reason:String)=reason.length<=2000&&JSONObject().put("reason",reason).toString().toByteArray(Charsets.UTF_8).size<=2000
+ }
+ override fun onConfigure(db:SQLiteDatabase){super.onConfigure(db);db.rawQuery("PRAGMA secure_delete=ON",null).use{check(it.moveToFirst()&&it.getInt(0)==1)}}
+ override fun onOpen(db:SQLiteDatabase){
+  super.onOpen(db)
+  for((table,purpose) in listOf("transitions" to "shift-transition","rejected_history" to "shift-rejected")){
+   db.rawQuery("SELECT owner,body FROM $table LIMIT 1",null).use{if(it.moveToFirst())cipher.decrypt(it.getString(1),"$purpose:${it.getString(0)}")}
+  }
+ }
+
  override fun onCreate(db:SQLiteDatabase){db.execSQL("CREATE TABLE transitions(owner TEXT PRIMARY KEY,body TEXT NOT NULL)");history(db)}
  private fun history(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS rejected_history(owner TEXT PRIMARY KEY,body TEXT NOT NULL)")}
  override fun onUpgrade(db:SQLiteDatabase,oldVersion:Int,newVersion:Int){check(oldVersion==1&&newVersion==2);history(db)}
@@ -18,7 +29,7 @@ class ShiftTransitionStore internal constructor(context:Context,name:String="mer
  private fun load(db:SQLiteDatabase,key:String):JSONObject?=db.rawQuery("SELECT body FROM transitions WHERE owner=?",arrayOf(key)).use{if(it.moveToFirst())JSONObject(String(cipher.decrypt(it.getString(0),"shift-transition:$key"),Charsets.UTF_8)) else null}
  private fun save(db:SQLiteDatabase,key:String,value:JSONObject){check(db.insertWithOnConflict("transitions",null,ContentValues().apply{put("owner",key);put("body",cipher.encrypt(value.toString().toByteArray(Charsets.UTF_8),"shift-transition:$key"))},SQLiteDatabase.CONFLICT_REPLACE)!=-1L)}
  fun prepare(scope:DispatchScope,action:String,reason:String):JSONObject{
-  require(action in setOf("start","end")&&reason.length<=2000&&(action!="start"||reason.isEmpty()))
+  require(action in setOf("start","end")&&validReason(reason)&&(action!="start"||reason.isEmpty()))
   val k=key(scope,action);val db=writableDatabase;db.beginTransaction()
   try{
    val old=load(db,k)

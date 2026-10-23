@@ -178,7 +178,7 @@ class GuardAccountActivity : Activity() {
        button("Escalate · end shift early"){
         val reason=EditText(this).apply{hint="Reason for leaving early";isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(2000))}
         val dialog=AlertDialog.Builder(this).setTitle("End shift early").setMessage("Give a reason, then confirm. This records an early exit; it does not notify dispatch yet.").setView(reason).setNegativeButton("Cancel",null).setPositiveButton("Confirm early exit",null).create()
-        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else{dialog.dismiss();submitShift(item,scope,"end",text)}}};dialog.show()
+        dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else if(!ShiftTransitionStore.validReason(text))reason.error="Please shorten the reason before confirming" else{dialog.dismiss();submitShift(item,scope,"end",text)}}};dialog.show()
        }
       }else button("Clock out"){
        AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->submitShift(item,scope,"end","")}.show()

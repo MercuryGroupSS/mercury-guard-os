@@ -292,3 +292,9 @@ Business-rule refusals now have immutable, scope-bound service receipts: an earl
 Android accepts only the exact bounded rejection receipt returned for its pending request and scope. It retains encrypted rejection history, migrates the shift store from schema 1 to 2 without dropping pending intents, and creates a new ID only after another explicit confirmation. Success receipts cannot overwrite rejections and stale rejection replies cannot clear a newer intent. The UI distinguishes a declined request from an unresolved network request and does not sign out or stop reminders for a rejected clock-out.
 
 108 server tests pass, including persisted rejection replay and the actual HTTP response. Local Android build/JVM/lint pass; new migration/history and HTTPS early-exit correction assertions compile and await CI execution. Physical testing and live operational integration remain incomplete.
+
+## Shift-store integrity and request-size guard
+
+Opening the encrypted shift database now authenticates existing active and archived ciphertext before permitting new work. Missing/unusable keys or corrupted initial records block a new request rather than silently establishing unrelated new encrypted state. Secure-delete is enabled for replaced SQLite pages. The early-exit form and durable store also validate the serialized reason size before persistence, leaving room for the proof/envelope within the request limit. Oversized escaped content cannot become an unsendable pending confirmation.
+
+Instrumentation adds corruption-blocking and encoded-size checks alongside the existing scope, migration and stale-receipt cases. Local Android build, test APK compilation, JVM tests and lint pass; full emulator execution of these additions remains pending. The definitive-rejection CI run 40001723635 was observed running and has not been assumed complete. No phone or existing application was modified.

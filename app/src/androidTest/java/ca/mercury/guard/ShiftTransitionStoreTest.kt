@@ -42,4 +42,15 @@ class ShiftTransitionStoreTest{
    }
   }finally{context.deleteDatabase(name)}
  }
+ @Test fun unsendableReasonCannotCreatePendingIntentAndCorruptionBlocksNewWrites(){
+  val name="shift-integrity-${UUID.randomUUID()}.db"
+  try{
+   ShiftTransitionStore(context,name).use{db->
+    assertFalse(ShiftTransitionStore.validReason("\u0001".repeat(1000)))
+    rejected{db.prepare(scope,"end","\u0001".repeat(1000))};assertNull(db.saved(scope,"end"))
+    db.prepare(scope,"start","");db.writableDatabase.execSQL("UPDATE transitions SET body='corrupt'")
+   }
+   ShiftTransitionStore(context,name).use{db->rejected{db.prepare(scope.copy(vendorId="other"),"start","")}}
+  }finally{context.deleteDatabase(name)}
+ }
 }
