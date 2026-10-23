@@ -332,3 +332,7 @@ Cancelled-assignment transition requests can now recover an exact previously com
 ### Local assignment synchronization — October 23
 
 Added transactional source-row refresh into the local assignment store with independent upstream timestamp and approved-binding revision checks. Material changes create new internal assignments and cancel earlier ones while preserving historical schedules. Stale/conflicting updates fail; missing rows do not imply cancellation. Cancellation, replacement and refresh history commit together. All 116 server tests pass, including failed replacement rollback. This administrative adapter remains disconnected from live transport and recurring synchronization pending source validation and approved mappings.
+
+### Bounded Ops source reader — October 23
+
+Added a server-only GET adapter for explicitly mapped Ops shift IDs and schedule fields. It bounds IDs, time and body size, rejects redirects/partial or out-of-scope results, excludes roster display names and reports missing IDs without cancelling assignments. Synthetic contract coverage and the full server suite pass (118 tests). No hosted read or credential retrieval occurred; actual Data API connectivity and recurring sync activation remain unverified.
