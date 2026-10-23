@@ -250,3 +250,7 @@ Confirmed shift transitions now project from their durable service receipts into
 Android source 320b010 passed every job in run 39998375078: APK build, API 28, API 35 and HTTPS. This confirms the explicit Closeable correction on Android 9 and the encrypted shift intent/receipt integration test on the emulator. It does not establish physical handset behavior or the later screen controls.
 
 The real isolated local Supabase smoke test now supplies the lifecycle ledger. It passed guard ID/password login, device proof, denial of capture grants before clock-in, confirmed clock-in with exact retry, RSA grant verification, signed ingestion, persisted ledger/service restart, early clock-out with exact retry, post-exit grant denial, valid pre-exit upload retry and revocation. Its synthetic Auth account and temporary files were removed. No hosted project was created or changed. The current phone-screen CI run 39998713518 remains in progress; its server workflow passed. Live dashboard transmission and physical acceptance remain outstanding.
+
+## v0.28 preview candidate packaging
+
+Version code 28 / 0.28.0 consolidates the account, authorized evidence/check-in, message acknowledgement and confirmed-shift work. The separate Preview package uses the existing local preview signer; the original installed application is untouched. See build-v0.28.md for verification boundaries and operational gaps. The default APK remains unconfigured and is not a production deployment. Physical testing remains deferred.
