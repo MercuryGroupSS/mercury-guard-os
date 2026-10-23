@@ -1,0 +1,8 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtempSync,writeFileSync,chmodSync,symlinkSync,rmSync} from 'node:fs';import {tmpdir} from 'node:os';import {join} from 'node:path';
+import {openDashboardDelivery} from './dashboard-delivery-config.mjs';
+test('runtime delivery defaults off and explicit opt-in requires private exact HTTPS routes',()=>{
+ assert.equal(openDashboardDelivery(),null);assert.equal(openDashboardDelivery({mode:'off',path:'/does/not/exist'}),null);assert.throws(()=>openDashboardDelivery({mode:'enabled'}));
+ const dir=mkdtempSync(join(tmpdir(),'mercury-destination-')),path=join(dir,'destinations.json');
+ const config={version:1,destinations:[{destination:'approved-ops',endpoint:'https://example.test/v1/mercury-one/observations',token:'synthetic-only-token-'.repeat(3)}]};
+ try{writeFileSync(path,JSON.stringify(config),{mode:0o600});assert.equal(typeof openDashboardDelivery({mode:'on',path}),'function');chmodSync(path,0o644);assert.throws(()=>openDashboardDelivery({mode:'on',path}));chmodSync(path,0o600);symlinkSync(path,join(dir,'link'));assert.throws(()=>openDashboardDelivery({mode:'on',path:join(dir,'link')}));config.destinations[0].endpoint='http://127.0.0.1/path';writeFileSync(path,JSON.stringify(config));assert.throws(()=>openDashboardDelivery({mode:'on',path}));writeFileSync(path,'{"version":1,"version":1}');assert.throws(()=>openDashboardDelivery({mode:'on',path}));}finally{rmSync(dir,{recursive:true,force:true});}
+});

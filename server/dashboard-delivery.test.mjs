@@ -47,6 +47,16 @@ test('inbox authenticates dedicated credentials, rejects unknown mapping and det
   approved=false;assert.equal((await handler(req())).status,403);
  }finally{box.close();inbox.close();}
 });
+test('inbox awaits asynchronous commit and never acknowledges a failed write',async()=>{
+ const {record,mapping}=fixture(),body=JSON.stringify(projectDashboardObservation(record,mapping));let finish,entered;
+ const started=new Promise(resolve=>{entered=resolve;}),committed=new Promise(resolve=>{finish=resolve;});
+ const receipt={delivery_id:JSON.parse(body).delivery_id,destination:mapping.destination,payload_sha256:'a'.repeat(64),status:'stored_in_integration_inbox'};
+ const req=()=>new Request('https://example.test/v1/mercury-one/observations',{method:'POST',headers:{authorization:`Bearer ${token}`,'content-type':'application/json'},body});
+ let returned=false;const handler=createDashboardInboxHandler({token,destination:mapping.destination,loadMapping:async()=>mapping,inbox:{accept:async()=>{entered();await committed;return receipt;}}});
+ const pending=handler(req()).then(r=>{returned=true;return r;});await started;assert.equal(returned,false);finish();const result=await pending;assert.equal(result.status,200);assert.deepEqual(await result.json(),receipt);
+ const failing=createDashboardInboxHandler({token,destination:mapping.destination,loadMapping:async()=>mapping,inbox:{accept:async()=>{throw Error('Commit failed');}}});
+ const failed=await failing(req());assert.equal(failed.status,400);assert.deepEqual(await failed.json(),{error:'observation_rejected'});
+});
 test('transport rejects insecure endpoints, redirects and oversized receipts',async()=>{
  for(const endpoint of ['http://example.test/v1/mercury-one/observations','https://user:pass@example.test/path','https://example.test/path?token=x'])assert.throws(()=>createDashboardTransport({endpoint,token}));
  const {record,mapping}=fixture(),box=new DashboardOutbox(':memory:');try{

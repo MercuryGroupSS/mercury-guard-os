@@ -1,7 +1,7 @@
 import {createHash,timingSafeEqual} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {strictJson} from './verify-batch.mjs';
-import {projectDashboardObservation} from './dashboard-delivery.mjs';
+import {validateProjectedDashboardObservation} from './dashboard-delivery.mjs';
 // Isolated reference inbox. It never writes existing dashboard/payroll/WhatsApp tables.
 export class DashboardInbox {
  constructor(path){this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
@@ -19,7 +19,7 @@ export class DashboardInbox {
  close(){this.db.close();}
 }
 export function createDashboardInboxHandler({token,destination,inbox,loadMapping}){
- if(typeof token!=='string'||token.length<32||token.length>4096||/\s/.test(token)||typeof destination!=='string'||!destination||typeof loadMapping!=='function')throw Error('Dedicated integration configuration required');
+ if(typeof token!=='string'||token.length<32||token.length>4096||/\s/.test(token)||typeof destination!=='string'||!destination||typeof loadMapping!=='function'||typeof inbox?.accept!=='function')throw Error('Dedicated integration configuration required');
  const secret=createHash('sha256').update(token).digest();
  const reply=(status,body)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
  return async request=>{
@@ -34,10 +34,9 @@ export function createDashboardInboxHandler({token,destination,inbox,loadMapping
    const raw=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)),value=strictJson(raw);
    if(value.destination!==destination||value.source!=='mercury_one'||value.version!==1)return reply(403,{error:'mapping_unavailable'});
    const mapping=await loadMapping({assignmentId:value.assignment_id,guardId:value.guard_id,vendorId:value.vendor_id,siteId:value.site_id,destination});
-   if(!mapping)return reply(403,{error:'mapping_unavailable'});
-   const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data:value.observation?.data}},mapping);
-   if(JSON.stringify(expected)!==JSON.stringify(value))return reply(400,{error:'observation_rejected'});
-   return reply(200,inbox.accept(value,raw));
+   if(mapping?.active!==true)return reply(403,{error:'mapping_unavailable'});
+   validateProjectedDashboardObservation(value,mapping);
+   return reply(200,await inbox.accept(value,raw));
   }catch{return reply(400,{error:'observation_rejected'});}
   finally{reader.releaseLock();}
  };

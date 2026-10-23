@@ -1,5 +1,7 @@
 # Offline server protocol reference
 
+Current state: see the [project brief](../docs/project-brief.md). This file preserves earlier protocol milestones below. The PostgreSQL service, account and administration paths are now implemented and locally verified; the suite has 166 passing tests. The new [receiver guide](../docs/dashboard-receiver.md) describes durable observations, independent approvals and opt-in HTTPS routing. Live integration, media transfer, release and physical acceptance remain open.
+
 Run `node --test server/*.test.mjs` with Node 24.19.0. No packages, credentials or cloud connection are required. Seventeen tests currently pass locally. CI runs independently from Android builds. The current Android continuation is v0.13; no network connection is enabled.
 
 `verifyBatch` checks the Android v0.11/v0.12 envelope's SHA256withECDSA DER signature, P-256 SPKI fingerprint, exact audience, strict duplicate-free JSON, bounded encoding, event IDs/order/types and an injected server authorization context. That context must come from trusted server authentication, enrollment, current revocation/assignment and grant checks. Never populate it from request parameters or user-editable metadata. Server time governs authorization, while event observation timestamps may be old during offline recovery. Numeric fields must be safe integers for this JavaScript reference.

@@ -28,17 +28,20 @@ PostgreSQL requests now verify the token remotely and require its exact current 
 
 Recurring Ops reads are opt-in and use only explicitly approved shift IDs. Live reading/sending is not enabled. Isolated inbox receipts prove stored integration records; they do not prove Ops rendering, media transfer or payroll updates.
 
+The [PostgreSQL observation receiver](dashboard-receiver.md) now has an independent private schema, owner-approved mapping ledger, immutable observations and receipts. It rechecks receiver authorization inside the storage transaction, including exact retries. The HTTP handler awaits commit before acknowledging. The sender now supports opt-in destination-specific HTTPS endpoints/credentials; default sending stays off, unknown destinations are rejected before transmission, and synthetic SQLite mode cannot enable delivery. Separate-database and actual process/CLI tests passed. No live destination was enabled.
+
 ## Verification checkpoint
 
-- 162 server tests pass.
+- 166 server tests pass.
 - Disposable PostgreSQL migration replay and real concurrency/revocation/rollback/receipt tests pass, including audited administrator actions.
 - Real local Supabase Auth and HTTP checks pass for sign-in, scoped assignments, confirmed shifts/grants, incident ingestion, dispatch acknowledgement, queue projection, administrator actions and revocation.
 - Rendered console checks passed for sign-in, company creation, individual guard linking, reviewed changes, receipts/audit, failed-request resolution and revoked-session feedback. Temporary accounts and fixture rows were removed.
 - Real owner CLI review/apply and initially unconfirmed-account denial passed. Disposable PostgreSQL checks proved owner-role enforcement, idempotent access receipts, stale-retry isolation after revocation and rollback on audit failure. Real Auth sign-out denied the old token at both API roles while an independent session continued.
 - Real local email signup and password recovery passed, including wrong/replayed codes, no implicit roles, replacement credentials, old-token denial, preserved approved access, throttling, unknown-email privacy and fixture cleanup. Browser page/code-request checks and the existing full guard/assignment/report HTTP flow passed after the Auth changes. Effective local published ports were checked as loopback-only.
-- Updated Android APK/test APK compilation, JVM checks and lint passed. The new trusted account-page URL assertions still require CI emulator execution; current physical Fold testing remains deferred.
+- Updated Android APK/test APK compilation, JVM checks and lint passed. Account-page commit `1b01fcf731c36d5e5252b92983a663e466d4edc8` passed GitHub Android run 40032338395, including API 28/API 35 device jobs and HTTPS integration. Current physical Fold testing remains deferred.
 - Local database advisors report no issues. Exported migrations retain explicit private grants and RLS.
-- GitHub backend and Android workflows for owner/session commit `8c67115b36f59e9b97cbe4619a39d3be31e4c50b` passed (server run 40027047086, Android run 40027047057), including API 28/API 35 and HTTPS integration. The account-page changes require their own CI result after commit.
+- GitHub backend and Android workflows for account-page commit `1b01fcf731c36d5e5252b92983a663e466d4edc8` passed (server run 40032338221, Android run 40032338395). The receiver continuation has passed local verification and requires its own CI result after commit.
+- PostgreSQL sender-to-receiver delivery passed across separate disposable databases over HTTP, including restart/concurrent exact retries, altered-body rejection, independent receiver approvals, transactional revocation and audit rollback. Actual receiver process and owner CLI review/apply/restart/revocation tests passed, with synthetic fixture cleanup. Migration replay passed and final local advisors found no warning/error findings.
 
 Detailed backend evidence and limits are in [PostgreSQL implementation notes](postgres-devices.md).
 

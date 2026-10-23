@@ -1,0 +1,44 @@
+# Guard observation receiver
+
+The receiver now persists immutable observation bodies and receipts in PostgreSQL. Its private `mercury_guard_receiver` schema has its own approved mappings and reasoned owner audit. It does not insert into Ops `public.shifts`, WhatsApp check-ins, compliance or billing tables. The existing Ops source was reviewed at `a5344005ef9843f6c1ab295735e1cd5239449d8f`; its WhatsApp ingest is not the Guard receiver.
+
+`PostgresDashboardInbox` rechecks the current receiver mapping inside the transaction before storing or returning an earlier receipt. Mapping changes take an exclusive advisory lock; observation commits take the corresponding shared lock. This makes a completed revocation effective even when the HTTP handler previously loaded an active mapping. An observation already committing under that lock may finish before the revocation commits. Receipt status `stored_in_integration_inbox` proves inbox storage only. It does not claim Ops display, payroll processing or transferred photo bytes.
+
+Exact retries return the original stored receipt. Changed raw bytes, altered attribution, mapping revisions, destination or upstream shift cannot rewrite an existing delivery ID. Concurrent duplicate inserts store one row. Receipts are returned only after the storage transaction commits. The integration service can select bindings and select/insert observations; it cannot approve mappings, update/delete observations or modify the owner ledger. Anonymous and ordinary authenticated roles have no schema access. Local development uses the existing test `service_role`; production still requires a reviewed server credential and deployment configuration.
+
+## Local receiver and approval
+
+From the project root, `node server/scripts/start-local-dashboard-receiver.mjs --help` describes its required private environment settings. It binds only `127.0.0.1`, uses the isolated Guard local database, and does not automatically approve a mapping. The dedicated receiver token is separate from Supabase credentials and must not enter an APK, public file, URL or source control.
+
+`node server/scripts/set-local-receiver-mapping.mjs --file PRIVATE_JSON` reviews an approval; add `--apply` to record it. The file must be a regular private file and contain exactly `requestId`, `mapping`, `operator`, `reason`. Mapping fields are `assignmentId`, `guardId`, `vendorId`, `siteId`, `dashboardShiftId`, `destination`, `revision`, `active`. Use a fresh UUID per change and advance revision. Retry an uncertain request with the identical UUID and contents. A stale exact retry returns its original historical receipt without undoing a newer revocation. Approval requires the local database owner and records mapping/history atomically. The owner must verify the intended upstream ID; this local command does not establish a live Ops connection or infer identities from names or Vendor IDs.
+
+The Guard sender mapping and the receiver mapping are independent approvals. This preserves individual guard attribution when a company Vendor ID represents several people.
+
+## Opt-in sender
+
+The local PostgreSQL service continues with sending off by default. To enable explicitly configured HTTPS routes, set `MERCURY_DASHBOARD_DELIVERY=on` and `MERCURY_DASHBOARD_DELIVERY_CONFIG` to a private regular JSON file:
+
+```json
+{
+  "version": 1,
+  "destinations": [{
+    "destination": "approved-ops",
+    "endpoint": "https://receiver.example.invalid/v1/mercury-one/observations",
+    "token": "REPLACE_WITH_A_PRIVATE_DEDICATED_RECEIVER_TOKEN"
+  }]
+}
+```
+
+This is an example, not an enabled destination. Configuration is bounded, exact and rejects symlinks or group/world-readable files. Each destination binds its own endpoint and bearer credential. The router checks the immutable queued body/hash before selecting the route and rejects unknown destinations before network transmission. Redirects, insecure production URLs and mismatched receipts are rejected. Synthetic SQLite mode cannot enable this sender. Local HTTP is available only as an explicit test fixture option; the actual runtime configuration requires HTTPS.
+
+## Verification
+
+`node --test server/*.test.mjs`: 166 tests passed. `node server/scripts/check-local-postgres-limiter.mjs` replays migrations and exercises a sender and receiver in separate disposable PostgreSQL databases over actual loopback HTTP. It verifies concurrent retries, receiver-pool restart, original receipts, changed-body conflict, independent approvals, revocation between the preliminary read and commit, forced-audit rollback, restricted grants and unchanged synthetic business-table sentinels. Both disposable databases are removed.
+
+`node server/scripts/check-local-dashboard-receiver.mjs` runs the actual local receiver process and owner CLI, tests review/apply, receipt recovery after process restart, revocation and stale approval retry, then removes only its unique synthetic rows and private temporary input. It passed. Migration `20261023222717_guard_dashboard_receiver.sql` was exported from the local database, reviewed, replayed in disposable databases and aligned with local migration history. Final advisors reported no warning/error findings; private-schema RLS without public policies and unused test indexes remain intentional informational notices.
+
+Current official references used: [Supabase role separation](https://supabase.com/docs/guides/database/postgres/roles), [PostgreSQL transaction locks](https://www.postgresql.org/docs/17/explicit-locking.html).
+
+## Still required
+
+Private media transfer and its own durable byte receipt, protected Ops presentation, approved real source/destination credentials and mappings, production TLS/deployment and physical acceptance remain open. No hosted database, application, existing repository or phone was changed by this receiver work.

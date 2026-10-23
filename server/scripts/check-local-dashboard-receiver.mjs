@@ -1,0 +1,31 @@
+import assert from 'node:assert/strict';import {randomUUID,randomBytes,createHash} from 'node:crypto';import {readFileSync,mkdtempSync,writeFileSync,rmSync} from 'node:fs';import {join} from 'node:path';import {fileURLToPath} from 'node:url';import {spawn,execFile} from 'node:child_process';import {promisify} from 'node:util';import {Pool} from 'pg';
+import {projectDashboardObservation} from '../dashboard-delivery.mjs';
+const config=JSON.parse(readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n').findLast(l=>l.startsWith('{')&&l.includes('API_URL'))),url=new URL(config.DB_URL);
+if(config.API_URL!=='http://127.0.0.1:55321'||!['postgres:','postgresql:'].includes(url.protocol)||url.hostname!=='127.0.0.1'||url.port!=='55322'||url.search||url.hash)throw Error('Isolated local receiver verification required');
+const pool=new Pool({connectionString:config.DB_URL,max:2,connectionTimeoutMillis:5000,statement_timeout:10000,query_timeout:10000}),suffix=randomUUID(),token=randomBytes(32).toString('hex');
+const mapping={assignmentId:'receiver-test-'+suffix,guardId:'guard-'+suffix,vendorId:'vendor-'+suffix,siteId:'site-'+suffix,dashboardShiftId:'synthetic-upstream-'+suffix,destination:'local-smoke-'+suffix,revision:1,active:true};
+const approval={requestId:randomUUID(),mapping,operator:'synthetic-local-owner-test',reason:'Verify local receiver process and independent approval; no real operation'},revoked={...approval,requestId:randomUUID(),mapping:{...mapping,revision:2,active:false}},dir=mkdtempSync(fileURLToPath(new URL('../../.local-backend/receiver-test-',import.meta.url))),file=join(dir,'approval.json');
+const body=JSON.stringify(projectDashboardObservation({vendor_id:mapping.vendorId,scope:{assignment_id:mapping.assignmentId,guard_id:mapping.guardId,site_id:mapping.siteId,device_thumbprint:randomBytes(32).toString('hex')},event:{event_id:randomUUID(),kind:'incident',at:Date.now(),data:{description:'Synthetic local receiver process test; no real event'}}},mapping)),value=JSON.parse(body),digest=createHash('sha256').update(body).digest('hex'),run=promisify(execFile);
+let child;
+async function owner(request,apply=false){writeFileSync(file,JSON.stringify(request),{mode:0o600});const result=await run(process.execPath,[fileURLToPath(new URL('./set-local-receiver-mapping.mjs',import.meta.url)),'--file',file,...(apply?['--apply']:[])],{timeout:15000,maxBuffer:32000});return JSON.parse(result.stdout);}
+async function stop(){if(!child)return;const current=child;child=null;if(current.exitCode!==null)return;await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>{current.kill('SIGKILL');reject(Error('Receiver shutdown timed out'));},10000);current.once('exit',()=>{clearTimeout(timeout);resolve();});current.kill('SIGTERM');});}
+async function start(){
+ child=spawn(process.execPath,[fileURLToPath(new URL('./start-local-dashboard-receiver.mjs',import.meta.url))],{env:{...process.env,MERCURY_RECEIVER_DESTINATION:mapping.destination,MERCURY_RECEIVER_TOKEN:token,MERCURY_RECEIVER_PORT:'0'},stdio:['ignore','pipe','pipe']});const current=child;
+ return new Promise((resolve,reject)=>{let output='',errors='';const timer=setTimeout(()=>reject(Error('Local receiver startup timed out')),10000);const fail=()=>{clearTimeout(timer);reject(Error('Local receiver failed to start'));};current.once('error',fail);current.once('exit',fail);current.stderr.on('data',chunk=>{errors=(errors+chunk).slice(-4096);});current.stdout.on('data',chunk=>{output=(output+chunk).slice(-4096);const matched=output.match(/Local Guard receiver: (http:\/\/127\.0\.0\.1:\d+\/v1\/mercury-one\/observations)/);if(matched){clearTimeout(timer);current.off('error',fail);current.off('exit',fail);resolve(matched[1]);}});});
+}
+const post=(endpoint,credential=token)=>fetch(endpoint,{method:'POST',headers:{authorization:'Bearer '+credential,'content-type':'application/json'},body,signal:AbortSignal.timeout(10000)});
+try{
+ assert.equal((await pool.query('SELECT count(*)::int n FROM mercury_guard_receiver.bindings WHERE assignment_id=$1',[mapping.assignmentId])).rows[0].n,0);
+ let endpoint=await start();assert.equal((await post(endpoint,'wrong')).status,401);assert.equal((await post(endpoint)).status,403);
+ const review=await owner(approval);assert.equal(review.mode,'review');assert.equal(review.current,null);assert.equal((await post(endpoint)).status,403);
+ const approved=await owner(approval,true);assert.equal(approved.status,'receiver_mapping_recorded');assert.deepEqual(await owner(approval,true),approved);
+ const stored=await post(endpoint);assert.equal(stored.status,200);const receipt=await stored.json();assert.equal(receipt.payload_sha256,digest);
+ await stop();endpoint=await start();const retry=await post(endpoint);assert.equal(retry.status,200);assert.deepEqual(await retry.json(),receipt);
+ const rows=(await pool.query('SELECT raw_body,payload_sha256 FROM mercury_guard_receiver.observations WHERE delivery_id=$1',[value.delivery_id])).rows;assert.equal(rows.length,1);assert.equal(rows[0].raw_body,body);assert.equal(rows[0].payload_sha256,digest);
+ await owner(revoked,true);assert.equal((await post(endpoint)).status,403);assert.deepEqual(await owner(approval,true),approved);assert.equal((await post(endpoint)).status,403);
+ console.log('PASS: actual local receiver process, independent owner CLI review/apply, HTTP receipt persistence across process restart, revocation and stale approval retry');
+}finally{
+ try{await stop();}finally{
+  const client=await pool.connect();try{await client.query('BEGIN');await client.query('DELETE FROM mercury_guard_receiver.observations WHERE delivery_id=$1 AND assignment_id=$2',[value.delivery_id,mapping.assignmentId]);await client.query('DELETE FROM mercury_guard_receiver.bindings WHERE assignment_id=$1',[mapping.assignmentId]);await client.query('DELETE FROM mercury_guard_receiver.mapping_history WHERE request_id=ANY($1::uuid[]) AND assignment_id=$2',[[approval.requestId,revoked.requestId],mapping.assignmentId]);await client.query('COMMIT');console.log('PASS: only the synthetic receiver fixture rows removed');}catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();await pool.end();rmSync(dir,{recursive:true,force:true});}
+ }
+}

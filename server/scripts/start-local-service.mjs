@@ -7,6 +7,7 @@ import {PostgresAdministration} from '../postgres-administration.mjs';
 import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
+import {openDashboardDelivery} from '../dashboard-delivery-config.mjs';
 import {DashboardBindings,createDashboardBridge} from '../dashboard-bridge.mjs';
 import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
 import {ShiftGrantIssuer} from '../shift-grant-issuer.mjs';
@@ -22,6 +23,9 @@ const lines=readFileSync(new URL('supabase-start.log',root),'utf8').split('\n');
 const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL')));
 const dir=new URL('.local-backend/',root);mkdirSync(dir,{recursive:true,mode:0o700});
 const identityMode=process.env.MERCURY_IDENTITY_STORE??'postgres';
+// Read before opening stores: invalid delivery configuration fails closed.
+if(identityMode!=='postgres'&&(process.env.MERCURY_DASHBOARD_DELIVERY??'off')!=='off')throw Error('Dashboard delivery requires PostgreSQL mode');
+const dashboardSend=openDashboardDelivery({mode:process.env.MERCURY_DASHBOARD_DELIVERY??'off',path:process.env.MERCURY_DASHBOARD_DELIVERY_CONFIG});
 const directory=await openLocalGuardDirectory({config,mode:identityMode,sqlitePath:new URL('directory.sqlite',dir).pathname});
 let assignmentStore;
 try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,sqlitePath:new URL('devices.sqlite',dir).pathname});}catch(error){await directory.close();throw error;}
@@ -33,10 +37,9 @@ const GrantIssuer=identityMode==='postgres'?PostgresShiftGrantIssuer:ShiftGrantI
 const grantIssuer=new GrantIssuer({devices,path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
 const dashboardOutbox=identityMode==='postgres'?new PostgresDashboardOutbox(devices):new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
 const dashboardBindings=identityMode==='postgres'?new PostgresDashboardBindings(devices):new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
-// No send function is configured: explicit mappings can queue records locally only.
 const dispatch=identityMode==='postgres'?new PostgresDispatchFeed(devices):new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=identityMode==='postgres'?new PostgresShiftLifecycle(devices):new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
-const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
+const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle,send:dashboardSend});
 const admin=identityMode==='postgres'?new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})}):null;
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}

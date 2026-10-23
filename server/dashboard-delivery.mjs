@@ -34,6 +34,12 @@ export function projectDashboardObservation(record,mapping){
   mapping_revision:mapping.revision,dashboard_shift_id:mapping.dashboardShiftId,guard_id:scope.guard_id,vendor_id:record.vendor_id,site_id:scope.site_id,assignment_id:scope.assignment_id,
   observation:{event_id:event.event_id,device_thumbprint:scope.device_thumbprint,kind:event.kind,occurred_at_ms:event.at,data}};
 }
+export function validateProjectedDashboardObservation(value,mapping){
+ if(!value||typeof value!=='object')throw Error('Observation required');
+ const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data:value.observation?.data}},mapping);
+ if(JSON.stringify(expected)!==JSON.stringify(value))throw Error('Observation projection or mapping changed');
+ return value;
+}
 export class DashboardOutbox {
  constructor(path){this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS dashboard_outbox(id TEXT PRIMARY KEY,hash TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,attempts INTEGER NOT NULL,next_at INTEGER NOT NULL,lease TEXT,lease_until INTEGER,receipt TEXT);`);}
