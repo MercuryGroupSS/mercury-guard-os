@@ -150,3 +150,11 @@ A signed synthetic batch now passes the HTTP Request/Response handler into SQLit
 ## Authorization boundary continuation — 2026-10-23
 
 The prior GitHub Android workflow completed successfully. Added server authorization assembly that resolves a verified subject through an independent authoritative provider, validates enrollment/revocation/binding/grant lifetime, and limits authorization to session expiry. User-editable claims are ignored. The composed signed-batch HTTP/storage test now exercises this boundary. All 32 local server tests pass. Providers remain synthetic: real Supabase session verification, enrollment/grant storage, Android capture scope and transport remain outstanding. Physical tests deferred at user request; no phone interaction.
+
+## Local Supabase setup — 2026-10-23
+
+Access restored using reviewed execution permissions. Docker Desktop running; isolated mercury-guard-os-local initialized on 55321/55322/55323/55324. CLI 2.122.0 pinned. Database/Auth health checks pass; synthetic sign-in and server identity verification tested, account removed. No hosted project or production changes. This provides local infrastructure, not completed phone integration. See local-supabase.md.
+
+## v0.24 local authenticated backend — 2026-10-23
+
+Local Supabase Auth is now used by the actual loopback HTTP ingestion service; protected PostgreSQL authorization records drive trusted context and device revocation. Signed reports persist in local SQLite with replay receipts. Actual network test verifies identity, denied client authority reads, signed ingestion, restart/retry, revocation, and cleanup. 37 server unit tests pass; local DB advisors clean. Android HTTPS transport foundation and receipt tests added; APK/assembly/JVM/lint pass. No physical testing or deployment; remaining operational integration listed in build-v0.24.md.

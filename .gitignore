@@ -11,3 +11,16 @@ local.properties
 
 .android-local/
 .avd/
+
+node_modules/
+.env
+.env.*
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Local Supabase state and generated credentials
+supabase/.temp/
+supabase/.branches/
+supabase-start.log
+.local-backend/
