@@ -22,6 +22,10 @@ export class LocalGuardDirectory {
   if(typeof active!=='boolean')throw Error('Boolean required');
   if(this.db.prepare('UPDATE guards SET active=? WHERE guard_id=?').run(Number(active),guardId).changes!==1)throw Error('Guard not found');
  }
+ setVendorActive(vendorId,active) {
+  if(typeof active!=='boolean')throw Error('Boolean required');
+  if(this.db.prepare('UPDATE vendors SET active=? WHERE vendor_id=?').run(Number(active),vendorId).changes!==1)throw Error('Vendor not found');
+ }
  loadGuardsForSubject(subject) {
   return this.db.prepare('SELECT * FROM guards WHERE auth_subject=?').all(subject).map(r=>({guardId:r.guard_id,authSubject:r.auth_subject,vendorId:r.vendor_id,active:r.active===1}));
  }
