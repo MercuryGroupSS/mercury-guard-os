@@ -42,3 +42,16 @@ test('legacy receipt timestamps stay unknown after schema migration',()=>{
   assert.equal(store.db.prepare('PRAGMA table_info(events)').all().filter(c=>c.name==='received_at').length,1);
  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('confirmed shift boundaries exclude unworked windows without discarding captured evidence',()=>{
+ const store=new DurableIngest(':memory:');try{
+  assert.equal(reconcileCheckIns(store,assignment,140000,{activeWindow:null}).total_due,0);
+  const activeWindow={startsAt:2000,endsAt:75000};
+  const status=reconcileCheckIns(store,assignment,140000,{activeWindow});
+  assert.deepEqual(status.slots.map(s=>s.slot),[1]);assert.equal(status.total_deadlines_missed,1);
+  assert.equal(store.db.prepare('SELECT count(*) AS n FROM check_in_alert_outbox').get().n,1);
+  record(store,5000,6000,0);
+  const partial=reconcileCheckIns(store,assignment,140000,{activeWindow});assert.equal(partial.slots[0].status,'evidence_received');assert.equal(partial.slots[0].full_confirmed_window,false);assert.equal(partial.slots[0].delivery_deadline_missed,false);
+  assert.equal(partial.total_deadlines_missed,1);
+ }finally{store.close();}
+});

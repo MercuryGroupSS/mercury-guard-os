@@ -52,3 +52,16 @@ test('real timer records a newly elapsed deadline and stops cleanly',async()=>{
   assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM check_in_alert_outbox').get().n,1);
  }finally{worker.stop();f.close();}
 });
+
+test('worker uses confirmed shifts and stops generating future misses after early exit',async()=>{
+ const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const f=setup(),shiftLifecycle=new ShiftLifecycle(':memory:');
+ try{
+  f.assign('a');let now=2000;const worker=createCheckInWorker({...f,shiftLifecycle,now:()=>now});worker.run();assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM missed_check_ins').get().n,0);
+  const assignment=f.devices.scheduledAfter('',1)[0];
+  const scope={identity:{subject:'user',guardId:'guard',vendorId:'vendor'},assignment,deviceThumbprint:'a'.repeat(64)};
+  shiftLifecycle.transition({...scope,request:{action:'start',request_id:'start',confirmed:true,reason:''},now:3000});
+  shiftLifecycle.transition({...scope,request:{action:'end',request_id:'end',confirmed:true,reason:'Synthetic early exit'},now:80000});
+  now=130000;worker.run();
+  const misses=f.store.db.prepare('SELECT slot FROM missed_check_ins').all();assert.deepEqual(misses.map(x=>x.slot),[1]);worker.run();assert.equal(f.store.db.prepare('SELECT count(*) AS n FROM missed_check_ins').get().n,1);
+ }finally{shiftLifecycle.close();f.close();}
+});

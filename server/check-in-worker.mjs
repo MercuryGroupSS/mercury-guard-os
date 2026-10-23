@@ -1,6 +1,6 @@
 import {reconcileCheckIns} from './check-in-status.mjs';
 // Local scheduler only: creates durable delivery-missing records, never sends notifications.
-export function createCheckInWorker({store,devices,now=Date.now,intervalMs=30000,batchSize=20,schedule=setInterval,cancel=clearInterval}){
+export function createCheckInWorker({store,devices,shiftLifecycle,now=Date.now,intervalMs=30000,batchSize=20,schedule=setInterval,cancel=clearInterval}){
  if(!Number.isSafeInteger(intervalMs)||intervalMs<1000||!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>100)throw Error('Invalid scheduler limits');
  store.db.exec(`CREATE TABLE IF NOT EXISTS check_in_worker_state(id INTEGER PRIMARY KEY CHECK(id=1),cursor TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS check_in_worker_runs(assignment TEXT,revision INTEGER,finalized INTEGER NOT NULL,last_success INTEGER NOT NULL,PRIMARY KEY(assignment,revision));`);
@@ -19,7 +19,7 @@ export function createCheckInWorker({store,devices,now=Date.now,intervalMs=30000
      if(assignment.active!==true||!p||assignment.startsAt>at)continue;
      const prior=store.db.prepare('SELECT finalized FROM check_in_worker_runs WHERE assignment=? AND revision=?').get(assignment.assignmentId,p.revision);
      if(prior?.finalized)continue;
-     reconcileCheckIns(store,assignment,at);
+     reconcileCheckIns(store,assignment,at,{activeWindow:shiftLifecycle?.checkInWindow(assignment)});
      store.db.prepare('INSERT INTO check_in_worker_runs VALUES(?,?,?,?) ON CONFLICT(assignment,revision) DO UPDATE SET finalized=excluded.finalized,last_success=excluded.last_success').run(assignment.assignmentId,p.revision,Number(at>=assignment.endsAt),at);
      processed++;
     }catch{failed++;}

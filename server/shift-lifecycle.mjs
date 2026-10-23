@@ -31,6 +31,12 @@ export class ShiftLifecycle {
    this.db.prepare('INSERT INTO shift_transitions VALUES(?,?,?)').run(request.request_id,digest,JSON.stringify(receipt));this.db.exec('COMMIT');return receipt;
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
+ checkInWindow(assignment){
+  const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(assignment.assignmentId);
+  if(!row)return null;
+  if(row.guard!==assignment.guardId||row.vendor!==assignment.vendorId||row.site!==assignment.siteId||row.starts_at!==assignment.startsAt||row.ends_at!==assignment.endsAt)throw Error('Shift schedule mismatch');
+  return {startsAt:row.clocked_in,endsAt:Math.min(row.ends_at,row.clocked_out??row.ends_at)};
+ }
  snapshot(scope){
   const row=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(scope.assignmentId);
   if(!row)return {state:'not_started',clocked_in_at_ms:null,clocked_out_at_ms:null};

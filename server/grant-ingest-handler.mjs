@@ -55,7 +55,8 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    for(const event of batch.events)if(event.kind==='check_in_miss_reason'){
     const policy=grantIssuer.lookup(event.data.capture_grant_id).policy.checkInPolicy;
     validateMissReason(policy,event);
-    reconcileCheckIns(store,{guardId:c.guard_id,assignmentId:c.assignment_id,startsAt:policy.starts_at,endsAt:policy.ends_at,checkInPolicy:policy},at);
+    const assignment={guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id,startsAt:policy.starts_at,endsAt:policy.ends_at,checkInPolicy:policy};
+    reconcileCheckIns(store,assignment,at,{activeWindow:shiftLifecycle?.checkInWindow(assignment)});
     if(!store.db.prepare('SELECT 1 FROM missed_check_ins WHERE guard=? AND assignment=? AND revision=? AND slot=?').get(c.guard_id,c.assignment_id,policy.revision,event.data.slot))throw Error('No missed delivery deadline');
    }
    return reply(200,store.ingest(raw,context,seconds));

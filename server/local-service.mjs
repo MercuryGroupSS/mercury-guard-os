@@ -30,7 +30,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer,d
  const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const evidence=directory&&devices&&grantIssuer?createEvidenceHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
- const checkIns=devices&&store?createCheckInWorker({store,devices}):null;
+ const checkIns=devices&&store?createCheckInWorker({store,devices,shiftLifecycle}):null;
  const server=createServer(async(req,res)=>{
   try {
    const request=new Request(new URL(req.url,'http://127.0.0.1'),{method:req.method,headers:req.headers,
