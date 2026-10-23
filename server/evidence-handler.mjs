@@ -23,7 +23,7 @@ export function createEvidenceHandler({verifySession,directory,devices,grantIssu
   try{
    const session=await verifySession(match[1]);if(!session||!Number.isSafeInteger(session.expiresAt)||session.expiresAt*1000<=now())return reply(401,{error:'authentication_required'});
    expires=session.expiresAt*1000;identity=await resolve(session);if(!identity)return reply(403,{error:'evidence_unavailable'});
-   record=store.photoForGuard(identity.guardId,route[1]);if(!record||!await authorized())return reply(403,{error:'evidence_unavailable'});
+   record=await store.photoForGuard(identity.guardId,route[1]);if(!record||!await authorized())return reply(403,{error:'evidence_unavailable'});
    meta=photoMetadata(record.event.data);
   }catch{return reply(503,{error:'evidence_unavailable'});}
   const reader=request.body?.getReader();if(!reader)return reply(400,{error:'body_required'});
@@ -33,7 +33,7 @@ export function createEvidenceHandler({verifySession,directory,devices,grantIssu
    // Access can change during upload. Recheck both roster and grant/device state.
    const current=await resolve({subject:identity.subject,active:true});
    if(!current||current.guardId!==identity.guardId||current.vendorId!==identity.vendorId||expires<=now()||!await authorized())return reply(403,{error:'evidence_unavailable'});
-   return reply(200,store.retainPhoto(record,Buffer.concat(chunks),now()));
+   return reply(200,await store.retainPhoto(record,Buffer.concat(chunks),now()));
   }catch{return reply(400,{error:'evidence_rejected'});}
   finally{reader.releaseLock();}
  };

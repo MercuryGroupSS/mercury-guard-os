@@ -23,7 +23,7 @@ export function createIngestHandler({authenticate, store, now = () => Math.floor
         chunks.push(Buffer.from(value));
       }
       const raw=new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks));
-      const receipt=store.ingest(raw,context,now());
+      const receipt=await store.ingest(raw,context,now());
       return reply(200,receipt);
     } catch { return reply(400,{error:'batch_rejected'}); }
     finally { reader.releaseLock(); }

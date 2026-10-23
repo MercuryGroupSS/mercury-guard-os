@@ -416,3 +416,7 @@ Moved PostgreSQL-mode confirmed shifts and transition/rejection receipts into th
 ### Shared capture grants verified
 
 PostgreSQL-mode capture grants/policies now persist centrally with immutable payload/binding fields and cross-instance revocation. Signing logic is shared with SQLite; Android protocol unchanged. Grant issuance rechecks and locks active shift/assignment/device/guard/vendor/site authority and serializes with clock-out. Async issuer operations are awaited throughout HTTP/evidence/ingestion. Real local HTTP signed incident ingestion and post-revocation denial passed; 132 server tests, PostgreSQL replay and advisors passed. Shared event/media/outbound persistence, production key distribution, authenticated administration, hosted integration and physical acceptance remain outstanding.
+
+### Shared event/evidence adapter verified
+
+Added PostgreSQL signed event/receipt storage and durable evidence bytes with transaction-time authority/grant checks, exact retry sharing, immutable records and all-or-nothing batch writes. Real database tests verified concurrent retries, conflicts, rollback, photo lookup/media retry and revocation denial. Migration replay/advisors and 132 server tests passed. HTTP handlers now await event/evidence persistence. Runtime selection is pending migration of check-in reconciliation and worker/dashboard state from direct SQLite queries; current running event store remains SQLite. Production media retention/capacity and hosted/phone acceptance remain outstanding.

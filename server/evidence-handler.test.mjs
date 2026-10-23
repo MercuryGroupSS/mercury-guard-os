@@ -1,3 +1,4 @@
+const asyncStore=value=>new Proxy(value,{get(target,key){const member=target[key];return typeof member==='function'?async(...args)=>member.apply(target,args):member;}});
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash,randomUUID} from 'node:crypto';
@@ -11,7 +12,7 @@ function fixture(){
  const store=new DurableIngest(':memory:');store.db.prepare('INSERT INTO events(device,id,sequence,digest,body) VALUES(?,?,?,?,?)').run(scope.device_thumbprint,eventId,1,'synthetic-record',JSON.stringify(record));
  let active=true,revoked=false,subject='u';
  const directory={loadGuardsForSubject:s=>s==='u'?[{authSubject:'u',guardId:'g',vendorId:'v',active}]:[],loadVendor:()=>({vendorId:'v',kind:'company',active:true})};
- const handler=createEvidenceHandler({directory,store,now:()=>200,verifySession:async()=>({subject,active:true,expiresAt:100}),devices:{deviceByThumbprint:async()=>({publicKeySpki:'key'}),authorizes:async()=>!revoked},grantIssuer:{lookup:async()=>revoked?null:{subject:'u',vendorId:'v',claims:{...scope,actions:['photo'],not_before_ms:50,expires_at_ms:150}}}});
+ const handler=createEvidenceHandler({directory,store:asyncStore(store),now:()=>200,verifySession:async()=>({subject,active:true,expiresAt:100}),devices:{deviceByThumbprint:async()=>({publicKeySpki:'key'}),authorizes:async()=>!revoked},grantIssuer:{lookup:async()=>revoked?null:{subject:'u',vendorId:'v',claims:{...scope,actions:['photo'],not_before_ms:50,expires_at_ms:150}}}});
  const send=(data=bytes,id=eventId)=>handler(new Request('https://guard.test/v1/evidence/'+id,{method:'POST',headers:{authorization:'Bearer token','content-type':'image/jpeg'},body:data}));
  return {store,record,bytes,send,setActive:x=>{active=x},revoke:()=>{revoked=true},other:()=>{subject='other'}};
 }

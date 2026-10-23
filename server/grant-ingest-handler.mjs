@@ -30,7 +30,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    const first=await grantIssuer.lookup(grantId);
    if(!first||first.subject!==identity.subject||first.vendorId!==identity.vendorId)throw Error('Grant unavailable');
    const c=first.claims,at=now(),seconds=Math.floor(at/1000);
-   const context={enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
+   const context={subject:identity.subject,enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
     guardId:c.guard_id,siteId:c.site_id,assignmentId:c.assignment_id,revocationVersion:c.revocation_version,vendorId:first.vendorId,allowHistoricalSequence:true,receivedAtMs:at,
     notBefore:seconds,expiresAt:Math.min(seconds+60,session.expiresAt),allowedKinds:Object.keys(required)};
    if(!await devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
@@ -47,7 +47,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    for(const event of batch.events)if(event.kind==='check_in'){
     const saved=await grantIssuer.lookup(event.data.capture_grant_id);
     const linked=batch.events.find(e=>e.event_id===event.data.photo_event_id);
-    const photo=linked?{scope:batch.scope,event:linked,vendor_id:identity.vendorId}:store.photoForGuard(identity.guardId,event.data.photo_event_id);
+    const photo=linked?{scope:batch.scope,event:linked,vendor_id:identity.vendorId}:await store.photoForGuard(identity.guardId,event.data.photo_event_id);
     if(photo?.vendor_id!==identity.vendorId)throw Error('Photo vendor mismatch');
     if(photo&&!await grantIssuer.lookup(photo.event.data.capture_grant_id))throw Error('Photo grant unavailable');
     validateCheckIn(saved.policy.checkInPolicy,event,photo,batch.scope);
@@ -59,7 +59,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
     reconcileCheckIns(store,assignment,at,{activeWindow:await shiftLifecycle?.checkInWindow(assignment)});
     if(!store.db.prepare('SELECT 1 FROM missed_check_ins WHERE guard=? AND assignment=? AND revision=? AND slot=?').get(c.guard_id,c.assignment_id,policy.revision,event.data.slot))throw Error('No missed delivery deadline');
    }
-   return reply(200,store.ingest(raw,context,seconds));
+   return reply(200,await store.ingest(raw,context,seconds));
   }catch{return reply(400,{error:'batch_rejected'});}
   finally{reader.releaseLock();}
  };

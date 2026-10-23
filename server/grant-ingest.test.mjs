@@ -1,3 +1,4 @@
+const asyncStore=value=>new Proxy(value,{get(target,key){const member=target[key];return typeof member==='function'?async(...args)=>member.apply(target,args):member;}});
 const asyncShift=value=>value?new Proxy(value,{get(target,key){const member=target[key];return typeof member==='function'?async(...args)=>member.apply(target,args):member;}}):null;
 import {ShiftLifecycle} from './shift-lifecycle.mjs';
 import {DispatchFeed} from './dispatch-feed.mjs';
@@ -23,7 +24,7 @@ function setup(actions=['incident'],withLifecycle=false){
  const issued=issuer.issue({identity,device,assignment:{assignmentId:'a',guardId:'g',vendorId:'v',deviceId:'d',siteId:'s',startsAt:1000,endsAt:100000,canStart:true},allowedActions:actions,sessionExpiresAt:100000,now:2000});
  const claims=JSON.parse(Buffer.from(issued.payload,'base64url'));
  let now=3000,subject='u';
- const handler=createGrantIngestHandler({directory,devices:new Proxy(devices,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}}),store,dispatch,shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:new Proxy(issuer,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}}),verifySession:async()=>({subject,active:true,expiresAt:200000}),now:()=>now});
+ const handler=createGrantIngestHandler({directory,devices:new Proxy(devices,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}}),store:asyncStore(store),dispatch,shiftLifecycle:asyncShift(shiftLifecycle),grantIssuer:new Proxy(issuer,{get(target,key){const value=target[key];return typeof value==='function'?async(...args)=>value.apply(target,args):value;}}),verifySession:async()=>({subject,active:true,expiresAt:200000}),now:()=>now});
  const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:'g',site_id:'s',assignment_id:'a',device_thumbprint:device.thumbprint,revocation_version:1},events:[{event_id:randomUUID(),sequence:1,at:2000,kind:'incident',data:{capture_grant_id:claims.grant_id,note:'synthetic'}}]};
  const send=async b=>{
   const payload=Buffer.from(JSON.stringify(b)).toString('base64url'),signature=sign('sha256',Buffer.from(`mercury-event-batch-v2\nmercury-local\n${device.thumbprint}\n${payload}`),ec.privateKey).toString('base64url');
