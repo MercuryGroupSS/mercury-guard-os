@@ -10,7 +10,7 @@ import {OpsBindingStore} from '../ops-binding-store.mjs';
 import {OpsAssignmentSync} from '../ops-assignment-sync.mjs';
 import {LocalDeviceAssignments} from '../local-device-assignments.mjs';
 import {LocalGuardDirectory} from '../local-guard-directory.mjs';
-import {createOpsRefreshWorker} from '../ops-refresh-worker.mjs';
+import {openLocalOpsRefresh} from '../local-ops-refresh.mjs';
 const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n');
 const config=JSON.parse(lines.findLast(line=>line.startsWith('{')&&line.includes('API_URL')));
 if(config.API_URL!=='http://127.0.0.1:55321')throw Error('Isolated local environment required');
@@ -20,7 +20,7 @@ const base=config.API_URL+'/auth/v1';
 const admin={apikey:config.SERVICE_ROLE_KEY,authorization:'Bearer '+config.SERVICE_ROLE_KEY,'content-type':'application/json'};
 async function auth(path,options){const response=await fetch(base+path,options);if(!response.ok)throw Error('Local Auth request failed');return response.json();}
 const at=Date.now(),starts=new Date(at-60000).toISOString(),ends=new Date(at+3600000).toISOString(),updated=new Date(at-120000).toISOString();
-let created=false,devices,directory,bindings,folder,authId;
+let created=false,devices,directory,bindings,folder,authId,worker;
 try{
  // CREATE without IF NOT EXISTS refuses to touch an existing shifts table.
  sql(`BEGIN; CREATE TABLE public.shifts(id text PRIMARY KEY,scheduled_start timestamptz,scheduled_end timestamptz,status text,updated_at timestamptz);
@@ -41,8 +41,8 @@ try{
  const session=await auth('/token?grant_type=password',{method:'POST',headers:{apikey:config.ANON_KEY,'content-type':'application/json'},body:JSON.stringify({email,password})});
  directory.addVendor({vendorId:'vendor',kind:'company',active:true});directory.addGuard({guardId:'guard',vendorId:'vendor',authSubject:authId,active:true});
  bindings.approve({opsShiftId:'synthetic-shift',guardId:'guard',vendorId:'vendor',siteId:'site',authSubject:authId,revision:1,active:true},{operator:'local-smoke',reason:'Synthetic integration test'});
- const worker=createOpsRefreshWorker({loadBindings:()=>bindings.list(),readShifts:read,sync:new OpsAssignmentSync(devices),directory});
- if((await worker.run()).processed!==1)throw Error('Initial refresh failed');
+ worker=openLocalOpsRefresh({mode:'local',config,bindingsPath:join(folder,'bindings.sqlite'),sync:new OpsAssignmentSync(devices),directory,intervalMs:1000});
+ if((await worker.start()).processed!==1)throw Error('Initial refresh failed');
  const original=JSON.parse(devices.db.prepare('SELECT body FROM assignments').get().body);
  const keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),spki=keys.publicKey.export({type:'spki',format:'der'}),thumbprint=createHash('sha256').update(spki).digest('hex');
  devices.enroll({deviceId:'synthetic-phone',mode:'site',siteId:'site',active:true,revoked:false,publicKeySpki:spki.toString('base64url')});
@@ -57,12 +57,14 @@ try{
  if((await request('/v1/assignments',proof)).status!==400)throw Error('Device proof replay accepted');
  console.log('PASS: real local Auth and enrolled-device proof expose the imported assignment and reject replay');
  sql(`UPDATE public.shifts SET status='cancelled',updated_at='${new Date(at).toISOString()}' WHERE id='synthetic-shift';`);
- if((await worker.run()).processed!==1)throw Error('Cancellation refresh failed');
+ const deadline=Date.now()+5000;
+ while(JSON.parse(devices.db.prepare('SELECT body FROM assignments WHERE id=?').get(original.assignmentId).body).active&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,50));
  const cancelled=JSON.parse(devices.db.prepare('SELECT body FROM assignments WHERE id=?').get(original.assignmentId).body);
  if(cancelled.active!==false||cancelled.startsAt!==original.startsAt||cancelled.endsAt!==original.endsAt)throw Error('Cancellation history changed');
  const after=await request('/v1/assignments',await deviceProof());if(after.status!==200||(await after.json()).assignments.length!==0)throw Error('Cancelled assignment remained available to phone');
- console.log('PASS: persisted approval + real REST + roster check + assignment creation and cancellation at phone API');
+ console.log('PASS: recurring timer + persisted approval + real REST + assignment creation and cancellation at phone API');
 }finally{
+ await worker?.close();
  if(authId){await auth('/admin/users/'+authId,{method:'DELETE',headers:admin});console.log('PASS: temporary Auth account removed');}
  devices?.close();directory?.close();bindings?.close();if(folder)rmSync(folder,{recursive:true,force:true});
  if(created){

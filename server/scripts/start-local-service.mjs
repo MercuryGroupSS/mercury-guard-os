@@ -1,3 +1,4 @@
+import {openLocalOpsRefresh} from '../local-ops-refresh.mjs';
 import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
@@ -18,6 +19,8 @@ const directory=await openLocalGuardDirectory({config,mode:identityMode,sqlitePa
 let assignmentStore;
 try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,sqlitePath:new URL('devices.sqlite',dir).pathname});}catch(error){await directory.close();throw error;}
 const {devices}=assignmentStore;
+let opsRefresh;
+try{opsRefresh=openLocalOpsRefresh({mode:process.env.MERCURY_OPS_REFRESH??'off',config,source:process.env.MERCURY_OPS_REFRESH==='remote'?{url:process.env.MERCURY_OPS_URL,serverKey:process.env.MERCURY_OPS_SERVER_KEY}:undefined,bindingsPath:new URL('ops-bindings.sqlite',dir).pathname,sync:assignmentStore.sync,directory});}catch(error){await assignmentStore.close();await directory.close();throw error;}
 const store=new DurableIngest(new URL('events.sqlite',dir).pathname);
 const grantIssuer=new ShiftGrantIssuer({path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
 const dashboardOutbox=new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
@@ -27,15 +30,15 @@ const dispatch=new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
 const shiftLifecycle=new ShiftLifecycle(new URL('shifts.sqlite',dir).pathname);
 const dashboardBridge=createDashboardBridge({store,bindings:dashboardBindings,outbox:dashboardOutbox,shiftLifecycle});
 const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle});
-try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());}
-catch(error){shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
+try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}
+catch(error){await opsRefresh.close();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;
 function pumpBridge(){if(bridgeRun)return;bridgeRun=dashboardBridge.run().catch(()=>console.error('Local dashboard projection failed; source records retained.')).finally(()=>{bridgeRun=null;});}
 pumpBridge();const bridgeTimer=setInterval(pumpBridge,30000);bridgeTimer.unref();
 // Report aggregate scheduler failures without printing guard identities or credentials.
 let reportedFailures=0;
-const healthTimer=setInterval(()=>{const status=service.schedulerStatus();if(status&&status.totalFailures>reportedFailures){reportedFailures=status.totalFailures;console.error('Check-in scheduler recorded failures: '+JSON.stringify(status));}},60000);
+const healthTimer=setInterval(()=>{const status=service.schedulerStatus();if(status&&status.totalFailures>reportedFailures){reportedFailures=status.totalFailures;console.error('Check-in scheduler recorded failures: '+JSON.stringify(status));}const ops=opsRefresh.status();if(ops.enabled&&ops.failed>0)console.error('Ops refresh failures; prior assignments retained: '+JSON.stringify(ops));},60000);
 healthTimer.unref();
 let stopping=false;
-async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await service.stop();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();process.exit(0);}
+async function stop(){if(stopping)return;stopping=true;clearInterval(healthTimer);clearInterval(bridgeTimer);await bridgeRun;await opsRefresh.close();await service.stop();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();process.exit(0);}
 process.on('SIGINT',stop);process.on('SIGTERM',stop);

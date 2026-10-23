@@ -400,3 +400,7 @@ Added transactional PostgreSQL assignment synchronization, revocation watermarks
 ### PostgreSQL local service composition verified
 
 The local runner can now select PostgreSQL identity/device/assignment/sync components together through MERCURY_IDENTITY_STORE=postgres, sharing one restricted pool. Default SQLite behavior remains; no existing records are migrated automatically. Real HTTP plus real local Supabase Auth verified device proof, assignment import, confirmed shift start, signed scoped capture grant, cancellation closeout, replay rejection, revocation and vendor suspension. Synthetic rows cleaned up; 130 server tests pass. Shift/event/grant persistence still uses SQLite, and recurring Ops imports are not yet configured in the runner. No hosted deployment or physical-device testing performed.
+
+### Recurring Ops refresh composition
+
+Added explicit off/local/remote Ops refresh modes to the local runner, default off. Refresh uses persisted approvals, scoped read-only GET requests, the selected assignment adapter, immediate/30-second polling and shutdown draining. No remote source enabled. 132 server tests passed, plus a real local REST/Auth test confirmed timer-driven cancellation became unavailable at the assignment endpoint. Fixtures cleaned up. Remote credentials/approved real mappings, hosted approval administration and outbound integration remain outstanding.
