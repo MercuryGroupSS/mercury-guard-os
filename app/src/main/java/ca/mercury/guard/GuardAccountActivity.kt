@@ -21,6 +21,7 @@ import org.json.JSONObject
 /** Foreground-only account pilot. Leaving the activity discards the session. */
 class GuardAccountActivity : Activity() {
  private var config: GuardServiceConfig? = null
+ private var loginParticles:ParticleLoginView?=null
  private var session: GuardAccountClient.Session? = null
  private var captureGrant: VerifiedShiftGrant? = null
  private var captureBinding: GrantBinding? = null
@@ -47,9 +48,12 @@ class GuardAccountActivity : Activity() {
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Return"){finish()} }
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
- override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()}}
+ override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()};loginParticles?.startMotion()}
+ override fun onPause(){loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
+ override fun onDestroy(){loginParticles?.stopMotion();super.onDestroy()}
  private fun clearSession(){captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun screen(title:String,detail:String){
+  loginParticles?.stopMotion();loginParticles=null
   password=null
   val scroll=ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.rgb(244,248,250))}
   root=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(dp(24),dp(32),dp(24),dp(24))}
@@ -74,6 +78,13 @@ class GuardAccountActivity : Activity() {
    }
   }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Close"){finish()};return}
   screen("GUARD SIGN-IN","Verify on this device, then enter your individual guard ID and password. Device biometrics do not identify your guard account.\nService: ${c.endpoint}")
+  loginParticles=ParticleLoginView(this).apply{
+   contentDescription="Mercury One decorative particle face. Verify with biometrics to continue; this animation does not recognize your identity."
+   importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
+   isClickable=false;isFocusable=false
+  }
+  root.addView(loginParticles,2,LinearLayout.LayoutParams(-1,dp(280)))
+  loginParticles?.startMotion()
   button("Verify with biometrics") { biometric() };button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
  }
  private fun enrollmentDetails(){
@@ -85,17 +96,18 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){status.text="Enrollment details could not be read. Existing identity remains preserved."}
  }
  private fun biometric(){
+  if(signal!=null)return
   val stamp=generation
   try {
    check(DeviceIdentity(this).publicIdentity()!=null)
-   val cancellation=CancellationSignal();signal=cancellation
-   val builder=BiometricPrompt.Builder(this).setTitle("Unlock guard sign-in").setNegativeButton("Cancel",mainExecutor){_,_->signal=null}
+   val cancellation=CancellationSignal();signal=cancellation;loginParticles?.setSigningIn(true)
+   val builder=BiometricPrompt.Builder(this).setTitle("Unlock guard sign-in").setNegativeButton("Cancel",mainExecutor){_,_->signal=null;loginParticles?.setSigningIn(false)}
    if(Build.VERSION.SDK_INT>=30)builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
    builder.build().authenticate(cancellation,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
     override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){if(stamp==generation&&!isFinishing){signal=null;credentials()}}
-    override fun onAuthenticationError(code:Int,message:CharSequence){if(stamp==generation){signal=null;status.text="Biometric verification was not completed. Try again when ready."}}
+    override fun onAuthenticationError(code:Int,message:CharSequence){if(stamp==generation){signal=null;loginParticles?.setSigningIn(false);status.text="Biometric verification was not completed. Try again when ready."}}
    })
-  }catch(_:Exception){status.text="This phone needs an initialized installation identity and an available secure biometric. Ask your administrator to complete setup."}
+  }catch(_:Exception){signal=null;loginParticles?.setSigningIn(false);status.text="This phone needs an initialized installation identity and an available secure biometric. Ask your administrator to complete setup."}
  }
  private fun credentials(){
   screen("YOUR GUARD ACCOUNT","Device verified. Enter your individual guard ID, not a company vendor ID.")

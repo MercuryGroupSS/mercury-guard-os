@@ -278,3 +278,9 @@ LauncherActivity now selects the account workflow when valid administrator-packa
 The configured account flow can prepare a new installation signing identity and display its public key/fingerprint and configured device ID for administrator review. The private key remains in Android Keystore. Preparation does not enroll the device or create a guard account; signed server challenge/enrollment checks still gate access. An unreadable existing identity is preserved rather than replaced. Public enrollment details remain accessible from sign-in.
 
 Local APK/test APK build, JVM tests and lint pass. Added instrumentation checks cover valid/missing/invalid trust routing and exported-component boundaries; full emulator validation remains pending. This source follows the saved v0.28 candidate and is not yet installed on the Fold. Dedicated-device policy, production enrollment and physical acceptance remain outstanding.
+
+## v0.28 CI closure and configured sign-in branding
+
+The exact v0.28 source 53fbbaa passed all jobs in run 39999653726: build, API 28, API 35 and HTTPS. The saved Preview APK checksum remains unchanged. An additive CI verification supplement and cumulative-brief update record this result without rewriting the immutable source/review bundles. This is emulator/source verification, not physical acceptance or live provisioning.
+
+Subsequent source now reuses the existing Mercury One particle-face renderer in configured guard sign-in. The decorative visual is separate from the accessible biometric button and never represents facial recognition. Motion stops when leaving the screen, pausing or destroying the activity, and biometric cancellation resets the animation. Repeated taps cannot open concurrent biometric prompts. The existing reduced-motion renderer remains in use. New configured-screen visual acceptance is still pending and this later source is not included in the saved v0.28 APK.
