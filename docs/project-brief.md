@@ -302,3 +302,9 @@ Instrumentation adds corruption-blocking and encoded-size checks alongside the e
 ### Vendor-wide access suspension — October 23
 
 Added persistent administrative vendor activation/suspension to the isolated local directory. Company and individual vendor types retain separate guard authentication subjects. Suspending a vendor denies all linked guard logins and server identity resolution; reactivation does not reactivate individually disabled guards. Restart, unaffected-vendor isolation, company-ID login denial and individual-vendor coverage pass. Full local server suite: 109 tests passed. No live vendor records or dashboard application were changed; cached/offline handset authority is not synchronously revoked by this local method.
+
+### Integrated vendor-access verification — October 23
+
+Extended the real local Supabase Auth smoke flow to suspend the synthetic vendor after confirmed clock-in and signed incident ingestion. New login, existing-token profile access, device challenge and signed batch retry all deny access while suspended. Reactivation restores eligible access and returns the original receipt without duplicating the incident. Shift restart recovery, early exit and device revocation checks also pass; the temporary Auth account is removed. This is isolated local evidence, not live Ops integration.
+
+GitHub Android run 40001957185 for source 915e306 passed build, API 28 instrumentation, API 35 instrumentation and HTTPS integration. This verifies the newer shift-store integrity changes; it does not change the immutable v0.28 review bundle or establish physical Fold acceptance.

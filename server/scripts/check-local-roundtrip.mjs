@@ -107,6 +107,18 @@ try {
   directory.setGuardActive('synthetic-guard',false);if((await send()).status!==401)throw Error('Disabled guard uploaded');
   directory.setGuardActive('synthetic-guard',true);
   console.log('PASS: disabled roster identity denies batch retries');
+  directory.setVendorActive('synthetic-vendor',false);
+  if((await profile()).status!==403)throw Error('Suspended vendor retained authenticated profile');
+  if((await send()).status!==401)throw Error('Suspended vendor uploaded with existing grant');
+  if((await post('/v1/device-challenge',{device_id:'synthetic-phone'})).status!==403)throw Error('Suspended vendor requested device challenge');
+  const suspendedLogin=await fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:'synthetic-guard',password})});
+  if(suspendedLogin.status!==401)throw Error('Suspended vendor logged in');
+  if(store.count()!==1)throw Error('Suspension altered recorded incident');
+  directory.setVendorActive('synthetic-vendor',true);
+  if((await profile()).status!==200)throw Error('Vendor reactivation did not restore eligible guard');
+  response=await send();
+  if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Vendor reactivation lost original receipt');
+  console.log('PASS: vendor suspension denies login, existing session, device challenge and batch retry; reactivation preserves receipt');
   await service.stop();started=false;store.close();shiftLifecycle.close();shiftLifecycle=new ShiftLifecycle(join(dir,'shifts.sqlite'));store=new DurableIngest(join(dir,'events.sqlite'));service=createLocalService({config,store,directory,devices,grantIssuer,shiftLifecycle});origin=await service.start();started=true;
   response=await send();if(response.status!==200||JSON.stringify(await response.json())!==JSON.stringify(receipt)||store.count()!==1)throw Error('Restart retry failed');
   if(JSON.stringify(await (await transition(startRequest)).json())!==JSON.stringify(startReceipt))throw Error('Restart lost clock-in receipt');
