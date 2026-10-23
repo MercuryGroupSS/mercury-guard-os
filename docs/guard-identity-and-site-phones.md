@@ -97,3 +97,12 @@ The local pilot stores media bytes in SQLite alongside immutable event attributi
 Sixty-five Node tests pass. Android GuardTransport now has a bounded HTTPS photo upload method and exact receipt checks, with instrumentation tests pending. The encrypted queue now persists separate media receipts, and Send queued records retries up to three pending photo files after metadata acceptance. Camera UI, check-in linkage and background retry are not yet wired into the account flow. The earlier expanded patrol HTTPS and API 28/API 35 suites all passed in run 39987088462.
 
 The Android HTTPS test now includes a generated JPEG, photo metadata ingestion, repeated media upload and a separate durable photo receipt. This expanded test is pending execution. The final media queue migration passed local APK and instrumentation APK compilation, JVM tests and lint (74 tasks, BUILD SUCCESSFUL). Emulator execution of the expanded media tests remains pending.
+
+
+## Authorized camera capture
+
+The assignment screen now offers explicit consent and external-camera capture. Login credentials clear before launching the camera, including multi-window launches. Only one pending photo retains the original verified assignment grant in memory; camera completion must still pass grant expiry, boot and device binding checks before the encrypted event is committed. Cancellation, invalid output or expired authority discards the temporary photo. Process recreation discards abandoned account-camera output rather than inventing authorization. A successful save requires the guard to sign in again before sending. No upload occurs from the camera callback.
+
+This is a standalone authorized photo, not yet a timed check-in or an incident attachment. Physical camera testing remains deferred. The media delivery commit ef73dc7 passed server CI; Android media integration is running in 39989198947.
+
+Local camera APK/test APK compilation, unit checks and lint passed. Unsaved incident text prevents camera launch so credential-clearing cannot silently discard it. Camera lifecycle behavior still needs an attended device check.

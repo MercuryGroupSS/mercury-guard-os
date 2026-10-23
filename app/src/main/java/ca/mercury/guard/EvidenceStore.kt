@@ -16,6 +16,7 @@ class EvidenceStore(private val context: Context) {
   val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
   BitmapFactory.decodeFile(source.absolutePath, bounds)
   require(bounds.outWidth > 0 && bounds.outHeight > 0 && bounds.outMimeType == "image/jpeg") { "Camera did not return a valid JPEG" }
+  require(bounds.outWidth <= 50000 && bounds.outHeight <= 50000 && bounds.outWidth.toLong() * bounds.outHeight <= 100000000L) { "Photo dimensions exceed the service limit" }
   val bytes = source.readBytes()
   val id = UUID.randomUUID().toString()
   val destination = File(directory, "$id.enc")

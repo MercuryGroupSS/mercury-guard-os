@@ -1,5 +1,12 @@
 package ca.mercury.guard
 
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.ClipData
+import android.provider.MediaStore
+import androidx.core.content.FileProvider
+import java.io.File
+import java.util.UUID
 import android.app.Activity
 import android.hardware.biometrics.BiometricPrompt
 import android.hardware.biometrics.BiometricManager
@@ -22,6 +29,9 @@ class GuardAccountActivity : Activity() {
  private var generation=0
  private var stopped=false
  private var busy=false
+ // One-shot capture authority survives the external camera; account credentials never do.
+ private data class PendingPhoto(val file:File,val binding:GrantBinding,val grant:VerifiedShiftGrant,val anchor:ServerTimeAnchor)
+ private var pendingPhoto:PendingPhoto?=null
  private var password: EditText?=null
  private lateinit var root: LinearLayout
  private lateinit var status: TextView
@@ -30,6 +40,8 @@ class GuardAccountActivity : Activity() {
  override fun onCreate(state:Bundle?) {
   super.onCreate(state)
   window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+  // A recreated process has no verified capture authority. Discard abandoned temporary output.
+  File(cacheDir,"capture/account").listFiles()?.forEach{it.delete()}
   try { config=GuardServiceConfig.load(this); startScreen() }
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Return"){finish()} }
  }
@@ -154,11 +166,55 @@ class GuardAccountActivity : Activity() {
     note.text.clear();status.text="Incident saved encrypted on this phone. It has not been sent."
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
+  button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
   button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
   button("Sign out"){startScreen()}
+ }
+ private fun confirmPhoto(){
+  AlertDialog.Builder(this).setTitle("Capture photo evidence")
+   .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Sending queued records uploads it to the configured pilot service. Camera use signs you out; sign in again to send it.")
+   .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->openAuthorizedCamera()}.show()
+ }
+ private fun openAuthorizedCamera(){
+  if(pendingPhoto!=null)return
+  val binding=captureBinding?:return;val grant=captureGrant?:return;val anchor=captureAnchor?:return
+  val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1)
+  if(!grant.permits("photo",binding,SystemClock.elapsedRealtime(),boot)){status.text="Refresh assignment authorization before taking a photo.";return}
+  val dir=File(cacheDir,"capture/account").apply{mkdirs()};val file=File(dir,"${UUID.randomUUID()}.jpg")
+  val uri=FileProvider.getUriForFile(this,"$packageName.files",file)
+  try{
+   pendingPhoto=PendingPhoto(file,binding,grant,anchor)
+   clearSession() // Also clear credentials when a camera opens in multi-window without onStop.
+   startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply{
+    putExtra(MediaStore.EXTRA_OUTPUT,uri);clipData=ClipData.newRawUri("Camera output",uri)
+    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+   },403)
+  }catch(_:Exception){pendingPhoto=null;file.delete();revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION);status.text="Camera unavailable. No photo was saved."}
+ }
+ override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
+  super.onActivityResult(requestCode,resultCode,data)
+  if(requestCode!=403)return
+  val pending=pendingPhoto?:return;pendingPhoto=null
+  val uri=FileProvider.getUriForFile(this,"$packageName.files",pending.file)
+  var retained:String?=null;var committed=false
+  var message="Photo cancelled. Sign in again when ready."
+  try{
+   if(resultCode==RESULT_OK){
+    val metadata=EvidenceStore(this).savePhoto(pending.file);retained=metadata.getString("evidence_id")
+    val observed=Math.addExact(pending.anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),pending.anchor.elapsedMillis))
+    val db=ScopedEventStore(this)
+    try{db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed)}finally{db.close()}
+    committed=true;message="Photo saved encrypted for ${pending.binding.guardId}. Sign in again to send queued records."
+   }
+  }catch(_:Exception){message="Photo not saved. Authorization may have expired or the camera output was invalid. Sign in and try again."}
+  finally{
+   if(!committed)retained?.let{EvidenceStore(this).remove(it)}
+   revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION);pending.file.delete()
+  }
+  startScreen();Toast.makeText(this,message,Toast.LENGTH_LONG).show()
  }
  private fun patrolScreen(item:JSONObject){
   val binding=captureBinding?:return
