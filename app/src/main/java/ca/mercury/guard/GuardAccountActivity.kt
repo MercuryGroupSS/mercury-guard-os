@@ -206,8 +206,16 @@ class GuardAccountActivity : Activity() {
        message="Pilot service accepted ${ids.size} record(s). Dashboard delivery is not yet connected. ${db.pendingCount(guardId)} of your record(s) remain queued."
       }
      }
+     var mediaSent=0
+     for(record in db.pendingPhotos(guardId)){
+      val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+      val bytes=EvidenceStore(this).readPhoto(data.getString("evidence_id"))
+      val mediaReceipt=GuardTransport(c.endpoint).sendPilotEvidence(active.bearer(),event.getString("event_id"),data,bytes)
+      db.recordMediaReceipt(guardId,mediaReceipt);mediaSent++
+     }
+     if(mediaSent>0)message+=" $mediaSent photo file(s) accepted by the pilot service."
     }finally{db.close()}
-   }catch(_:Exception){}
+   }catch(_:Exception){message="Some records or photo files remain queued. Existing receipts and local evidence were preserved; retry when authorized."}
    val result=message
    runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){busy=false;status.text=result}}
   }.start()

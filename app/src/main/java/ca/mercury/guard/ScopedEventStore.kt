@@ -12,12 +12,13 @@ import java.util.UUID
 class ScopedEventStore internal constructor(context: Context, name: String = "mercury_scoped_events.db",
  private val elapsedNow: () -> Long = { android.os.SystemClock.elapsedRealtime() },
  private val bootNow: () -> Int = { android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1) }
-) : SQLiteOpenHelper(context,name,null,2) {
+) : SQLiteOpenHelper(context,name,null,3) {
  private val cipher = DeviceCipher()
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
   db.execSQL("CREATE TABLE pending (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)")
   createGuardPending(db)
+  createMediaReceipts(db)
  }
  override fun onConfigure(db: SQLiteDatabase) {
   super.onConfigure(db)
@@ -32,8 +33,11 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  }
  private fun createGuardPending(db:SQLiteDatabase){db.execSQL("CREATE TABLE pending_by_guard (owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  override fun onUpgrade(db: SQLiteDatabase,oldVersion: Int,newVersion: Int) {
-  check(oldVersion==1 && newVersion==2);createGuardPending(db)
+  check(oldVersion in 1..2 && newVersion==3)
+  if(oldVersion==1)createGuardPending(db)
+  createMediaReceipts(db)
  }
+ private fun createMediaReceipts(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS media_receipts (event_id TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  private fun owner(guardId:String):String {
   require(guardId.isNotBlank() && guardId.length<=200)
   return java.security.MessageDigest.getInstance("SHA-256").digest(guardId.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
@@ -139,6 +143,31 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    if(guardId==null)db.delete("pending","id=1",null) else db.delete("pending_by_guard","owner=?",arrayOf(owner(guardId)))
    db.setTransactionSuccessful()
   } finally {db.endTransaction()}
+ }
+ fun pendingPhotos(guardId:String):List<JSONObject> {
+  val result=mutableListOf<JSONObject>()
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1 ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
+   if(binding(record.getJSONObject("scope")).guardId!=guardId)continue
+   val event=record.getJSONObject("event");if(event.getString("kind")!="photo_evidence")continue
+   val id=event.getString("event_id")
+   val acknowledged=readableDatabase.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{r->
+    if(!r.moveToFirst())false else {GuardTransport.validateEvidenceReceipt(decrypt(r.getString(0),"mercury-media-receipt:$id"),id,event.getJSONObject("data"));true}
+   }
+   if(!acknowledged)result.add(record)
+   if(result.size>=3)break
+  }}
+  return result
+ }
+ fun recordMediaReceipt(guardId:String,receipt:JSONObject){
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   val id=receipt.getString("event_id")
+   val record=pendingPhotos(guardId).firstOrNull{it.getJSONObject("event").getString("event_id")==id}?:error("No matching pending photo")
+   GuardTransport.validateEvidenceReceipt(receipt,id,record.getJSONObject("event").getJSONObject("data"))
+   db.insertOrThrow("media_receipts",null,ContentValues().apply{put("event_id",id);put("body",cipher.encrypt(receipt.toString().toByteArray(Charsets.UTF_8),"mercury-media-receipt:$id"))})
+   db.setTransactionSuccessful()
+  }finally{db.endTransaction()}
  }
  fun pendingCount(guardId:String?=null):Int {
   if(guardId==null)return readableDatabase.rawQuery("SELECT COUNT(*) FROM captured WHERE pilot_receipted=0",null).use{it.moveToFirst();it.getInt(0)}

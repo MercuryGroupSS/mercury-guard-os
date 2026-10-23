@@ -36,7 +36,33 @@ class GuardTransport(private val endpoint: String) {
    return validatePilotReceipt(JSONObject(body), expectedBatchId, expectedIds)
   } finally { connection.disconnect() }
  }
+ fun sendPilotEvidence(accessToken:String,eventId:String,metadata:JSONObject,bytes:ByteArray):JSONObject {
+  require(java.util.UUID.fromString(eventId).toString()==eventId)
+  require(accessToken.isNotBlank()&&accessToken.length<=16384&&accessToken.none{it.isWhitespace()})
+  require(bytes.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES && metadata.getLong("bytes")==bytes.size.toLong())
+  val hash=java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
+  require(metadata.getString("sha256")==hash)
+  val connection=URL(endpoint.trimEnd('/')+"/v1/evidence/"+eventId).openConnection() as HttpURLConnection
+  try{
+   connection.requestMethod="POST";connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=10000;connection.doOutput=true
+   connection.setRequestProperty("Authorization","Bearer $accessToken");connection.setRequestProperty("Content-Type","image/jpeg");connection.setFixedLengthStreamingMode(bytes.size)
+   connection.outputStream.use{it.write(bytes)}
+   check(connection.responseCode==200){"Evidence not accepted (HTTP ${connection.responseCode})"}
+   val raw=connection.inputStream.use{input->
+    val out=java.io.ByteArrayOutputStream();val chunk=ByteArray(1024)
+    while(true){val count=input.read(chunk);if(count<0)break;check(out.size()+count<=8192);out.write(chunk,0,count)}
+    out.toString("UTF-8")
+   }
+   return JSONObject(raw).also{validateEvidenceReceipt(it,eventId,metadata)}
+  }finally{connection.disconnect()}
+ }
  companion object {
+  fun validateEvidenceReceipt(receipt:JSONObject,eventId:String,metadata:JSONObject){
+   require(receipt.keys().asSequence().toSet()==setOf("event_id","evidence_id","sha256","bytes","status"))
+   require(receipt.get("event_id")==eventId&&receipt.get("evidence_id")==metadata.get("evidence_id")&&receipt.get("sha256")==metadata.get("sha256")&&receipt.get("status")=="evidence_accepted_local_only")
+   val size=receipt.get("bytes");require(size is Int || size is Long);require((size as Number).toLong()==metadata.getLong("bytes"))
+  }
+
   fun validatePilotReceipt(receipt: JSONObject, expectedBatchId: String, expectedIds: Set<String>): PilotReceipt {
    require(expectedIds.isNotEmpty() && expectedIds.size <= 100)
    require(receipt.keys().asSequence().toSet() == setOf("batch_id","event_ids","status"))

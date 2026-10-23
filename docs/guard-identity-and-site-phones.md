@@ -87,3 +87,13 @@ Guards may select checkpoints in any order. The encrypted capture store prevents
 Sixty-two Node tests pass, including out-of-order checkpoint choices, unknown checkpoints, old/new route revision checks, duplicate rejection and immutable policy snapshots. Android tests cover local order independence, duplicate rejection and restart persistence. The HTTPS test now covers an incident and two checkpoints. Emulator execution is still pending for these additions; physical testing is deferred.
 
 The authorized-patrol source passed local APK/test APK compilation, JVM tests and lint using fresh temporary generated outputs after a duplicate generated filename invalidated the prior local output directory. See local-build-recovery.md. The expanded HTTPS patrol and API 28/API 35 suites are still running in workflow 39987088462; no result is inferred from compilation.
+
+## Separate photo evidence delivery
+
+Photo metadata is validated before grant-backed event ingestion. POST /v1/evidence/<event-id> then requires the authenticated owning guard, original vendor and capture grant, a still-authorized device/assignment, and a previously accepted photo event. The body is bounded to the recorded byte count and 20 MB maximum. SHA-256 must match the signed metadata. Access is rechecked after reading the body. A separate evidence_accepted_local_only receipt records media acceptance; a metadata receipt is not photo delivery.
+
+The local pilot stores media bytes in SQLite alongside immutable event attribution. It remains a plaintext synthetic-data server store, not approved production media hosting. The endpoint does not expose a public download route. Hash verification does not establish that a photo is authentic or that its claimed dimensions are truthful; server image decoding and production storage/access/retention policy remain outstanding.
+
+Sixty-five Node tests pass. Android GuardTransport now has a bounded HTTPS photo upload method and exact receipt checks, with instrumentation tests pending. The encrypted queue now persists separate media receipts, and Send queued records retries up to three pending photo files after metadata acceptance. Camera UI, check-in linkage and background retry are not yet wired into the account flow. The earlier expanded patrol HTTPS and API 28/API 35 suites all passed in run 39987088462.
+
+The Android HTTPS test now includes a generated JPEG, photo metadata ingestion, repeated media upload and a separate durable photo receipt. This expanded test is pending execution. The final media queue migration passed local APK and instrumentation APK compilation, JVM tests and lint (74 tasks, BUILD SUCCESSFUL). Emulator execution of the expanded media tests remains pending.

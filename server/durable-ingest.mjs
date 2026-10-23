@@ -1,3 +1,4 @@
+import {photoMetadata} from './photo-metadata.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { verifyScopedBatch } from './verify-batch.mjs';
@@ -10,7 +11,8 @@ export class DurableIngest {
       CREATE TABLE IF NOT EXISTS events(device TEXT, id TEXT, sequence INTEGER, digest TEXT, body TEXT,
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
       CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
-      CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));`);
+      CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));
+      CREATE TABLE IF NOT EXISTS media(device TEXT,event_id TEXT,sha256 TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(device,event_id));`);
   }
   ingest(raw, trustedContext, now) {
     // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
@@ -46,6 +48,20 @@ export class DurableIngest {
       this.db.prepare('INSERT INTO receipts VALUES(?,?,?,?)').run(device,batch.batch_id,payloadHash,JSON.stringify(receipt));
       this.db.exec('COMMIT'); return receipt;
     } catch(error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+  photoForGuard(guardId,eventId){
+    const rows=this.db.prepare("SELECT body FROM events WHERE id=? AND json_extract(body,'$.scope.guard_id')=?").all(eventId,guardId);
+    if(rows.length!==1)return null;
+    const record=JSON.parse(rows[0].body);return record.event.kind==='photo_evidence'?record:null;
+  }
+  retainPhoto(record,bytes){
+    const meta=photoMetadata(record.event.data);
+    if(bytes.length!==meta.bytes||createHash('sha256').update(bytes).digest('hex')!==meta.sha256)throw Error('Evidence mismatch');
+    const device=record.scope.device_thumbprint,eventId=record.event.event_id;
+    const prior=this.db.prepare('SELECT sha256,length(bytes) AS size FROM media WHERE device=? AND event_id=?').get(device,eventId);
+    if(prior){if(prior.sha256!==meta.sha256||prior.size!==bytes.length)throw Error('Evidence conflict');}
+    else this.db.prepare('INSERT INTO media VALUES(?,?,?,?)').run(device,eventId,meta.sha256,bytes);
+    return {event_id:eventId,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};
   }
   count() { return this.db.prepare('SELECT COUNT(*) AS n FROM events').get().n; }
   close() { this.db.close(); }

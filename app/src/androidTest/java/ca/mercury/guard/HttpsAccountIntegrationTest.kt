@@ -52,6 +52,11 @@ class HttpsAccountIntegrationTest {
    val route=response.getJSONObject("patrol_route");assertEquals("fixture-route",route.getString("routeId"))
    db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"))
    db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"))
+   val bitmap=android.graphics.Bitmap.createBitmap(1,1,android.graphics.Bitmap.Config.ARGB_8888)
+   val photoBytes=java.io.ByteArrayOutputStream().use{out->assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,out));out.toByteArray()};bitmap.recycle()
+   val photo=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("bytes",photoBytes.size).put("width",1).put("height",1).put("capture","camera_intent")
+    .put("sha256",java.security.MessageDigest.getInstance("SHA-256").digest(photoBytes).joinToString(""){"%02x".format(it.toInt() and 255)})
+   val photoEvent=db.capture("photo_evidence",photo,binding,grant,identity,response.getLong("server_time_ms"))
    val proof=db.prepareSigned(identity,"mercury-local","fixture-guard")!!
    val batch=JSONObject(String(Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
    val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
@@ -59,7 +64,11 @@ class HttpsAccountIntegrationTest {
    val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids)
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"),"fixture-guard")
-   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(3,fixture("/test/receipts").getInt("count"))
+   assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(4,fixture("/test/receipts").getInt("count"))
+   val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes)
+   assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
+   assertEquals(1,fixture("/test/receipts").getInt("media_count"))
+   db.recordMediaReceipt("fixture-guard",media);assertTrue(db.pendingPhotos("fixture-guard").isEmpty())
    var rejected=false;try{fixture("/test/receipts",host="127.0.0.1")}catch(_:javax.net.ssl.SSLException){rejected=true};assertTrue("Untrusted host accepted",rejected)
    session.clear();try{client.profile(session);fail("Cleared session reused")}catch(_:IllegalStateException){}
   }finally{

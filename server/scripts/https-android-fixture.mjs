@@ -46,8 +46,8 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
    devices.assign({assignmentId:'fixture-shift',guardId:'fixture-guard',vendorId:'fixture-vendor',siteId:'fixture-site',active:true,startsAt:Date.now()-1000,endsAt:Date.now()+600000,patrolRoute:{routeId:'fixture-route',revision:1,checkpoints:[{id:'entrance',label:'Entrance'},{id:'perimeter',label:'Perimeter'}]}});
    res.setHeader('content-type','application/json');res.end('{}');return;
   }
-  if(req.url==='/test/receipts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({count:store.count()}));return;}
-  const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>360000)throw Error('large');chunks.push(chunk);}
+  if(req.url==='/test/receipts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({count:store.count(),media_count:store.db.prepare('SELECT count(*) AS n FROM media').get().n}));return;}
+  const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>(req.url.startsWith('/v1/evidence/')?20*1024*1024:360000))throw Error('large');chunks.push(chunk);}
   const response=await fetch(origin+req.url,{method:req.method,headers:{'content-type':req.headers['content-type']??'application/json',authorization:req.headers.authorization??''},...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})});
   res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
  }catch{res.writeHead(400);res.end('{}');}

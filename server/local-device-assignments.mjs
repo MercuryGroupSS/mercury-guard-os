@@ -31,6 +31,7 @@ export class LocalDeviceAssignments {
   this.db.prepare('INSERT INTO devices VALUES(?,?,?)').run(stored.deviceId,k.thumbprint,JSON.stringify(stored));
  }
  device(deviceId){const row=this.db.prepare('SELECT body FROM devices WHERE id=?').get(deviceId);return row?JSON.parse(row.body):null;}
+ deviceByThumbprint(thumbprint){const row=this.db.prepare('SELECT body FROM devices WHERE thumbprint=?').get(thumbprint);return row?JSON.parse(row.body):null;}
  revoke(deviceId){const d=this.device(deviceId);if(!d)throw Error('Unknown device');d.revoked=true;d.revocationVersion=(d.revocationVersion??1)+1;this.db.prepare('UPDATE devices SET body=? WHERE id=?').run(JSON.stringify(d),deviceId);}
  assign(a){
   if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');

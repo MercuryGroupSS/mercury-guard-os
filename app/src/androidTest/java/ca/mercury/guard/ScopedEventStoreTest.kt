@@ -100,4 +100,19 @@ class ScopedEventStoreTest {
   try{assertTrue(reopened.checkpointRecorded(a,"route",1,"perimeter"));assertTrue(reopened.checkpointRecorded(a,"route",1,"entrance"));assertEquals(2,reopened.pendingCount(a.guardId))}finally{reopened.close()}
  }}
 
+ @Test fun photoMetadataReceiptDoesNotClearPendingMediaAndMediaReceiptSurvivesRestart(){isolated{store,identity,name->
+  val a=binding(identity);val permission=VerifiedShiftGrant("photo-grant",a,setOf("photo"),100,1000,1)
+  val data=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("sha256","a".repeat(64)).put("bytes",100)
+  val eventId=store.capture("photo_evidence",data,a,permission,identity,10000)
+  assertTrue(store.pendingPhotos(a.guardId).isEmpty())
+  val batch=payload(store.prepareSigned(identity,"mercury-local",a.guardId)!!);store.recordPilotReceipt(receipt(batch),a.guardId)
+  assertEquals(0,store.pendingCount(a.guardId));assertEquals(1,store.pendingPhotos(a.guardId).size)
+  val media=JSONObject(data.toString()).put("event_id",eventId).put("status","evidence_accepted_local_only")
+  rejected{store.recordMediaReceipt("other-guard",media)}
+  rejected{store.recordMediaReceipt(a.guardId,JSONObject(media.toString()).put("sha256","b".repeat(64)))}
+  store.recordMediaReceipt(a.guardId,media);store.close()
+  val reopened=ScopedEventStore(context,name,{200},{1})
+  try{assertTrue(reopened.pendingPhotos(a.guardId).isEmpty())}finally{reopened.close()}
+ }}
+
 }
