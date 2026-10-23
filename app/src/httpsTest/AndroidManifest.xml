@@ -1,0 +1,3 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+ <application android:label="Mercury HTTPS Test Only" android:networkSecurityConfig="@xml/https_test_network" tools:replace="android:label"/>
+</manifest>

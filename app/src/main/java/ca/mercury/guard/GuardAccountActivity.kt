@@ -129,7 +129,7 @@ class GuardAccountActivity : Activity() {
     val response=GuardAccountClient(c.endpoint).grant(active,c.deviceId,binding.assignmentId,identity,c.audience)
     val anchor=ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot)
     verified=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,anchor,SystemClock.elapsedRealtime(),boot)
-    verifiedBinding=binding;verifiedAnchor=anchor
+    verifiedBinding=binding;verifiedAnchor=anchor.copy(elapsedMillis=SystemClock.elapsedRealtime())
    }catch(_:Exception){}
    val grant=verified;val binding=verifiedBinding;val anchor=verifiedAnchor
    runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){

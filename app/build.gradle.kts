@@ -6,6 +6,13 @@ android {
  if (providers.gradleProperty("localPreview").orNull == "true") {
   sourceSets.getByName("debug").manifest.srcFile("src/preview/AndroidManifest.xml")
  }
+ if (providers.gradleProperty("httpsTest").orNull == "true") {
+  require(providers.gradleProperty("localPreview").orNull != "true") { "HTTPS fixture is a separate test-only package" }
+  buildTypes.getByName("debug").applicationIdSuffix = ".httpstest"
+  sourceSets.getByName("debug").manifest.srcFile("src/httpsTest/AndroidManifest.xml")
+  sourceSets.getByName("debug").res.srcDir("build/https-test/res")
+  sourceSets.getByName("androidTest").assets.srcDir("build/https-test/assets")
+ }
  signingConfigs.getByName("debug") {
   providers.gradleProperty("localDebugKeystore").orNull?.let { storeFile = file(it); storePassword = "android"; keyAlias = "androiddebugkey"; keyPassword = "android" }
  }
