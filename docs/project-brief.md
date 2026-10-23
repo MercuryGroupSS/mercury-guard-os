@@ -348,3 +348,7 @@ Added a bounded local store for versioned Ops-shift-to-guard/vendor/site/Auth-su
 ### Offline source-binding revocation — October 23
 
 Disabled approved mappings now revoke local assignment eligibility without waiting for upstream reads. A durable revision watermark prevents stale source retries from reactivating the revoked mapping; a later explicit approval must use a newer revision. Tests confirm no network read is needed for revocation and stale revocation cannot cancel a subsequent approval. All 123 server tests pass. Live worker deployment and physical acceptance remain outstanding.
+
+### Real local Ops REST integration — October 23
+
+Verified the source reader and refresh pipeline against the isolated local Supabase REST API. Persisted synthetic approvals plus trusted roster checks create an assignment from the selected source row, and a subsequent source cancellation disables it while retaining original schedule fields. Unmapped rows are excluded; missing IDs are reported. Temporary fixture creation refuses an existing public.shifts table, and cleanup ownership/removal were verified. Hosted Ops was untouched. Added a reproducible local smoke script; production connectivity remains unverified.
