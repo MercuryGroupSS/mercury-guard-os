@@ -50,3 +50,15 @@ Outbox acknowledgement now checks the persisted immutable payload and lease, not
 The Android service client and HTTPS fixture can fetch this feed, but the encrypted local phone inbox, read/acknowledgement state and user-facing message screen are still being implemented. A fetched message is not treated as read or acknowledged. The local runner's dispatch source is empty until an administrator publishes synthetic messages; no live dashboard message import or outbound human messaging has occurred.
 
 91 server tests pass, including durable lost-response recovery, strict receipt integrity, cross-scope cursor rejection, version/retraction behavior, restart/expiry, fresh device-proof authorization and large escaped-content pagination. Android APK/test APK compilation, JVM checks and lint pass locally. The expanded HTTPS device path awaits CI execution for this source checkpoint.
+
+## Vendor identity reconciliation — 23 October 2026
+
+Read-only source inspection of `invoice-desk/README.md`, `netlify/functions/lib/billing-map.js`, `supabase-schema.sql` and `hr/migrations/M1_hr_schema_and_employees.sql` confirms:
+
+- Invoice Desk stores vendors under `billing.vendors.vendor_id`. Its UI document ID may be a slug; use the explicit vendor_id, never the slug, name or email, for the external link.
+- Vendor IDs can change through `billing_rename_vendor`; `prev_ids` preserves earlier codes. They are not immutable Mercury One identity keys. Keep a separate internal vendor ID and an explicitly revisioned Ops vendor binding.
+- `is_agency` is a licensing flag, separate from contractor/employee `worker_type`. A false flag does not prove an individual vendor. Use a reviewed company/individual classification; never infer guards from vendor billing contact details.
+- The HR migration enforces one employee per vendor and an EMP-vendor-ID format. It is not a general roster of individual guards working under company vendors. Guard authentication subjects remain independent.
+- Existing guard_map links Homebase display names to vendors, not authenticated guard subjects. It cannot authorize guard sign-in by itself.
+
+`ops-vendor-reconciliation.mjs` now reconciles bounded trusted vendor snapshots against explicit bindings without writes or network access. Missing, renamed, reused and ambiguous codes return review statuses; historical aliases never silently retarget existing guard relationships. Only minimal identity/status fields leave the projection, excluding billing addresses, tax and payment details. `source_link_resolved` means only that the reviewed external link exists in this snapshot; it does not approve access, prove snapshot freshness, create Auth accounts or activate assignments. Wiring authenticated snapshot retrieval, persistent binding approval and cancellation remains outstanding. These findings are repository-source evidence, not verification of the current hosted schema or business records.

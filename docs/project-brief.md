@@ -312,3 +312,7 @@ GitHub Android run 40001957185 for source 915e306 passed build, API 28 instrumen
 ### Local vendor administration — October 23
 
 Added an operator command to inspect, suspend and reactivate an existing synthetic directory vendor. It reports affected guard counts and records operator label, reason and prior/requested status atomically with each change. Audit failure rolls back the access change; reactivation preserves individually disabled guards. Inspection is read-only; missing and symbolic-link database paths are refused. Operator labels are not authenticated identity evidence. All 110 local server tests pass. This is local administration only; production RBAC and live Ops controls remain outstanding.
+
+### Ops vendor identity reconciliation — October 23
+
+Read-only inspection confirms Invoice Desk vendor IDs may be renamed and HR's employee table cannot represent multiple guards per company vendor. Added a pure vendor-snapshot reconciliation boundary using separate internal and Ops IDs, explicit type and binding revision. Renamed/reused/ambiguous IDs require review; contact details and historical aliases cannot establish guard identity. No existing application or business data was changed. All 113 local server tests pass. The boundary is not yet wired to live snapshot retrieval or provisioning activation.
