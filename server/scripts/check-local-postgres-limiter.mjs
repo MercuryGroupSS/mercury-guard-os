@@ -2,6 +2,7 @@ import {Client} from 'pg';
 import {readFileSync} from 'node:fs';
 import {randomUUID,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
+import {verifyPostgresOpsSync} from './verify-postgres-ops-sync.mjs';
 import {verifyPostgresDevices} from './verify-postgres-devices.mjs';
 import {createPostgresLoginLimiter} from '../postgres-login-limiter.mjs';
 let databaseUrl;
@@ -27,7 +28,7 @@ try{
  await admin.query('CREATE DATABASE '+name);created=true;url.pathname='/'+name;
  fixture=new Client({connectionString:url.toString()});await fixture.connect();
  await fixture.query('CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text);');
- for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql','20261023185827_guard_device_assignments.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
+ for(const file of ['20261023184633_guard_identity.sql','20261023185052_guard_login_throttle.sql','20261023185827_guard_device_assignments.sql','20261023191157_guard_ops_sync.sql'])await fixture.query(readFileSync(new URL('../../supabase/migrations/'+file,import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/tests/guard-identity.sql',import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/tests/guard-device-assignments.sql',import.meta.url),'utf8'));
  for(let i=0;i<2;i++){const c=new Client({connectionString:url.toString()});await c.connect();clients.push(c);await c.query('SET ROLE service_role');}
@@ -40,6 +41,7 @@ try{
  assert.equal((await fixture.query('SELECT count(*)::integer n FROM mercury_guard.login_attempts')).rows[0].n,101);
  const privileges=(await fixture.query("SELECT has_function_privilege('anon','mercury_guard.consume_login_attempt(text)','EXECUTE') AS anon,has_function_privilege('authenticated','mercury_guard.consume_login_attempt(text)','EXECUTE') AS authenticated")).rows[0];assert.equal(privileges.anon,false);assert.equal(privileges.authenticated,false);
  await verifyPostgresDevices(url.toString(),fixture);
+ await verifyPostgresOpsSync(url.toString(),fixture);
  console.log('PASS: migration replay, concurrent shared per-account/global limits, expiry and private function grants');
 }finally{
  for(const c of clients)await c.end();await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated limiter verification database removed');}await admin.end();

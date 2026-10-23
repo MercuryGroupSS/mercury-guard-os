@@ -392,3 +392,7 @@ Updated schedule reads for PostgreSQL compatibility. Concurrent sweeps share one
 ### Ops refresh asynchronous persistence boundary
 
 Ops refresh now awaits assignment writes and approval revocations, reports rejected database operations accurately, and drains in-flight work before shutdown completes. Stop prevents the next batch item; a transaction already started is allowed to finish. Verified asynchronous failure/retry and delayed-write shutdown behavior; 129 server tests pass. The existing SQLite synchronization ledger remains in use pending the PostgreSQL ledger implementation. No live Ops data changed.
+
+### PostgreSQL Ops ledger implementation
+
+Added transactional PostgreSQL assignment synchronization, revocation watermarks and append-only sync history. Concurrent imports serialize per upstream shift, including first import. Failed replacement rolls back cancellation and history; revoked revisions cannot restore access. Verified real PostgreSQL concurrency, rollback, cancellation/reopen and restricted history privileges in a disposable database. Local advisors found no issues; exported migration replay and 129 server tests passed. The runtime still uses SQLite devices until the PostgreSQL composition is wired and tested. No hosted deployment, source-app write or handset action.

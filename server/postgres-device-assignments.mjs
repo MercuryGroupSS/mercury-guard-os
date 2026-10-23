@@ -18,12 +18,12 @@ export class PostgresDeviceAssignments{
   await this.pool.query('INSERT INTO mercury_guard.devices(device_id,mode,site_id,guard_id,thumbprint,public_key_spki,active,revoked) VALUES($1,$2,$3,$4,$5,$6,true,false)',[d.deviceId,d.mode,d.mode==='site'?d.siteId:null,d.mode==='personal'?d.guardId:null,key.thumbprint,d.publicKeySpki]);
  }
  async revoke(deviceId){if((await this.pool.query('UPDATE mercury_guard.devices SET revoked=true,revocation_version=revocation_version+1 WHERE device_id=$1',[deviceId])).rowCount!==1)throw Error('Unknown device');}
- async assign(a){
+ async assign(a,client=this.pool){
   if(!a||['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt<=0||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const route=a.patrolRoute?patrolRoute(a.patrolRoute):null,policy=a.checkInPolicy?checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt):null;
-  await this.pool.query('INSERT INTO mercury_guard.assignments(assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy) VALUES($1,$2,$3,$4,$5,$6,true,$7,$8)',[a.assignmentId,a.guardId,a.vendorId,a.siteId,a.startsAt,a.endsAt,route,policy]);
+  await client.query('INSERT INTO mercury_guard.assignments(assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy) VALUES($1,$2,$3,$4,$5,$6,true,$7,$8)',[a.assignmentId,a.guardId,a.vendorId,a.siteId,a.startsAt,a.endsAt,route,policy]);
  }
- async cancel(assignmentId){if((await this.pool.query('UPDATE mercury_guard.assignments SET active=false WHERE assignment_id=$1',[assignmentId])).rowCount!==1)throw Error('Unknown assignment');}
+ async cancel(assignmentId,client=this.pool){if((await client.query('UPDATE mercury_guard.assignments SET active=false WHERE assignment_id=$1',[assignmentId])).rowCount!==1)throw Error('Unknown assignment');}
  async challenge(identity,deviceId,now=Date.now()){
   if(!id(identity?.subject)||!id(identity.guardId)||!id(deviceId)||!Number.isSafeInteger(now)||now<=0)throw Error('Invalid challenge');
   return this.transaction(async client=>{

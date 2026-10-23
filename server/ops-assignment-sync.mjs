@@ -1,7 +1,4 @@
-import {createHash} from 'node:crypto';
-const id=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
-const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
-function time(x){if(typeof x!=='string'||!/(Z|[+-]\d\d:\d\d)$/.test(x))throw Error('Explicit timestamp required');const n=Date.parse(x);if(!Number.isSafeInteger(n)||n<=0)throw Error('Invalid timestamp');return n;}
+import {prepareOpsSync,id,hash} from './ops-sync-input.mjs';
 // Administrative local adapter. Call only with authenticated source rows and approved
 // guard/vendor/site bindings. Missing rows never imply cancellation.
 export class OpsAssignmentSync{
@@ -27,13 +24,7 @@ export class OpsAssignmentSync{
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
  apply(shift,binding){
-  if(!shift||!binding||!id(shift.id)||binding.opsShiftId!==shift.id||!['guardId','vendorId','siteId'].every(k=>id(binding[k]))||typeof binding.active!=='boolean'||!Number.isSafeInteger(binding.revision)||binding.revision<1)throw Error('Explicit assignment binding required');
-  const sourceAt=time(shift.updated_at),startsAt=time(shift.scheduled_start),endsAt=time(shift.scheduled_end);
-  if(startsAt>=endsAt||!['scheduled','clocked_in','late','not_clocked_in','completed','cancelled'].includes(shift.status))throw Error('Invalid upstream assignment');
-  const active=binding.active&&!['completed','cancelled'].includes(shift.status);
-  const material={guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,startsAt,endsAt,...(binding.patrolRoute?{patrolRoute:binding.patrolRoute}:{}),...(binding.checkInPolicy?{checkInPolicy:binding.checkInPolicy}:{})};
-  const sourceDigest=hash({startsAt,endsAt,status:shift.status}),bindingDigest=hash({guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,active:binding.active,patrolRoute:binding.patrolRoute??null,checkInPolicy:binding.checkInPolicy??null});
-  const materialHash=hash(material),digest=hash({material,active,sourceAt,revision:binding.revision,status:shift.status});
+  const {sourceAt,active,material,sourceDigest,bindingDigest,materialHash,digest}=prepareOpsSync(shift,binding);
   this.db.exec('BEGIN IMMEDIATE');
   try{
    const revoked=this.db.prepare('SELECT revision FROM ops_binding_revocations WHERE source_id=?').get(shift.id);
