@@ -316,3 +316,7 @@ Added an operator command to inspect, suspend and reactivate an existing synthet
 ### Ops vendor identity reconciliation — October 23
 
 Read-only inspection confirms Invoice Desk vendor IDs may be renamed and HR's employee table cannot represent multiple guards per company vendor. Added a pure vendor-snapshot reconciliation boundary using separate internal and Ops IDs, explicit type and binding revision. Renamed/reused/ambiguous IDs require review; contact details and historical aliases cannot establish guard identity. No existing application or business data was changed. All 113 local server tests pass. The boundary is not yet wired to live snapshot retrieval or provisioning activation.
+
+### Preview 0.29 packaging — October 23
+
+Version 0.29 (code 29) gathers the configured account launcher, particle sign-in branding, installation-key enrollment details and encrypted shift rejection/recovery improvements since the immutable 0.28 package. The separate preview application remains unconfigured and debug-signed; live Auth and Ops activation are not implied. Physical testing remains deferred. See build-v0.29.md; artifact checksums and exact-source verification are recorded alongside the saved APK.
