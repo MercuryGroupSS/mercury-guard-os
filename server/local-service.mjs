@@ -1,3 +1,4 @@
+import {createCheckInWorker} from './check-in-worker.mjs';
 import {createEvidenceHandler} from './evidence-handler.mjs';
 import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
 import {createLoginHandler} from './login-handler.mjs';
@@ -29,6 +30,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer})
  const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const evidence=directory&&devices&&grantIssuer?createEvidenceHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
+ const checkIns=devices&&store?createCheckInWorker({store,devices}):null;
  const server=createServer(async(req,res)=>{
   try {
    const request=new Request(new URL(req.url,'http://127.0.0.1'),{method:req.method,headers:req.headers,
@@ -39,6 +41,6 @@ export function createLocalService({config,store,directory,devices,grantIssuer})
   }catch{res.writeHead(500,{'content-type':'application/json','cache-control':'no-store'});res.end('{"error":"request_failed"}');}
  });
  server.requestTimeout=10000;server.headersTimeout=10000;
- return {async start(){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});return `http://127.0.0.1:${server.address().port}`;},
- async stop(){server.closeAllConnections();await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
+ return {schedulerStatus:()=>checkIns?.status()??null,async start(){await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});try{checkIns?.start();}catch(e){await new Promise(resolve=>server.close(resolve));throw e;}return `http://127.0.0.1:${server.address().port}`;},
+ async stop(){checkIns?.stop();server.closeAllConnections();await new Promise((resolve,reject)=>server.close(e=>e?reject(e):resolve()));}};
 }

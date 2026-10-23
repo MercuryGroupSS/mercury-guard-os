@@ -82,5 +82,9 @@ export class LocalDeviceAssignments {
   }
   return assignmentForGuard({identity,assignment,device,now})?.canStart===true;
  }
+ scheduledAfter(cursor,limit){
+  if(typeof cursor!=='string'||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Invalid schedule page');
+  return this.db.prepare('SELECT body FROM assignments WHERE id>? ORDER BY id LIMIT ?').all(cursor,limit).map(r=>JSON.parse(r.body));
+ }
  close(){this.db.close();}
 }

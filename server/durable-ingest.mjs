@@ -12,6 +12,7 @@ export class DurableIngest {
         PRIMARY KEY(device,id), UNIQUE(device,sequence));
       CREATE TABLE IF NOT EXISTS receipts(device TEXT, id TEXT, digest TEXT, body TEXT, PRIMARY KEY(device,id));
       CREATE TABLE IF NOT EXISTS checkpoints(guard TEXT,assignment TEXT,route TEXT,revision INTEGER,checkpoint TEXT,event_id TEXT,PRIMARY KEY(guard,assignment,route,revision,checkpoint));
+      CREATE TABLE IF NOT EXISTS check_in_alert_outbox(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,body TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending')),PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS missed_check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,deadline INTEGER,detected_at INTEGER,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS check_ins(guard TEXT,assignment TEXT,revision INTEGER,slot INTEGER,event_id TEXT,PRIMARY KEY(guard,assignment,revision,slot));
       CREATE TABLE IF NOT EXISTS media(device TEXT,event_id TEXT,sha256 TEXT NOT NULL,bytes BLOB NOT NULL,PRIMARY KEY(device,event_id));`);

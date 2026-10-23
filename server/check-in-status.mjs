@@ -26,7 +26,11 @@ export function reconcileCheckIns(store,assignment,now=Date.now()){
     store.db.prepare('INSERT OR IGNORE INTO missed_check_ins VALUES(?,?,?,?,?,?)').run(assignment.guardId,assignment.assignmentId,p.revision,slot,deadline,now);
    }
    const miss=store.db.prepare('SELECT detected_at FROM missed_check_ins WHERE guard=? AND assignment=? AND revision=? AND slot=?').get(assignment.guardId,assignment.assignmentId,p.revision,slot);
-   if(miss)missed++;
+   if(miss){
+    missed++;
+    const notice={kind:'check_in_delivery_missing',guard_id:assignment.guardId,assignment_id:assignment.assignmentId,policy_revision:p.revision,slot,deadline_at:deadline,detected_at:miss.detected_at};
+    store.db.prepare("INSERT OR IGNORE INTO check_in_alert_outbox VALUES(?,?,?,?,?,'pending')").run(assignment.guardId,assignment.assignmentId,p.revision,slot,JSON.stringify(notice));
+   }
    const reasonCount=reasons.get(slot)??0;
    rows.push({reason_count:reasonCount,slot,due_at:due,deadline_at:deadline,
     status:complete?(onTime?'evidence_received':'evidence_received_after_deadline'):saved.length?'photo_delivery_pending':now>=deadline?'delivery_missing':'due',
