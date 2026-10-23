@@ -46,6 +46,18 @@ class HttpsAccountIntegrationTest {
    assertEquals("fixture-message",dispatch.getJSONArray("changes").getJSONObject(0).getString("message_id"))
    val unchanged=client.dispatch(session,"fixture-phone",item.getString("assignmentId"),identity,"mercury-local",dispatch.getString("next_cursor"))
    assertEquals(0,unchanged.getJSONArray("changes").length())
+   val transitionName="https-shift-${UUID.randomUUID()}.db"
+   val shiftScope=DispatchScope(GrantBinding("fixture-guard","fixture-site","fixture-shift",public.thumbprint,item.getLong("revocationVersion")),"fixture-vendor")
+   try {
+    val intent=ShiftTransitionStore(context,transitionName).use{it.prepare(shiftScope,"start","")}
+    val first=client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",intent)
+    ShiftTransitionStore(context,transitionName).use{pending->
+     assertEquals(intent.toString(),pending.prepare(shiftScope,"start","").toString())
+     val retry=client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",intent)
+     assertEquals(first.toString(),retry.toString());pending.accept(shiftScope,"start",retry)
+     assertTrue(pending.saved(shiftScope,"start")!!.has("receipt"))
+    }
+   }finally{context.deleteDatabase(transitionName)}
    val started=SystemClock.elapsedRealtime();val boot=Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)
    val response=client.grant(session,"fixture-phone",item.getString("assignmentId"),identity,"mercury-local")
    val config=JSONObject(instrumentation.context.assets.open("https-test-issuer.json").bufferedReader().use{it.readText()})
@@ -101,6 +113,15 @@ class HttpsAccountIntegrationTest {
    assertEquals("fixture-shift",delivery.getString("assignment_id"))
    assertEquals("evidence_received",delivery.getJSONArray("slots").getJSONObject(0).getString("status"))
    assertEquals(0,delivery.getInt("total_deadlines_missed"))
+   val endName="https-end-${UUID.randomUUID()}.db"
+   try{ShiftTransitionStore(context,endName).use{pending->
+    val intent=pending.prepare(shiftScope,"end","Synthetic integration early exit")
+    val ended=client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",intent)
+    pending.accept(shiftScope,"end",ended);assertTrue(ended.getBoolean("early_exit"))
+    assertEquals(ended.toString(),client.transition(session,"fixture-phone","fixture-shift",identity,"mercury-local",intent).toString())
+    var denied=false;try{client.grant(session,"fixture-phone","fixture-shift",identity,"mercury-local")}catch(_:GuardAccountClient.HttpFailure){denied=true};assertTrue(denied)
+    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
+   }}finally{context.deleteDatabase(endName)}
    var rejected=false;try{fixture("/test/receipts",host="127.0.0.1")}catch(_:javax.net.ssl.SSLException){rejected=true};assertTrue("Untrusted host accepted",rejected)
    session.clear();try{client.profile(session);fail("Cleared session reused")}catch(_:IllegalStateException){}
   }finally{

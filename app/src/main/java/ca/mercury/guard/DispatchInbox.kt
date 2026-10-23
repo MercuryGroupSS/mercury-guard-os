@@ -12,7 +12,7 @@ import java.security.MessageDigest
 data class DispatchScope(val binding:GrantBinding,val vendorId:String){
  fun json()=JSONObject().put("guard_id",binding.guardId).put("vendor_id",vendorId).put("site_id",binding.siteId).put("assignment_id",binding.assignmentId).put("device_thumbprint",binding.deviceThumbprint).put("revocation_version",binding.revocationVersion)
 }
-class DispatchInbox internal constructor(context:Context,name:String="mercury_dispatch.db"):SQLiteOpenHelper(context,name,null,1){
+class DispatchInbox internal constructor(context:Context,name:String="mercury_dispatch.db"):SQLiteOpenHelper(context,name,null,1),java.io.Closeable{
  private val cipher=DeviceCipher()
  override fun onCreate(db:SQLiteDatabase){db.execSQL("CREATE TABLE messages(owner TEXT NOT NULL, lookup TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(owner,lookup))");db.execSQL("CREATE TABLE cursors(owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  override fun onOpen(db:SQLiteDatabase){

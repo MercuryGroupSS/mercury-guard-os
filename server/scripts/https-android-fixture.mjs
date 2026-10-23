@@ -1,3 +1,4 @@
+import {ShiftLifecycle} from '../shift-lifecycle.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 // Test-only synthetic Auth adapter + actual Guard service, behind localhost TLS.
 // Never run on production or expose beyond loopback. No real Supabase credentials.
@@ -33,10 +34,10 @@ const auth=httpServer(async(req,res)=>{
  res.writeHead(401);res.end('{}');
 });
 await new Promise((resolve,reject)=>{auth.once('error',reject);auth.listen(55321,'127.0.0.1',resolve);});
-const dispatch=new DispatchFeed(':memory:');
+const dispatch=new DispatchFeed(':memory:');const shiftLifecycle=new ShiftLifecycle(':memory:');
 const directory=new LocalGuardDirectory(':memory:'),devices=new LocalDeviceAssignments(':memory:'),store=new DurableIngest(':memory:');
 directory.addVendor({vendorId:'fixture-vendor',kind:'company',active:true});directory.addGuard({guardId:'fixture-guard',authSubject:subject,vendorId:'fixture-vendor',active:true});directory.setLoginEmail('fixture-guard',email);
-const service=createLocalService({config:{API_URL:'http://127.0.0.1:55321',PUBLISHABLE_KEY:'fixture-only',SERVICE_ROLE_KEY:'fixture-only'},directory,devices,store,grantIssuer,dispatch});
+const service=createLocalService({config:{API_URL:'http://127.0.0.1:55321',PUBLISHABLE_KEY:'fixture-only',SERVICE_ROLE_KEY:'fixture-only'},directory,devices,store,grantIssuer,dispatch,shiftLifecycle});
 const origin=await service.start();
 const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,res)=>{
  try{
@@ -57,5 +58,5 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
 });
 await new Promise((resolve,reject)=>{tls.once('error',reject);tls.listen(55443,'127.0.0.1',resolve);});
 console.log('Synthetic HTTPS fixture ready on localhost:55443');
-let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();directory.close();devices.close();store.close();grantIssuer.close();dispatch.close();}
+let stopping=false;async function stop(){if(stopping)return;stopping=true;tls.closeAllConnections();auth.closeAllConnections();await service.stop();tls.close();auth.close();directory.close();devices.close();store.close();grantIssuer.close();dispatch.close();shiftLifecycle.close();}
 process.on('SIGTERM',stop);process.on('SIGINT',stop);

@@ -48,6 +48,8 @@ class GuardAccountClient(endpoint: String) {
   request("/v1/shift-grant",JSONObject().put("assignment_id",assignmentId).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
  fun dispatch(session:Session,deviceId:String,assignmentId:String,identity:DeviceIdentity,expectedAudience:String,cursor:String?):JSONObject =
   request("/v1/dispatch",JSONObject().put("assignment_id",assignmentId).put("cursor",cursor?:JSONObject.NULL).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
+ fun transition(session:Session,deviceId:String,assignmentId:String,identity:DeviceIdentity,expectedAudience:String,transition:JSONObject):JSONObject =
+  request("/v1/shift-transition",JSONObject().put("assignment_id",assignmentId).put("transition",transition).put("proof",proof(session,deviceId,identity,expectedAudience)),session)
  private fun proof(session: Session, deviceId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject {
   require(deviceId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}")))
   val response = request("/v1/device-challenge",JSONObject().put("device_id",deviceId),session)

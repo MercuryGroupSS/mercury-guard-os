@@ -12,7 +12,7 @@ import java.util.UUID
 class ScopedEventStore internal constructor(context: Context, name: String = "mercury_scoped_events.db",
  private val elapsedNow: () -> Long = { android.os.SystemClock.elapsedRealtime() },
  private val bootNow: () -> Int = { android.provider.Settings.Global.getInt(context.contentResolver,android.provider.Settings.Global.BOOT_COUNT,-1) }
-) : SQLiteOpenHelper(context,name,null,4) {
+) : SQLiteOpenHelper(context,name,null,4),java.io.Closeable {
  private val cipher = DeviceCipher()
  override fun onCreate(db: SQLiteDatabase) {
   db.execSQL("CREATE TABLE captured (sequence INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT NOT NULL, pilot_receipted INTEGER NOT NULL DEFAULT 0)")
