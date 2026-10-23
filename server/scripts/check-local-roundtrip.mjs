@@ -47,6 +47,7 @@ try {
  const dir=mkdtempSync(join(tmpdir(),'mercury-network-'));const directory=new LocalGuardDirectory(join(dir,'directory.sqlite'));
  directory.addVendor({vendorId:'synthetic-vendor',kind:'company',active:true});
  directory.addGuard({guardId:'synthetic-guard',authSubject:id,vendorId:'synthetic-vendor',active:true});
+ directory.setLoginEmail('synthetic-guard',email);
  const devices=new LocalDeviceAssignments(join(dir,'devices.sqlite'));
  const issuerKeys=generateKeyPairSync('rsa',{modulusLength:2048});
  const grantIssuer=new ShiftGrantIssuer({path:join(dir,'grants.sqlite'),privateKey:issuerKeys.privateKey,keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
@@ -55,6 +56,11 @@ try {
  let store=new DurableIngest(join(dir,'events.sqlite')),service=createLocalService({config,store,directory,devices,grantIssuer}),started=false;
  try {
   let origin=await service.start();started=true;
+  const loginResponse=await fetch(origin+'/v1/session/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({guard_id:'synthetic-guard',password})});
+  if(loginResponse.status!==200)throw Error('Guard ID login failed');
+  const loggedIn=await loginResponse.json();
+  if((await verifySession(loggedIn.access_token))?.subject!==id||'refresh_token' in loggedIn)throw Error('Invalid guard session');
+  console.log('PASS: guard ID/password login with verified identity and no refresh token');
   const profile=()=>fetch(origin+'/v1/me',{headers:{authorization:'Bearer '+session.access_token}});
   let me=await profile();if(me.status!==200||JSON.stringify(await me.json())!==JSON.stringify({guard_id:'synthetic-guard',vendor_id:'synthetic-vendor'}))throw Error('Guard profile failed');
   directory.setGuardActive('synthetic-guard',false);if((await profile()).status!==403)throw Error('Disabled guard accepted');
