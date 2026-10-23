@@ -1,3 +1,4 @@
+import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
 import {createLoginHandler} from './login-handler.mjs';
 import {createPasswordSession} from './password-session.mjs';
 import {createAssignmentHandler} from './assignment-handler.mjs';
@@ -22,7 +23,7 @@ export function createLocalService({config,store,directory,devices,grantIssuer})
    return a;
   },
   audience:'mercury-local'});
- const handler=createIngestHandler({authenticate,store});
+ const handler=directory&&devices&&grantIssuer?createGrantIngestHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):createIngestHandler({authenticate,store});
  const profile=directory?createGuardProfileHandler({directory,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
  const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;

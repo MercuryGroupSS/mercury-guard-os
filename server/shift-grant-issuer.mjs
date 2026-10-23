@@ -30,5 +30,12 @@ export class ShiftGrantIssuer {
   this.db.prepare('INSERT INTO issued_grants(id,subject,vendor_id,payload) VALUES(?,?,?,?)').run(claims.grant_id,identity.subject,identity.vendorId,payload);
   return {key_id:this.keyId,payload,signature,server_time_ms:now};
  }
+ lookup(grantId){
+  if(typeof grantId!=='string'||grantId.length>100)return null;
+  const row=this.db.prepare('SELECT * FROM issued_grants WHERE id=?').get(grantId);
+  if(!row||row.revoked)return null;
+  return {subject:row.subject,vendorId:row.vendor_id,claims:JSON.parse(Buffer.from(row.payload,'base64url').toString('utf8'))};
+ }
+ revoke(grantId){if(this.db.prepare('UPDATE issued_grants SET revoked=1 WHERE id=?').run(grantId).changes!==1)throw Error('Unknown grant');}
  close(){this.db.close();}
 }

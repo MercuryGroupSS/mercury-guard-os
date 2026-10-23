@@ -49,7 +49,7 @@ test('assignment route enforces authentication, identity, payload limits and sig
 
 test('ingestion authority must match active enrollment and current assignment',()=>{
  const db=new LocalDeviceAssignments(':memory:'),k=pair();try{
-  setup(db,k);const d=db.device('phone'),a={thumbprint:d.thumbprint,publicKeySpki:d.publicKeySpki,assignmentId:'a',siteId:'site-1',guardId:'guard-1'};
+  setup(db,k);const d=db.device('phone'),a={thumbprint:d.thumbprint,publicKeySpki:d.publicKeySpki,assignmentId:'a',siteId:'site-1',guardId:'guard-1',revocationVersion:1};
   assert.equal(db.authorizes(identity,a,200),true);
   assert.equal(db.authorizes(identity,{...a,siteId:'other'},200),false);
   assert.equal(db.authorizes(identity,a,99),false);

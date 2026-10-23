@@ -15,6 +15,9 @@ import org.json.JSONObject
 class GuardAccountActivity : Activity() {
  private var config: GuardServiceConfig? = null
  private var session: GuardAccountClient.Session? = null
+ private var captureGrant: VerifiedShiftGrant? = null
+ private var captureBinding: GrantBinding? = null
+ private var captureAnchor: ServerTimeAnchor? = null
  private var signal: CancellationSignal? = null
  private var generation=0
  private var stopped=false
@@ -32,7 +35,7 @@ class GuardAccountActivity : Activity() {
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()}}
- private fun clearSession(){generation++;busy=false;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ private fun clearSession(){captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun screen(title:String,detail:String){
   password=null
   val scroll=ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.rgb(244,248,250))}
@@ -102,6 +105,7 @@ class GuardAccountActivity : Activity() {
      check(p!=null&&a!=null)
      val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments")
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} eligible assignment(s). No clock-in has been recorded."
+     button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
       val item=rows.getJSONObject(i);check(item.getString("guardId")==guard&&item.getString("vendorId")==vendor)
       button("${item.getString("siteId")} · ${item.getString("assignmentId")}"){verifyAssignment(item)}
@@ -114,18 +118,72 @@ class GuardAccountActivity : Activity() {
  private fun verifyAssignment(item:JSONObject){
   val c=config?:return;val active=session?:return;val stamp=generation;busy=true;status.text="Verifying shift authorization…"
   Thread{
-   var verified=false
+   var verified:VerifiedShiftGrant?=null
+   var verifiedBinding:GrantBinding?=null
+   var verifiedAnchor:ServerTimeAnchor?=null
    try{
     val identity=DeviceIdentity(this);val fingerprint=identity.publicIdentity()?.thumbprint?:error("Missing key")
     check(item.getString("deviceThumbprint")==fingerprint)
     val binding=GrantBinding(item.getString("guardId"),item.getString("siteId"),item.getString("assignmentId"),fingerprint,item.getLong("revocationVersion"))
     val elapsed=SystemClock.elapsedRealtime();val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1)
     val response=GuardAccountClient(c.endpoint).grant(active,c.deviceId,binding.assignmentId,identity,c.audience)
-    val grant=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot),SystemClock.elapsedRealtime(),boot)
-    verified=grant!=null
+    val anchor=ServerTimeAnchor(response.getLong("server_time_ms"),elapsed,boot)
+    verified=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,anchor,SystemClock.elapsedRealtime(),boot)
+    verifiedBinding=binding;verifiedAnchor=anchor
    }catch(_:Exception){}
-   val okay=verified
-   runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){busy=false;status.text=if(okay)"Shift authorization verified. Operational capture is not connected yet; no clock-in was recorded." else "Shift authorization could not be verified. The assignment may not have started, may have changed, or the connection may be unavailable."}}
+   val grant=verified;val binding=verifiedBinding;val anchor=verifiedAnchor
+   runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){
+    busy=false
+    if(grant!=null&&binding!=null&&anchor!=null){captureGrant=grant;captureBinding=binding;captureAnchor=anchor;captureScreen(item)}
+    else status.text="Shift authorization could not be verified. The assignment may not have started, may have changed, or the connection may be unavailable."
+   }}
   }.start()
  }
+ private fun captureScreen(item:JSONObject){
+  screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nIncident pilot · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
+  val note=EditText(this).apply{hint="Describe the incident";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;minLines=3;isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(8000))}
+  root.addView(note)
+  button("Save authorized incident"){
+   try{
+    check(note.text.toString().isNotBlank())
+    val binding=captureBinding?:error("Sign in again");val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
+    val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+    val db=ScopedEventStore(this)
+    try{db.capture("incident",JSONObject().put("description",note.text.toString()),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
+    note.text.clear();status.text="Incident saved encrypted on this phone. It has not been sent."
+   }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
+  }
+  button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
+  button("Refresh authorization"){verifyAssignment(item)}
+  button("Back to assignments"){captureGrant=null;captureBinding=null;captureAnchor=null;loadAssignments()}
+  button("Sign out"){startScreen()}
+ }
+ private fun sendScoped(guardId:String){
+  val active=session?:return;val c=config?:return;val stamp=generation
+  busy=true;status.text="Checking queued records…"
+  Thread{
+   var message="Records remain queued. Check your connection and authorization, then try again."
+   try{
+    val db=ScopedEventStore(this)
+    try{
+     val proof=db.prepareSigned(DeviceIdentity(this),c.audience)
+     if(proof==null)message="No records are waiting to be sent."
+     else{
+      val batch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
+      val scope=batch.getJSONObject("scope")
+      if(scope.getString("guard_id")!=guardId)message="Earlier queued records belong to another guard. They remain preserved for their original account."
+      else{
+       val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
+       val receipt=GuardTransport(c.endpoint).sendPilotBatch(active.bearer(),proof,batch.getString("batch_id"),ids)
+       db.recordPilotReceipt(JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
+       message="Pilot service accepted ${ids.size} record(s). Dashboard delivery is not yet connected. ${db.pendingCount()} record(s) remain queued."
+      }
+     }
+    }finally{db.close()}
+   }catch(_:Exception){}
+   val result=message
+   runOnUiThread{if(stamp==generation&&!isFinishing&&!isDestroyed){busy=false;status.text=result}}
+  }.start()
+ }
+
 }

@@ -13,7 +13,9 @@ export class DurableIngest {
   }
   ingest(raw, trustedContext, now) {
     // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
-    const {batch,payloadHash} = verifyScopedBatch(raw,trustedContext,now);
+    const verified = verifyScopedBatch(raw,trustedContext,now);
+    const batch=verified.batch;
+    const payloadHash=trustedContext.vendorId?digest({hash:verified.payloadHash,vendorId:trustedContext.vendorId}):verified.payloadHash;
     const device = trustedContext.thumbprint;
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -24,8 +26,9 @@ export class DurableIngest {
       }
       let last = this.db.prepare('SELECT COALESCE(MAX(sequence),0) AS n FROM events WHERE device=?').get(device).n;
       for (const event of batch.events) {
-        const body = JSON.stringify({scope:batch.scope,event});
-        const hash = digest({scope:batch.scope,event});
+        const record={scope:batch.scope,event,...(trustedContext.vendorId?{vendor_id:trustedContext.vendorId}:{})};
+        const body = JSON.stringify(record);
+        const hash = digest(record);
         const prior = this.db.prepare('SELECT digest FROM events WHERE device=? AND id=?').get(device,event.event_id);
         if (prior) {
           if (prior.digest !== hash) throw new Error('Event ID content or scope conflict');

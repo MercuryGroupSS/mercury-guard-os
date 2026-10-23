@@ -64,13 +64,17 @@ export class LocalDeviceAssignments {
    this.db.exec('COMMIT');return {assignments};
   }catch(e){this.db.exec('ROLLBACK');throw e;}
  }
- authorizes(identity,authority,now=Date.now()){
+ authorizes(identity,authority,now=Date.now(),historical=false){
   if(!authority||typeof authority.thumbprint!=='string')return false;
   const row=this.db.prepare('SELECT body FROM devices WHERE thumbprint=?').get(authority.thumbprint);
   const assigned=this.db.prepare('SELECT body FROM assignments WHERE id=?').get(authority.assignmentId);
   if(!row||!assigned)return false;
   const device=JSON.parse(row.body),assignment=JSON.parse(assigned.body);
-  if(device.publicKeySpki!==authority.publicKeySpki||assignment.siteId!==authority.siteId||assignment.guardId!==authority.guardId)return false;
+  if(device.revocationVersion!==authority.revocationVersion||device.publicKeySpki!==authority.publicKeySpki||assignment.siteId!==authority.siteId||assignment.guardId!==authority.guardId)return false;
+  if(historical){
+   if(!Number.isSafeInteger(now)||now<assignment.startsAt||now>assignment.endsAt+86400000)return false;
+   return assignmentForGuard({identity,assignment,device,now:Math.min(now,assignment.endsAt-1)})?.canStart===true;
+  }
   return assignmentForGuard({identity,assignment,device,now})?.canStart===true;
  }
  close(){this.db.close();}

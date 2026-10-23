@@ -14,7 +14,7 @@ Never put a private signing key, password, access token, Supabase service key or
 
 The UI requires a device biometric before accepting guard ID/password, uses only the configured HTTPS origin, and discards its session and form credentials on backgrounding or activity recreation. A background network result is discarded rather than restoring a signed-out session. Password strings created by the JVM cannot be guaranteed scrubbed. Biometric success is local verification only, not evidence to the server of which guard touched the sensor.
 
-Signed grants are verified against the packaged public keys, expected guard/site/assignment/device/revocation binding and a boot-bound monotonic time anchor. A verified grant currently produces a confirmation only: operational capture, refresh and upload lifecycle are still being connected. No clock-in is recorded by this screen.
+Signed grants are verified against the packaged public keys, expected guard/site/assignment/device/revocation binding and a boot-bound monotonic time anchor. A verified grant opens the authorized incident pilot: encrypted capture and matching pilot-receipt upload are wired. It does not yet provide the complete patrol, photo, check-in, background sync or operational shift lifecycle. No clock-in is recorded by this screen.
 
 ## Verification
 
