@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['server/**', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', '.github/workflows/server-contract.yml']
   pull_request:
-    paths: ['server/**', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', '.github/workflows/server-contract.yml']
 permissions:
   contents: read
 jobs:
@@ -17,4 +17,32 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.19.0'
+      - run: npm ci --prefix server --ignore-scripts
       - run: node --test server/*.test.mjs
+
+  postgres-identity:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: mercury-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - run: npm ci --prefix server --ignore-scripts
+      - run: node server/scripts/check-local-postgres-limiter.mjs
+        env:
+          CI: 'true'
+          MERCURY_POSTGRES_TEST_URL: postgres://postgres:mercury-ci-only@127.0.0.1:5432/postgres
+          MERCURY_BOOTSTRAP_TEST_ROLES: '1'

@@ -372,3 +372,7 @@ Added a private database-time limiter with serialized global/account counters an
 ### PostgreSQL identity runtime option — October 23
 
 Local service can explicitly select PostgreSQL identity through MERCURY_IDENTITY_STORE=postgres. It validates loopback connection scope, service-role session and required schema, uses bounded pooling/timeouts and fails without fallback. Real local HTTP login/Auth/profile plus vendor suspension passed; synthetic fixtures were removed. All 125 server tests pass. No persistent service restart or hosted deployment occurred; remaining stores are still local SQLite.
+
+### PostgreSQL CI coverage — October 23
+
+Added a dedicated PostgreSQL 17 job to server-contract.yml and included supabase source paths in workflow triggers. It installs pinned dependencies without scripts, replays identity/throttle migrations and checks constraints, grants and concurrent limits in a disposable database. The reusable verifier passes locally; exact-source CI results are pending. No hosted credentials or data are involved.

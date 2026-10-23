@@ -3,12 +3,26 @@ import {readFileSync} from 'node:fs';
 import {randomUUID,createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {createPostgresLoginLimiter} from '../postgres-login-limiter.mjs';
-const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n');
-const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL'))),url=new URL(config.DB_URL);
-if(config.API_URL!=='http://127.0.0.1:55321'||!['127.0.0.1','localhost'].includes(url.hostname)||url.port!=='55322')throw Error('Local database required');
-const name='mercury_limiter_verify_'+randomUUID().replaceAll('-',''),admin=new Client({connectionString:config.DB_URL}),clients=[];let created=false,fixture;
+let databaseUrl;
+if(process.env.MERCURY_POSTGRES_TEST_URL){
+ if(process.env.CI!=='true')throw Error('CI test connection requires explicit CI mode');
+ databaseUrl=process.env.MERCURY_POSTGRES_TEST_URL;
+}else{
+ const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'utf8').split('\n');
+ const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL')));
+ if(config.API_URL!=='http://127.0.0.1:55321')throw Error('Local database required');
+ databaseUrl=config.DB_URL;
+}
+const url=new URL(databaseUrl);
+if(!['postgres:','postgresql:'].includes(url.protocol)||!['127.0.0.1','localhost'].includes(url.hostname)||!['5432','55322'].includes(url.port)||url.search||url.hash)throw Error('Loopback test database required');
+const name='mercury_limiter_verify_'+randomUUID().replaceAll('-',''),admin=new Client({connectionString:databaseUrl}),clients=[];let created=false,fixture;
 await admin.connect();
 try{
+ if(process.env.MERCURY_BOOTSTRAP_TEST_ROLES==='1'){
+  if(process.env.CI!=='true'||!process.env.MERCURY_POSTGRES_TEST_URL)throw Error('Role bootstrap is CI-only');
+  // A fresh CI PostgreSQL service has none of Supabase's role names.
+  await admin.query("DO $$ BEGIN IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='anon') THEN CREATE ROLE anon NOLOGIN; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN CREATE ROLE authenticated NOLOGIN; END IF; IF NOT EXISTS(SELECT 1 FROM pg_roles WHERE rolname='service_role') THEN CREATE ROLE service_role NOLOGIN BYPASSRLS; END IF; END $$");
+ }
  await admin.query('CREATE DATABASE '+name);created=true;url.pathname='/'+name;
  fixture=new Client({connectionString:url.toString()});await fixture.connect();
  await fixture.query('CREATE SCHEMA auth;CREATE TABLE auth.users(id uuid PRIMARY KEY,email text);');

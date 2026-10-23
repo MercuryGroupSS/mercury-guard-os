@@ -29,3 +29,7 @@ After installing locked server dependencies and applying local migrations, run `
 No existing service was restarted as part of this change. Device enrollment, assignments, events and other stores still use their existing local implementations; this switches identity only. Production TLS, deployment configuration and remaining persistence adapters are separate work.
 
 `check-local-postgres-login.mjs` verified real loopback HTTP sign-in with real Supabase password authentication, PostgreSQL identity/pool/shared throttling, profile resolution and existing-session denial after vendor suspension. It removes only its synthetic identity/Auth rows and its hashed account bucket; the shared global throttle counter is intentionally retained. All 125 server tests pass.
+
+## Continuous verification
+
+The server workflow now runs a separate PostgreSQL 17 service job, installs locked dependencies without lifecycle scripts and replays the identity/throttle migrations into a disposable test database. It checks identity constraints, private role grants, concurrent per-account/global throttling and expiry. The shared verifier accepts a CI-only loopback test URL; hosted URLs are refused. CI bootstraps the three Supabase role names only in its fresh test service, without modifying existing roles. The test database is removed afterward. This job does not use repository secrets or connect to hosted Supabase. Workflow execution must be checked separately from local preflight success.
