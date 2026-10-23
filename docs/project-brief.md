@@ -1,3 +1,9 @@
+# Current checkpoint — 23 October 2026
+
+Mercury One v0.26 adds a clearer active-shift UI with Escalate first, white status cards, compact page headers and persistent readiness feedback. Particle sign-in and local demo workflows remain in place. See [v0.26 build notes](build-v0.26.md) for exact validation status. Physical testing is deferred. Production enrollment, signed grants and dashboard integration remain open; local backend validation is not live operations readiness.
+
+The cumulative development history follows.
+
 # Mercury Guard OS — development brief v1.3
 
 Updated: 20 October 2026 (America/Toronto). Continues the v1.0–v1.2 cumulative brief. This public development summary does not replace the internal cumulative baseline.
