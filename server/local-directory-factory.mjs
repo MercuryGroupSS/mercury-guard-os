@@ -12,6 +12,8 @@ export async function openLocalGuardDirectory({config,mode='sqlite',sqlitePath})
  try{
   const {rows}=await pool.query("SELECT current_user AS role,to_regclass('mercury_guard.guards') IS NOT NULL AND to_regclass('mercury_guard.guard_login') IS NOT NULL AND to_regclass('mercury_guard.vendors') IS NOT NULL AND to_regprocedure('mercury_guard.consume_login_attempt(text)') IS NOT NULL AS ready");
   if(rows[0]?.role!=='service_role'||rows[0]?.ready!==true)throw Error('Identity schema unavailable');
+  const sessions=(await pool.query("SELECT has_column_privilege(current_user,'auth.sessions','id','SELECT') AND has_column_privilege(current_user,'auth.sessions','user_id','SELECT') AND has_column_privilege(current_user,'auth.sessions','not_after','SELECT') AS ready")).rows[0];
+  if(sessions?.ready!==true)throw Error('Private Auth session reads unavailable');
   const directory=new PostgresGuardDirectory({client:pool});directory.close=()=>pool.end();return directory;
  }catch{await pool.end();throw Error('PostgreSQL identity startup failed; no fallback was selected');}
 }

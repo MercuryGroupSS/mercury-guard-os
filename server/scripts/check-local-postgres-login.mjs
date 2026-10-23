@@ -1,5 +1,6 @@
-import {Client} from 'pg';
+import {Client,Pool} from 'pg';
 import {readFileSync} from 'node:fs';
+import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {randomUUID,randomBytes,createHash,generateKeyPairSync,sign,verify,createPublicKey} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {openLocalAssignmentStore} from '../local-assignment-factory.mjs';
@@ -7,6 +8,7 @@ import {parseEnrollmentKey} from '../enrollment-key.mjs';
 import {openLocalGuardDirectory} from '../local-directory-factory.mjs';
 import {createLocalService} from '../local-service.mjs';
 import {PostgresAdministration} from '../postgres-administration.mjs';
+import {OwnerAdminMembership} from '../owner-admin-membership.mjs';
 import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresShiftLifecycle} from '../postgres-shift-lifecycle.mjs';
 import {PostgresShiftGrantIssuer} from '../postgres-shift-grant-issuer.mjs';
@@ -19,13 +21,18 @@ const lines=readFileSync(new URL('../../supabase-start.log',import.meta.url),'ut
 const config=JSON.parse(lines.findLast(l=>l.startsWith('{')&&l.includes('API_URL'))),url=new URL(config.DB_URL);
 if(config.API_URL!=='http://127.0.0.1:55321'||!['127.0.0.1','localhost'].includes(url.hostname)||url.port!=='55322')throw Error('Local environment required');
 const admin=new Client({connectionString:config.DB_URL}),vendor='smoke-'+randomUUID(),guard='smoke-'+randomUUID();
+const ownerPool=new Pool({connectionString:config.DB_URL,max:2}),ownerMembership=new OwnerAdminMembership({pool:ownerPool,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})});
 const authHeaders={apikey:config.SERVICE_ROLE_KEY,authorization:'Bearer '+config.SERVICE_ROLE_KEY,'content-type':'application/json'};
 const email=randomUUID()+'@example.invalid',password=randomBytes(32).toString('hex');
+const execFileAsync=promisify(execFile);
+async function ownerCli(request,apply=false){const args=[new URL('./set-local-admin.mjs',import.meta.url).pathname,'--email',request.email,'--active',String(request.active),'--operator',request.operator,'--reason',request.reason,'--request-id',request.requestId,...(apply?['--apply']:[])];const result=await execFileAsync(process.execPath,args,{timeout:15000,maxBuffer:16384});return JSON.parse(result.stdout);}
 const site='smoke-'+randomUUID(),deviceId='smoke-'+randomUUID(),sourceId='smoke-'+randomUUID();
-let subject,directory,service,store,assignmentStore,shiftLifecycle,grantIssuer,dispatch,dashboardBindings,dashboardOutbox,dashboardBridge,administration;
+let subject,directory,service,store,assignmentStore,shiftLifecycle,grantIssuer,dispatch,dashboardBindings,dashboardOutbox,dashboardBridge,administration,ownerRequest;
 await admin.connect();
 try{
- const created=await fetch(config.API_URL+'/auth/v1/admin/users',{method:'POST',headers:authHeaders,body:JSON.stringify({email,password,email_confirm:true,user_metadata:{admin:true}})});assert.equal(created.status,200);subject=(await created.json()).id;assert.ok(subject);
+ const created=await fetch(config.API_URL+'/auth/v1/admin/users',{method:'POST',headers:authHeaders,body:JSON.stringify({email,password,email_confirm:false,user_metadata:{admin:true}})});assert.equal(created.status,200);subject=(await created.json()).id;assert.ok(subject);
+ ownerRequest={requestId:randomUUID(),subject,email,active:true,operator:'Synthetic HTTP owner',reason:'Disposable local owner onboarding test'};
+ await assert.rejects(ownerMembership.set(ownerRequest),/Confirmed/);const confirmed=await fetch(config.API_URL+'/auth/v1/admin/users/'+subject,{method:'PUT',headers:authHeaders,body:JSON.stringify({email_confirm:true})});assert.equal(confirmed.status,200);
  await admin.query('INSERT INTO mercury_guard.vendors(vendor_id,kind,active) VALUES($1,$2,true)',[vendor,'company']);
  await admin.query('INSERT INTO mercury_guard.guards(guard_id,auth_subject,vendor_id,active) VALUES($1,$2,$3,true)',[guard,subject,vendor]);
  await admin.query('INSERT INTO mercury_guard.guard_login VALUES($1,$2)',[guard,email]);
@@ -45,7 +52,7 @@ try{
  const post=(path,body)=>fetch(origin+path,{method:'POST',headers:{authorization:'Bearer '+session.access_token,'content-type':'application/json'},body:JSON.stringify(body)});
  const adminMe=()=>fetch(origin+'/v1/admin/me',{headers:{authorization:'Bearer '+session.access_token}});
  assert.equal((await adminMe()).status,403);
- await admin.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subject,email]);
+ const review=await ownerCli(ownerRequest);assert.equal(review.mode,'review');assert.equal(review.subject,subject);assert.equal((await admin.query('SELECT 1 FROM mercury_guard.admin_accounts WHERE auth_subject=$1',[subject])).rowCount,0);assert.equal((await ownerCli(ownerRequest,true)).active,true);
  assert.equal((await adminMe()).status,200);
  const adminLogin=await post('/v1/admin/login',{email,password});assert.equal(adminLogin.status,200);assert.equal('refresh_token' in await adminLogin.json(),false);
  const consolePage=await fetch(origin+'/admin/');assert.equal(consolePage.status,200);assert.match(consolePage.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(await consolePage.text(),/Mercury One/);assert.equal((await fetch(origin+'/admin/model.mjs')).status,200);assert.equal((await fetch(origin+'/admin/.local-backend/admin-console-test.json')).status,404);
@@ -56,6 +63,12 @@ try{
  assert.equal((await post('/v1/admin/actions',{...suspended,payload:{guardId:guard,active:true}})).status,409);assert.equal((await me()).status,403);
  assert.equal((await post('/v1/admin/actions',change('guard.status',{guardId:guard,active:true}))).status,200);
  const catalog=await fetch(origin+'/v1/admin/catalog?kind=guards',{headers:{authorization:'Bearer '+session.access_token}});assert.equal(catalog.status,200);assert.ok((await catalog.json()).items.some(g=>g.guard_id===guard));
+ const accessAudit=await fetch(origin+'/v1/admin/catalog?kind=access_audit',{headers:{authorization:'Bearer '+session.access_token}});assert.equal(accessAudit.status,200);assert.ok((await accessAudit.json()).items.some(a=>a.auth_subject===subject));
+ const secondLogin=await login();assert.equal(secondLogin.status,200);const secondSession=await secondLogin.json(),secondHeaders={authorization:'Bearer '+secondSession.access_token};
+ assert.equal((await fetch(origin+'/v1/me',{headers:secondHeaders})).status,200);
+ const loggedOut=await fetch(config.API_URL+'/auth/v1/logout?scope=local',{method:'POST',headers:{...secondHeaders,apikey:config.PUBLISHABLE_KEY}});assert.equal(loggedOut.status,204);
+ assert.equal((await fetch(origin+'/v1/me',{headers:secondHeaders})).status,401);assert.equal((await fetch(origin+'/v1/admin/me',{headers:secondHeaders})).status,401);assert.equal((await me()).status,200);
+ console.log('PASS: Auth sign-out denies the old access token at guard/admin APIs while another session remains valid');
  console.log('PASS: real Auth admin membership, metadata-role denial, password sign-in, audited retry and verified guard activation');
  const proof=async()=>{const response=await post('/v1/device-challenge',{device_id:deviceId});assert.equal(response.status,200);const c=await response.json();return {version:1,algorithm:'SHA256withECDSA',audience:c.audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:thumb,public_key_spki:spki,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${thumb}`),keys.privateKey).toString('base64url')};};
  const firstProof=await proof(),listed=await post('/v1/assignments',firstProof);assert.equal(listed.status,200);assert.deepEqual((await listed.json()).assignments.map(a=>a.assignmentId),[imported.assignmentId]);
@@ -86,7 +99,7 @@ try{
  console.log('PASS: real HTTP device proof, assignment import, confirmed shift, signed capture grant, cancellation closeout and revocation with PostgreSQL storage');
  assert.equal((await post('/v1/admin/actions',change('ops_binding.approve',{...binding,authSubject:subject,revision:2,active:false}))).status,200);
  assert.equal((await post('/v1/admin/actions',change('dashboard_mapping.approve',{assignmentId:imported.assignmentId,guardId:guard,vendorId:vendor,siteId:site,dashboardShiftId:sourceId,destination:'isolated-test',revision:2,active:false}))).status,200);
- await admin.query('UPDATE mercury_guard.admin_accounts SET active=false WHERE auth_subject=$1',[subject]);assert.equal((await adminMe()).status,403);assert.equal((await post('/v1/admin/actions',suspended)).status,403);
+ await ownerMembership.set({...ownerRequest,requestId:randomUUID(),active:false,reason:'Synthetic owner access revocation'});assert.equal((await adminMe()).status,403);assert.equal((await post('/v1/admin/actions',suspended)).status,403);await ownerMembership.set(ownerRequest);assert.equal((await adminMe()).status,403);
  console.log('PASS: audited mapping withdrawal and existing-admin-session revocation');
  await admin.query('UPDATE mercury_guard.vendors SET active=false WHERE vendor_id=$1',[vendor]);assert.equal((await me()).status,403);assert.equal((await login()).status,401);
  console.log('PASS: real HTTP login and Auth verification with PostgreSQL directory/pool/shared limiter; suspension denies existing session');
@@ -94,6 +107,7 @@ try{
  if(service)await service.stop();await assignmentStore?.close();await directory?.close();store?.close();shiftLifecycle?.close();grantIssuer?.close();dispatch?.close();dashboardOutbox?.close();dashboardBindings?.close();
  try{
   await admin.query('DELETE FROM mercury_guard.admin_audit WHERE actor_subject=$1',[subject]);
+  await admin.query('DELETE FROM mercury_guard.admin_membership_audit WHERE auth_subject=$1',[subject]);
   await admin.query('DELETE FROM mercury_guard.admin_accounts WHERE auth_subject=$1',[subject]);
   await admin.query('DELETE FROM mercury_guard.ops_bindings WHERE source_id=$1',[sourceId]);
   await admin.query('DELETE FROM mercury_guard.ops_binding_history WHERE source_id=$1',[sourceId]);
@@ -127,5 +141,5 @@ try{
   await admin.query('DELETE FROM mercury_guard.login_attempts WHERE bucket=$1',['account:'+createHash('sha256').update('admin-login:'+email).digest('hex')]);
   if(subject){const deleted=await fetch(config.API_URL+'/auth/v1/admin/users/'+subject,{method:'DELETE',headers:authHeaders});assert.equal(deleted.ok,true);}
   console.log('PASS: synthetic identity/account rows removed; shared global limiter count retained');
- }finally{await admin.end();}
+ }finally{await admin.end();await ownerPool.end();}
 }

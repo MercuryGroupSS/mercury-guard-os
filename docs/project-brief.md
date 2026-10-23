@@ -20,24 +20,27 @@ PostgreSQL mode shares vendor/guard identities, approved device keys, assignment
 
 Auth tokens are verified remotely. Vendor/company identity does not substitute for individual guard authentication. Current roster, device, assignment and grant state is rechecked at operational commit boundaries. Revoked access cannot recover a receipt to bypass authorization.
 
-The [administration console and API](administration.md) now support explicitly approved Auth administrators, bounded catalogs, reviewed reasoned mutations and append-only transactional audit. The white/cyan console can manage vendor/site status, link existing individual Auth accounts, approve/revoke devices and mappings, and publish scoped dispatch versions. Unconfirmed requests retain their exact ID/body and can resolve to the original receipt or a permanent not-applied closure. First real owner setup and Auth-account creation/recovery remain unfinished. No real administrator was activated during these tests.
+The [administration console and API](administration.md) now support explicitly approved Auth administrators, bounded catalogs, reviewed reasoned mutations and append-only transactional audit. The white/cyan console can manage vendor/site status, link existing individual Auth accounts, approve/revoke devices and mappings, and publish scoped dispatch versions. Unconfirmed requests retain their exact ID/body and can resolve to the original receipt or a permanent not-applied closure. An owner-only local command can provision/revoke membership for an existing confirmed individual account with an atomic access-audit receipt. The console shows current administrators and access history. Real owner activation awaits the selected email/verified account; Auth-account creation/recovery remains unfinished. No real administrator was activated during these tests.
+
+PostgreSQL requests now verify the token remotely and require its exact current Auth session to exist for the same individual subject and remain unexpired. Provider sign-out denies the old token immediately at the next Guard/admin request, independently of JWT expiry. The session reader uses three metadata columns; its new grants include no refresh credentials or Auth mutation rights. An already-authorized transaction may finish across a concurrent provider sign-out.
 
 Recurring Ops reads are opt-in and use only explicitly approved shift IDs. Live reading/sending is not enabled. Isolated inbox receipts prove stored integration records; they do not prove Ops rendering, media transfer or payroll updates.
 
 ## Verification checkpoint
 
-- 146 server tests pass.
+- 151 server tests pass.
 - Disposable PostgreSQL migration replay and real concurrency/revocation/rollback/receipt tests pass, including audited administrator actions.
 - Real local Supabase Auth and HTTP checks pass for sign-in, scoped assignments, confirmed shifts/grants, incident ingestion, dispatch acknowledgement, queue projection, administrator actions and revocation.
 - Rendered console checks passed for sign-in, company creation, individual guard linking, reviewed changes, receipts/audit, failed-request resolution and revoked-session feedback. Temporary accounts and fixture rows were removed.
+- Real owner CLI review/apply and initially unconfirmed-account denial passed. Disposable PostgreSQL checks proved owner-role enforcement, idempotent access receipts, stale-retry isolation after revocation and rollback on audit failure. Real Auth sign-out denied the old token at both API roles while an independent session continued.
 - Local database advisors report no issues. Exported migrations retain explicit private grants and RLS.
-- GitHub backend and Android workflows for administration API commit `39298fe19aa632f1fb13da6938294f6fcebddec2` both passed (server run 40022137872, Android run 40022137883). The console changes require their own CI result after commit.
+- GitHub backend and Android workflows for console commit `ec3c82c5eb1ad79ce4f3259fbded614de4e8c427` passed (server run 40024893986, Android run 40024894217), including API 28/API 35 and HTTPS integration. The owner/session changes require their own CI result after commit.
 
 Detailed backend evidence and limits are in [PostgreSQL implementation notes](postgres-devices.md).
 
 ## Work still required for a finished product
 
-1. Complete owner onboarding, account provisioning/recovery and real guard/site/device approval flows through the locally verified administrator console.
+1. Activate the selected real owner using the verified local owner command, complete account creation/recovery, and configure real guard/site/device approvals through the console.
 2. Configure real approved Ops bindings, source credentials, live receiver rendering and private media transfer. Verify end-to-end exchange against the actual connected apps without changing their existing data unexpectedly.
 3. Complete production deployment, signing-key distribution/rotation, release signing/update recovery, retention/backups and capacity/security acceptance. Current global commit locks need throughput measurement before scaling.
 4. Resolve operational acceptance for geofence/GPS behavior, background delivery/recovery, repeated patrol rounds, escalation/emergency delivery and dedicated-device controls.

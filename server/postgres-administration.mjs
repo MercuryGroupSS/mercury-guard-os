@@ -45,6 +45,8 @@ export class PostgresAdministration{
  async loginAccount(email){const r=(await this.pool.query('SELECT auth_subject,email FROM mercury_guard.admin_accounts WHERE email=$1 AND active',[email])).rows[0];return r?{subject:r.auth_subject,email:r.email}:null;}
  async catalog(session,kind,after=''){
   const catalog={audit:['request_id',"SELECT request_id,actor_subject,action,recorded_at,input->>'reason' AS reason,receipt->>'status' AS status,receipt FROM mercury_guard.admin_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],vendors:['vendor_id','SELECT vendor_id,kind,active FROM mercury_guard.vendors WHERE vendor_id>$1 ORDER BY vendor_id LIMIT 51'],
+   administrators:['auth_subject',"SELECT auth_subject,email,active FROM mercury_guard.admin_accounts WHERE auth_subject>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY auth_subject LIMIT 51"],
+   access_audit:['request_id',"SELECT request_id,auth_subject,email,active,operator_label,reason,recorded_at,receipt FROM mercury_guard.admin_membership_audit WHERE request_id>COALESCE(NULLIF($1,'')::uuid,'00000000-0000-0000-0000-000000000000'::uuid) ORDER BY request_id LIMIT 51"],
    guards:['guard_id','SELECT g.guard_id,g.vendor_id,g.auth_subject,g.active,l.email FROM mercury_guard.guards g LEFT JOIN mercury_guard.guard_login l USING(guard_id) WHERE g.guard_id>$1 ORDER BY g.guard_id LIMIT 51'],
    sites:['site_id','SELECT site_id,active FROM mercury_guard.sites WHERE site_id>$1 ORDER BY site_id LIMIT 51'],
    devices:['device_id','SELECT device_id,mode,site_id,guard_id,thumbprint,active,revoked,revocation_version FROM mercury_guard.devices WHERE device_id>$1 ORDER BY device_id LIMIT 51'],

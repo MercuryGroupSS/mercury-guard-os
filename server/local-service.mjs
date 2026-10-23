@@ -1,5 +1,6 @@
 import {createAdminHandler} from './admin-handler.mjs';
 import {adminConsoleResponse} from './admin-console-handler.mjs';
+import {createPostgresAuthSessionReader} from './postgres-auth-session.mjs';
 import {createCheckInWorker} from './check-in-worker.mjs';
 import {createEvidenceHandler} from './evidence-handler.mjs';
 import {createGrantIngestHandler} from './grant-ingest-handler.mjs';
@@ -17,23 +18,27 @@ import {createSupabaseAuthority} from './supabase-authority.mjs';
 // Loopback-only pilot composition; callers provide credential config privately.
 export function createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin}) {
  if(config.API_URL!=='http://127.0.0.1:55321')throw Error('Local Supabase required');
+ const sessionPool=directory?.client??admin?.pool;
+ const loadSession=sessionPool?createPostgresAuthSessionReader(sessionPool):undefined;
+ const authOptions={url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true,loadSession};
+ const verifySession=createSupabaseSessionVerifier(authOptions),passwordSession=createPasswordSession(authOptions);
  const authority=createSupabaseAuthority({url:config.API_URL,serviceKey:config.SERVICE_ROLE_KEY,allowLocal:true});
  const resolve=directory?createGuardResolver({loadGuardsForSubject:s=>directory.loadGuardsForSubject(s),loadVendor:id=>directory.loadVendor(id)}):null;
  const authenticate=createAuthorization({
-  verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true}),
+  verifySession,
   loadAuthorization:async subject=>{
    const a=await authority(subject);
    if(resolve){const guard=await resolve({subject,active:true});if(!guard||a?.guardId!==guard.guardId||(devices&&!await devices.authorizes(guard,a)))return null;}
    return a;
   },
   audience:'mercury-local'});
- const handler=directory&&devices&&grantIssuer?createGrantIngestHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):createIngestHandler({authenticate,store});
- const profile=directory?createGuardProfileHandler({directory,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
- const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
- const login=directory?createLoginHandler({directory,passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
- const evidence=directory&&devices&&grantIssuer?createEvidenceHandler({directory,devices,grantIssuer,store,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
+ const handler=directory&&devices&&grantIssuer?createGrantIngestHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession}):createIngestHandler({authenticate,store});
+ const profile=directory?createGuardProfileHandler({directory,verifySession}):null;
+ const assignments=directory&&devices?createAssignmentHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession}):null;
+ const login=directory?createLoginHandler({directory,passwordSession}):null;
+ const evidence=directory&&devices&&grantIssuer?createEvidenceHandler({directory,devices,grantIssuer,store,verifySession}):null;
  const checkIns=devices&&store?createCheckInWorker({store,devices,shiftLifecycle}):null;
- const administration=admin?createAdminHandler({admin,verifySession:createSupabaseSessionVerifier({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true}),passwordSession:createPasswordSession({url:config.API_URL,publishableKey:config.PUBLISHABLE_KEY,allowLocal:true})}):null;
+ const administration=admin?createAdminHandler({admin,verifySession,passwordSession}):null;
  const server=createServer(async(req,res)=>{
   try {
    const request=new Request(new URL(req.url,'http://127.0.0.1'),{method:req.method,headers:req.headers,
