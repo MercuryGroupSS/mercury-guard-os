@@ -15,3 +15,15 @@ An active guard requires an active vendor. Assignments require an active guard a
 A created directory has owner-only access; SQLite files and provisioning.json are owner-readable/writable only. The manifest is written last with validated_not_activated status. A filesystem failure can leave an incomplete new directory; absence of the completion manifest means it must not be activated. This tool never removes or overwrites existing configuration. Snapshots contain plaintext synthetic directory data and are not a production personnel store. Verification of real Auth subjects/emails, account enrollment/recovery, secure production persistence and approved activation remain separate requirements.
 
 Vendor access can be suspended in the local directory through the administrative `setVendorActive(vendorId, active)` method. This disables login and trusted identity resolution for every linked guard, including previously authenticated sessions when the service resolves their identity again. It does not delete guards, assignments or audit records. Reactivation preserves each guard's own active/disabled status. Both company and individual vendors follow this rule. This is a local administrative API, not a deployed Ops Dashboard control or a phone-side offline revocation mechanism.
+
+## Inspect or change local vendor access
+
+From the source root, inspect an existing synthetic directory:
+
+```sh
+node server/scripts/vendor-access.mjs --database /absolute/path/directory.sqlite --vendor company --action inspect
+```
+
+To suspend or reactivate it, use `--action suspend` or `--action activate` and include `--operator local-admin --reason 'Synthetic access review'`. Output reports vendor type, linked guards, individually active guards and resulting eligible guards. Inspection is read-only and does not create an audit table. Changes and their audit entry commit in the same SQLite transaction; if audit insertion fails, access stays unchanged. Each request, including a repeated request for the current state, receives a new audit ID. The operator label is supplied by the local operator and is not authenticated identity evidence. Database filesystem permissions control access to this tool.
+
+Missing files, symbolic-link database paths, unknown vendors and invalid arguments are refused. The command never creates a directory database, starts a service, contacts Supabase or changes a dashboard. An existing local service sees the change on its next directory lookup; offline phone grants retain their separate expiry/revocation limits. No guard status or historical event is deleted or changed.
