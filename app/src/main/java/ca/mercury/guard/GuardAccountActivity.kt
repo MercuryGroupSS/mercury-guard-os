@@ -43,6 +43,7 @@ class GuardAccountActivity : Activity() {
  private var incidentDraftEditor:EditText?=null
  private var incidentHistoryView:ConnectedIncidentHistoryView?=null
  private var connectedPrivatePanel:ConnectedPrivatePanel?=null
+ private var ownedDialog:AlertDialog?=null
  private var incidentDraftScope:ConnectedIncidentDraftScope?=null
  private var incidentDraftDirty=false
  private var incidentDraftSuppress=false
@@ -62,11 +63,28 @@ class GuardAccountActivity : Activity() {
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Escalate"){unverifiedEscalation()};button("Return"){finish()} }
   if(intent.getBooleanExtra("open_escalation",false)){intent.removeExtra("open_escalation");unverifiedEscalation()}
  }
+ /** Home may return before onStop. Fence user-chosen departure before the pause and scrub now. */
+ override fun onUserLeaveHint(){
+  super.onUserLeaveHint();visibleForLocation=false;stopped=true;clearSession()
+  if(::root.isInitialized)scrubDepartedView(root)
+  if(!isFinishing&&!isDestroyed)screen("ACCOUNT LOCKED","Sign in again when you return to Mercury One.")
+ }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();visibleForLocation=true;if(stopped){stopped=false;startScreen()}else shiftDeadlineRefresh?.run();loginParticles?.startMotion()}
  override fun onPause(){visibleForLocation=false;if(incidentHistoryView!=null||connectedPrivatePanel!=null){stopped=true;clearSession()};cancelPatrolPoint();cancelShiftDeadline(true);persistIncidentDraft();loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
- override fun onDestroy(){closeIncidentHistory();closeConnectedPanel();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
- private fun clearSession(){closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline();persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ override fun onDestroy(){dismissOwnedDialog();closeIncidentHistory();closeConnectedPanel();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
+ private fun clearSession(){dismissOwnedDialog();closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline();persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ private fun showOwnedDialog(dialog:AlertDialog):AlertDialog {
+  dismissOwnedDialog();ownedDialog=dialog
+  dialog.setOnDismissListener{if(ownedDialog===dialog)ownedDialog=null};dialog.show();return dialog
+ }
+ private fun AlertDialog.Builder.showOwned()=showOwnedDialog(create())
+ private fun dismissOwnedDialog(){val dialog=ownedDialog;ownedDialog=null;dialog?.setOnDismissListener(null);dialog?.dismiss();dialog?.window?.decorView?.let{scrubDepartedView(it)}}
+ private fun scrubDepartedView(view:View){
+  view.setOnClickListener(null)
+  if(view is TextView){val suppressed=incidentDraftSuppress;incidentDraftSuppress=true;try{view.text=""}finally{incidentDraftSuppress=suppressed}}
+  if(view is ViewGroup)for(i in 0 until view.childCount)scrubDepartedView(view.getChildAt(i))
+ }
  private fun closeIncidentHistory(){incidentHistoryView?.close();incidentHistoryView=null}
  private fun closeConnectedPanel(){connectedPrivatePanel?.close();connectedPrivatePanel=null}
  private fun screen(title:String,detail:String){
@@ -110,7 +128,7 @@ class GuardAccountActivity : Activity() {
  private fun confirmClockOut(item:JSONObject,scope:DispatchScope){
   try{check(shiftObserved(item)>=item.getLong("endsAt"))}catch(_:Exception){status.text="Refresh assignments before confirming scheduled clock-out.";return}
   val stamp=generation;val displayedRoot=root
-  AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,scope,"end","")}.show()
+  AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,scope,"end","")}.showOwned()
  }
  private fun earlyExit(item:JSONObject,scope:DispatchScope){
   try{if(shiftObserved(item)>=item.getLong("endsAt")){confirmClockOut(item,scope);return}}catch(_:Exception){status.text="Refresh assignments before requesting an early exit.";return}
@@ -121,7 +139,7 @@ class GuardAccountActivity : Activity() {
    if(stamp!=generation||root!==displayedRoot||!visibleForLocation||stopped){dialog.dismiss();return@setOnClickListener}
    try{if(shiftObserved(item)>=item.getLong("endsAt")){dialog.dismiss();confirmClockOut(item,scope);return@setOnClickListener}}catch(_:Exception){reason.error="Refresh assignment timing before confirming";return@setOnClickListener}
    val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else if(!ShiftTransitionStore.validReason(text))reason.error="Please shorten the reason before confirming" else{dialog.dismiss();submitShift(item,scope,"end",text)}
-  }};dialog.show()
+  }};showOwnedDialog(dialog)
  }
  private fun startScreen(){
   clearSession()
@@ -168,7 +186,7 @@ class GuardAccountActivity : Activity() {
   try {
    check(DeviceIdentity(this).publicIdentity()!=null)
    val cancellation=CancellationSignal();signal=cancellation;loginParticles?.setSigningIn(true)
-   val builder=BiometricPrompt.Builder(this).setTitle("Unlock guard sign-in").setNegativeButton("Cancel",mainExecutor){_,_->signal=null;loginParticles?.setSigningIn(false)}
+   val builder=BiometricPrompt.Builder(this).setTitle("Unlock guard sign-in").setNegativeButton("Cancel",mainExecutor){_,_->if(stamp==generation){signal=null;loginParticles?.setSigningIn(false)}}
    if(Build.VERSION.SDK_INT>=30)builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
    builder.build().authenticate(cancellation,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
     override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){if(stamp==generation&&!isFinishing){signal=null;credentials()}}
@@ -248,7 +266,8 @@ class GuardAccountActivity : Activity() {
    if(pending.isEmpty()){
     when(state){
      "not_started"->if(item.getBoolean("canStart"))button("Clock in"){
-      AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->submitShift(item,scope,"start","")}.show()
+      val stamp=generation;val displayedRoot=root
+      AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,scope,"start","")}.showOwned()
      }else status.text="This assignment is outside its clock-in window. Refresh assignments when it begins."
      "active"->{
       val continuing=if(observed<item.getLong("endsAt")&&item.optBoolean("assignmentActive",true))button("Continue shift"){verifyAssignment(item)}else null
@@ -344,12 +363,14 @@ class GuardAccountActivity : Activity() {
   root.addView(note)
   if(!retainedDraft.isNullOrEmpty())root.addView(TextView(this).apply{text="Recovered encrypted unfinished incident for this account and assignment. It has not been submitted."})
   button("Discard unfinished incident"){
+   val stamp=generation;val displayedRoot=root
    AlertDialog.Builder(this).setTitle("Discard unfinished incident?").setMessage("Discard only the unfinished text shown here. Recorded incidents remain unchanged.").setNegativeButton("Keep draft",null).setPositiveButton("Discard"){_,_->
+    if(stamp!=generation||root!==displayedRoot||!visibleForLocation||stopped)return@setPositiveButton
     try{
      val cleared=ConnectedIncidentDraftStore(this).use{it.clear(draftScope,note.text.toString())}
      if(cleared){incidentDraftSuppress=true;note.text.clear();incidentDraftSuppress=false;incidentDraftDirty=false;status.text="Unfinished incident discarded."}else status.text="A newer unfinished draft is retained. Reopen this assignment to recover it."
     }catch(_:Exception){status.text="Draft could not be discarded; encrypted text remains preserved."}
-   }.show()
+   }.showOwned()
   }
   button("Save authorized incident"){
    try{
@@ -602,9 +623,11 @@ class GuardAccountActivity : Activity() {
   button("Back to assignment"){captureScreen(item)}
  }
  private fun missReason(item:JSONObject,revision:Long,slot:Long){
+  val stamp=generation;val displayedRoot=root
   val input=EditText(this).apply{hint="Explain the missed delivery";minLines=3;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;filters=arrayOf(android.text.InputFilter.LengthFilter(2000));isSaveEnabled=false}
   val dialog=AlertDialog.Builder(this).setTitle("Reason for check ${slot+1}").setMessage("This adds a note and keeps the original missed deadline. Dispatch has not been notified.").setView(input).setNegativeButton("Cancel",null).setPositiveButton("Save locally",null).create()
   dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
+   if(stamp!=generation||root!==displayedRoot||!visibleForLocation||stopped){dialog.dismiss();return@setOnClickListener}
    try{
     val reason=input.text.toString().trim();require(reason.isNotEmpty())
     val binding=captureBinding?:error("Sign in again");val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
@@ -614,7 +637,7 @@ class GuardAccountActivity : Activity() {
     val db=ScopedEventStore(this);try{db.capture("check_in_miss_reason",JSONObject().put("policy_revision",revision).put("slot",slot).put("reason",reason),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
     UploadCoordinator(this).request();dialog.dismiss();status.text="Reason saved locally. Automatic delivery is requested; the original missed deadline remains recorded."
    }catch(_:Exception){input.error="Enter a reason and refresh authorization if it has expired."}
-  }};dialog.show()
+  }};showOwnedDialog(dialog)
  }
  private fun beginCheckIn(item:JSONObject){
   val anchor=captureAnchor?:return;val binding=captureBinding?:return;val grant=captureGrant?:return
@@ -652,7 +675,7 @@ class GuardAccountActivity : Activity() {
         val evidence=AuthorizedCheckInEvidence(policy,slot,biometricAt,location)
         AlertDialog.Builder(this@GuardAccountActivity).setTitle("Check-in photo")
          .setMessage("Take a consented test photo to complete this pilot check-in. It will be encrypted locally and queued for automatic delivery while the verified upload session is valid. Opening the camera locks this screen.")
-         .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation)openAuthorizedCamera(evidence)}.show()
+         .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation)openAuthorizedCamera(evidence)}.showOwned()
        }catch(_:Exception){status.text="Check-in is incomplete. A fresh, non-mock GPS fix within the site's accuracy limit is required. Try again outdoors."}
       }
      }}
@@ -661,9 +684,10 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){busy=false;signal=null;status.text="Biometric check unavailable. No check-in was saved."}
  }
  private fun confirmPhoto(){
+  val stamp=generation;val displayedRoot=root
   AlertDialog.Builder(this).setTitle("Capture photo evidence")
    .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Automatic delivery requests upload to the configured pilot service while the verified upload session is valid. Camera use locks this screen; a service receipt confirms acceptance.")
-   .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->openAuthorizedCamera()}.show()
+   .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)openAuthorizedCamera()}.showOwned()
  }
  private fun openAuthorizedCamera(checkIn:AuthorizedCheckInEvidence?=null){
   if(pendingPhoto!=null)return

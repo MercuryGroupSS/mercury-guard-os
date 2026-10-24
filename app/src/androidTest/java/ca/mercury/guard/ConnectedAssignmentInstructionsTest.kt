@@ -10,7 +10,7 @@ class ConnectedAssignmentInstructionsTest {
  private val scope=DispatchScope(GrantBinding("guard-a","site-a","future-assignment","a".repeat(64),0),"company-a")
  private fun message()=JSONObject().put("message_id","instructions-a").put("version",1).put("state","active").put("title","Site instructions").put("body","Read before clock-in").put("issued_at",1000).put("due_at",JSONObject.NULL)
  private fun page()=JSONObject().put("scope",scope.json()).put("changes",JSONArray().put(message())).put("next_cursor",UUID.randomUUID().toString()).put("has_more",false).put("server_time_ms",2000)
- private fun rejects(value:JSONObject){try{ConnectedAssignmentInstructions.parse(scope,null,value);fail("Invalid page accepted")}catch(_:IllegalArgumentException){}catch(_:org.json.JSONException){}}
+ private fun rejects(value:JSONObject){try{ConnectedAssignmentInstructions.parse(scope,null,value);fail("Invalid page accepted")}catch(_:IllegalArgumentException){}catch(_:IllegalStateException){}catch(_:org.json.JSONException){}}
  @Test fun futureAssignmentReadHasNoCaptureGrantAttendanceOrAcknowledgementRequirement(){
   val parsed=ConnectedAssignmentInstructions.parse(scope,null,page());assertEquals("Read before clock-in",parsed.messages.single().body);assertFalse(parsed.hasMore)
   assertEquals("AssignmentInstructions(redacted)",parsed.toString());assertEquals("AssignmentInstruction(redacted)",parsed.messages.single().toString())

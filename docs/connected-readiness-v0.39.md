@@ -1,12 +1,14 @@
-# Connected readiness and assignment instructions — v0.39 candidate
+# Connected readiness and assignment instructions — v0.40 candidate
 
-This candidate closes remaining connected-app navigation gaps. Exact-source CI and an immutable configured APK record are required before accepting the candidate. Physical Fold testing remains deferred.
+This feature was introduced in the unaccepted v0.39 candidate; v0.40 corrects the diagnosed parser-test exception expectation and UI-test layout synchronization. It closes remaining connected-app navigation gaps. Exact-source CI and an immutable configured APK record are required before accepting the candidate. Physical Fold testing remains deferred.
 
 An approved guard should be able to read the instructions for their assigned site before clock-in. The existing possession-authorized dispatch endpoint supports approved future assignments; a successful read must not start a shift, request a capture grant, record attendance or acknowledge an instruction. The new pre-start path is network-only. It must not adopt the older dispatch cache or make another individual's retained instructions visible. Existing active-shift acknowledgement still requires its current signed capture authority.
 
 The connected readiness panel must report the current connected account, assignment and service result alongside actual OS permission/channel and connected location state. It must give visible refresh feedback and distinguish permission from a delivered fresh GPS fix. It must not use prototype tracking, start collection while displaying status, invent check-in cadence, or add a new clock-in eligibility rule. Location consent and approved policy remain separate from OS permission.
 
 Private instructions and readiness are scoped to the current configuration, installation key, individual account and selected assignment. Pause, navigation, session/configuration changes and delayed responses must clear or reject stale private content. Biometric handset access remains distinct from server proof of an individual guard.
+
+User-chosen departure, including Home, now clears foreground account/capture authority and cancels late callbacks before an immediate return can beat `onStop`. Owned private dialogs are dismissed and scrubbed; encrypted drafts, original pending transitions, pending camera output and separately authorized background work are preserved. The app shows a passive lock screen and requires the existing biometric/sign-in flow on return. Ordinary system biometric/permission pauses retain their existing behavior. This uses Android's [user-departure callback](https://developer.android.com/reference/android/app/Activity#onUserLeaveHint()); real Home/launcher/framework-biometric CI remains the acceptance gate.
 
 The server read path retains its existing assignment/device/revision checks. The candidate also reviews the current Auth session and individual login binding within the PostgreSQL dispatch transaction and binds cursors to the subject. A stale cursor uses the existing reset response; no public protocol field or new privilege is introduced.
 

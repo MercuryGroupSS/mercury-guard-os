@@ -14,6 +14,8 @@ import org.junit.Test
 import java.security.KeyPairGenerator
 import java.util.Base64
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Only a synthetic presentation scope is injected; no service/capture action or live credentials. */
 class ConnectedIncidentDraftLifecycleTest {
@@ -34,6 +36,40 @@ class ConnectedIncidentDraftLifecycleTest {
   }
   assertTrue("Real navigation control missing: $title",find(activity.window.decorView)?.performClick()==true)
  }
+ /** Wait for the replaced screen's actual layout, then use the same scroll gestures as a guard. */
+ private fun enterDraft(scenario:ActivityScenario<GuardAccountActivity>,text:String){
+  fun editor(view:android.view.View):android.widget.EditText? {
+   if(view is android.widget.EditText&&view.hint?.toString()=="Describe the incident")return view
+   if(view is android.view.ViewGroup)for(i in 0 until view.childCount)editor(view.getChildAt(i))?.let{return it}
+   return null
+  }
+  val measured=CountDownLatch(1)
+  var observed:android.view.View?=null;var layoutListener:android.view.View.OnLayoutChangeListener?=null
+  scenario.onActivity{activity->
+   val target=editor(activity.window.decorView)?:error("Incident editor missing");observed=target
+   if(target.isLaidOut&&target.width>0&&target.height>0)measured.countDown()
+   else {
+    layoutListener=android.view.View.OnLayoutChangeListener{v,_,_,_,_,_,_,_,_->if(v.width>0&&v.height>0)measured.countDown()}
+    target.addOnLayoutChangeListener(layoutListener)
+   }
+  }
+  try{check(measured.await(5,TimeUnit.SECONDS)){"Incident editor did not complete layout"}}
+  finally{scenario.onActivity{layoutListener?.let{listener->observed?.removeOnLayoutChangeListener(listener)}}}
+  androidx.test.espresso.Espresso.closeSoftKeyboard()
+  for(attempt in 0..8){
+   var visible=false;var above=false
+   scenario.onActivity{activity->
+    val target=editor(activity.window.decorView)?:error("Incident editor disappeared")
+    val shown=android.graphics.Rect();val window=android.graphics.Rect();val position=IntArray(2)
+    activity.window.decorView.getWindowVisibleDisplayFrame(window);target.getLocationOnScreen(position)
+    above=position[1]<window.top
+    visible=target.width>0&&target.height>0&&target.getGlobalVisibleRect(shown)&&shown.width().toLong()*shown.height()*100>=target.width.toLong()*target.height*90
+   }
+   if(visible){onView(withHint("Describe the incident")).perform(click(),replaceText(text),closeSoftKeyboard());return}
+   check(attempt<8){"Incident editor remained outside the visible viewport"}
+   onView(isAssignableFrom(android.widget.ScrollView::class.java)).perform(if(above)swipeDown()else swipeUp())
+  }
+ }
  @Test fun rotationBackgroundPatrolAndEscalationRecoverOnlyTheOriginalVerifiedIndividualDraft(){
   val suffix=UUID.randomUUID().toString();val key=KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair().public
   val config=GuardServiceConfig.parse(JSONObject().put("endpoint","https://example.test").put("issuer","test").put("audience","mercury-local").put("device_id","draft-phone")
@@ -45,7 +81,7 @@ class ConnectedIncidentDraftLifecycleTest {
   val text="Unfinished connected incident — café 🚨\nKeep exact text through navigation."
   try{ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
    scenario.onActivity{present(it,config,scope,item)}
-   onView(withHint("Describe the incident")).perform(scrollTo(),replaceText(text),closeSoftKeyboard())
+   enterDraft(scenario,text)
    assertEquals(text,ConnectedIncidentDraftStore(context).use{it.read(scope)})
    scenario.onActivity{click(it,"Open assigned patrol")};onView(withText("ASSIGNED PATROL")).check(matches(isDisplayed()))
    scenario.onActivity{click(it,"Back to assignment")}
