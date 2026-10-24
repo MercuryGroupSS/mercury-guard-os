@@ -1,8 +1,10 @@
 package ca.mercury.guard
 
 import android.app.Activity
+import android.app.KeyguardManager
 import android.content.Intent
 import android.hardware.biometrics.BiometricManager
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.View
 import android.view.ViewGroup
@@ -34,6 +36,28 @@ class HttpsSignInIntegrationTest {
  private fun tree(view:View):List<View> = listOf(view)+(if(view is ViewGroup)(0 until view.childCount).flatMap{tree(view.getChildAt(it))}else emptyList())
  private fun hasText(value:String,prefix:Boolean=false):Boolean{var found=false;instrumentation.runOnMainSync{val a=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).singleOrNull{it.packageName==context.packageName};found=a?.let{tree(it.window.decorView).filterIsInstance<TextView>().any{v->if(prefix)v.text.toString().startsWith(value)else v.text.toString()==value}}?:false};return found}
  private fun hasCredentials():Boolean{var found=false;instrumentation.runOnMainSync{val a=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).singleOrNull{it.packageName==context.packageName};found=a?.let{tree(it.window.decorView).filterIsInstance<EditText>().any{v->v.hint?.toString() in setOf("Guard ID","Password")}}?:false};return found}
+ private fun publishSafeFailureFacts(){
+  // Enumerated facts only: never serialize view text, class/package names,
+  // credentials, XML, exception messages or causes into instrumentation output.
+  val facts=try{
+   val lifecycle=JSONObject();val flags=JSONObject().put("GUARD_SIGN_IN",false).put("credentials",false).put("assignments",false)
+   instrumentation.runOnMainSync{
+    val monitor=ActivityLifecycleMonitorRegistry.getInstance()
+    for(s in Stage.values()){
+     val activities=monitor.getActivitiesInStage(s).filter{it.packageName==context.packageName}
+     val types=activities.map{when(it){is GuardAccountActivity->"ACCOUNT";is LauncherActivity->"LAUNCHER";is MainActivity->"DEMO";else->"OTHER"}}.distinct().sorted()
+     lifecycle.put(s.name,JSONObject().put("count",activities.size).put("types",org.json.JSONArray(types)))
+    }
+    val a=monitor.getActivitiesInStage(Stage.RESUMED).singleOrNull{it.packageName==context.packageName}
+    if(a!=null){val views=tree(a.window.decorView);val labels=views.filterIsInstance<TextView>();flags.put("GUARD_SIGN_IN",labels.any{it.text.toString()=="GUARD SIGN-IN"});flags.put("assignments",labels.any{it.text.toString()=="YOUR ASSIGNMENTS"});flags.put("credentials",views.filterIsInstance<EditText>().any{it.hint?.toString() in setOf("Guard ID","Password")})}
+   }
+   val activePackage=instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()
+   val root=when(activePackage){context.packageName->"target";"com.android.systemui"->"systemui";"com.android.settings"->"settings";"com.android.launcher","com.android.launcher3","com.google.android.apps.nexuslauncher"->"launcher";else->"other"}
+   val keyguard=context.getSystemService(KeyguardManager::class.java);val power=context.getSystemService(PowerManager::class.java)
+   JSONObject().put("version",1).put("available",true).put("lifecycle",lifecycle).put("root_active_package",root).put("view_flags",flags).put("keyguard_locked",keyguard.isKeyguardLocked).put("device_locked",keyguard.isDeviceLocked).put("interactive",power.isInteractive)
+  }catch(_:Throwable){JSONObject().put("version",1).put("available",false)}
+  instrumentation.addResults(android.os.Bundle().apply{putString("mercury_signin_failure_facts",facts.toString())})
+ }
  private data class Geometry(val visible:Boolean,val y:Int,val windowTop:Int)
  private fun geometry(label:String):Geometry?{var found:Geometry?=null;instrumentation.runOnMainSync{val a=ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).singleOrNull{it.packageName==context.packageName};val v=a?.let{tree(it.window.decorView).filterIsInstance<TextView>().singleOrNull{v->v.text.toString()==label}};if(a!=null&&v!=null&&v.isLaidOut&&v.width>0&&v.height>0){val clipped=android.graphics.Rect();val bounds=android.graphics.Rect();a.window.decorView.getWindowVisibleDisplayFrame(bounds);val at=IntArray(2);v.getLocationOnScreen(at);val visible=v.getGlobalVisibleRect(clipped)&&clipped.width()>=v.width*.9&&clipped.height()>=v.height*.9;found=Geometry(visible,at[1],bounds.top)}};return found}
  private fun click(label:String){
@@ -80,7 +104,9 @@ class HttpsSignInIntegrationTest {
    stage="background_exit";instrumentation.uiAutomation.executeShellCommand("input keyevent KEYCODE_HOME").use{fd->java.io.FileInputStream(fd.fileDescriptor).use{it.readBytes()}};waitFor("Account did not leave foreground"){activity()==null}
    // A launcher tap is a user foreground action. Do not ask the background
    // target context to launch itself, which API35 may correctly restrict.
-   stage="background_return_launcher";hostAction("reopen_launcher");waitFor("Real user launcher did not reach account flow"){activity() is GuardAccountActivity};waitFor("Background return did not relock account"){hasText("GUARD SIGN-IN")}
+   stage="background_reopen_ack";hostAction("reopen_launcher")
+   stage="background_wait_account";waitFor("Real user launcher did not reach account flow"){activity() is GuardAccountActivity}
+   stage="background_wait_locked_form";waitFor("Background return did not relock account"){hasText("GUARD SIGN-IN")}
    stage="background_field_lock";assertFalse("Background exposed credentials",hasCredentials());assertFalse(hasText("YOUR ASSIGNMENTS"))
    stage="guard_switch_biometric";unlock("valid_finger_b");waitFor("Switch retained prior upload authority"){UploadAuthorityStore(context).load(config,public.thumbprint)==null}
    stage="guard_b_login";login(b.getString("guard_id"),metadata.getString("password"));waitFor("Guard B assignments were not verified"){hasText("Guard: "+b.getString("guard_id"),true)}
@@ -91,7 +117,7 @@ class HttpsSignInIntegrationTest {
    waitFor("Original real Auth sessions were not revoked",30000){val stats=fixture(metadata,"/test/stats");stats.getJSONObject("logged_out_session_denied").getInt("a")>=1&&stats.getJSONObject("logged_out_session_denied").getInt("b")>=1}
    stage="service_read_counts";val stats=fixture(metadata,"/test/stats");assertTrue(stats.getBoolean("company_vendor"));assertTrue(stats.getBoolean("distinct_subjects"));assertEquals(1,stats.getInt("enrollments"));for(label in listOf("a","b")){assertEquals(1,stats.getJSONObject("logins").getInt(label));assertTrue(stats.getJSONObject("assignments").getInt(label)>=1);assertTrue(stats.getJSONObject("profiles").getInt(label)>=1)} // Durable upload re-verification may legitimately read again.
    instrumentation.addResults(android.os.Bundle().apply{putString("mercury_signin_acceptance","SIGNIN_ACCEPTANCE actual_launcher=true actual_platform_strong_biometric=true cancel_denied=true unknown_finger_denied=true individual_guard_accounts=2 company_vendor_not_login=true background_relocked=true switched_identity_isolated=true exact_sessions_revoked=true")})
-  }catch(error:Throwable){throw AssertionError("Actual sign-in acceptance failed at bounded stage: $stage; failure_type=${error.javaClass.simpleName}; credential UI diagnostics intentionally withheld")}
+  }catch(error:Throwable){publishSafeFailureFacts();throw AssertionError("Actual sign-in acceptance failed at bounded stage: $stage; failure_type=${error.javaClass.simpleName}; credential UI diagnostics intentionally withheld")}
   finally{
    File(context.filesDir,"signin-test-step").delete();context.filesDir.listFiles()?.filter{it.name.startsWith("signin-test-ack-")}?.forEach{it.delete()};UploadCoordinator(context).stop()
    instrumentation.runOnMainSync{for(s in Stage.values())for(a in ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(s).toList().filter{it.packageName==context.packageName}){tree(a.window.decorView).filterIsInstance<EditText>().forEach{it.text.clear()};if(!a.isFinishing)a.finish()}}

@@ -93,9 +93,25 @@ async function startFixture(){
  fixtureClosed=new Promise(resolve=>{fixture.once('error',()=>resolve(fixtureResult={spawn_error:true}));fixture.once('close',(code,signal)=>resolve(fixtureResult={code,signal}));});result.fixture_cleanup='pending';
  const until=Date.now()+90000;while(Date.now()<until){if(abort.signal.aborted)throw new GateError('interrupted');if(fixtureResult)throw new GateError('fixture_start_failed');let own=false;try{own=JSON.parse(readPrivateBuildFile(ownership.pathname,8192)).pid===fixture.pid;}catch{}if(own&&await health())return;await pause(300);}throw new GateError('fixture_ready_timeout');
 }
+function parseSafeFailureFacts(output){
+ const values=output.split(/\r?\n/).filter(line=>line.startsWith('INSTRUMENTATION_RESULT: mercury_signin_failure_facts='));
+ if(!values.length)return {state:'absent'};
+ const exact=(value,keys)=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&JSON.stringify(Object.keys(value).sort())===JSON.stringify([...keys].sort());
+ try{
+  if(values.length!==1||values[0].length>8192)throw Error();const value=JSON.parse(values[0].slice('INSTRUMENTATION_RESULT: mercury_signin_failure_facts='.length));
+  if(value.version!==1||typeof value.available!=='boolean')throw Error();
+  if(value.available===false){if(!exact(value,['version','available']))throw Error();return {state:'accepted',facts:{version:1,available:false}};}
+  const stages=['PRE_ON_CREATE','CREATED','STARTED','RESUMED','PAUSED','STOPPED','RESTARTED','DESTROYED'],types=['ACCOUNT','LAUNCHER','DEMO','OTHER'];
+  if(!exact(value,['version','available','lifecycle','root_active_package','view_flags','keyguard_locked','device_locked','interactive'])||!exact(value.lifecycle,stages)||!exact(value.view_flags,['GUARD_SIGN_IN','credentials','assignments']))throw Error();
+  if(!['target','systemui','settings','launcher','other'].includes(value.root_active_package)||!['keyguard_locked','device_locked','interactive'].every(key=>typeof value[key]==='boolean')||!Object.values(value.view_flags).every(flag=>typeof flag==='boolean'))throw Error();
+  const lifecycle={};for(const stage of stages){const entry=value.lifecycle[stage];if(!exact(entry,['count','types'])||!Number.isInteger(entry.count)||entry.count<0||entry.count>64||!Array.isArray(entry.types)||entry.types.length>4||new Set(entry.types).size!==entry.types.length||!entry.types.every(type=>types.includes(type)))throw Error();lifecycle[stage]={count:entry.count,types:[...entry.types]};}
+  return {state:'accepted',facts:{version:1,available:true,lifecycle,root_active_package:value.root_active_package,view_flags:{GUARD_SIGN_IN:value.view_flags.GUARD_SIGN_IN,credentials:value.view_flags.credentials,assignments:value.view_flags.assignments},keyguard_locked:value.keyguard_locked,device_locked:value.device_locked,interactive:value.interactive}};
+ }catch{return {state:'rejected'};}
+}
 async function instrument(){
  let ended=false,output,executionError,pollError;const running=execute(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','signinIntegration','true','-e','class','ca.mercury.guard.HttpsSignInIntegrationTest','ca.mercury.guard.httpstest.test/androidx.test.runner.AndroidJUnitRunner'],{cwd:root,env:process.env,encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024,signal:abort.signal});const task=running.then(value=>{output=value.stdout;},()=>{executionError=true;}).finally(()=>{ended=true;});
- const handled=new Set(),expectedSteps=['unknown_finger','valid_finger_a','reopen_launcher','valid_finger_b'],fingers=new Map([['unknown_finger','32'],['valid_finger_a','31'],['valid_finger_b','31']]);
+ const handled=new Set(),expectedSteps=['unknown_finger','valid_finger_a','reopen_launcher','valid_finger_b'],fingers=new Map([['unknown_finger','32'],['valid_finger_a','31'],['valid_finger_b','31']]),reopen={started:false,completed:false,status_ok:false,amstart_elapsed_ms:0,ack_written:false};
+ const recordFailureFacts=()=>{result.host_failure_facts={reopen:{...reopen},handled_steps:[...handled]};const parsed=parseSafeFailureFacts(output??'');result.instrumentation_failure_facts_state=parsed.state;if(parsed.facts)result.instrumentation_failure_facts=parsed.facts;};
  try{while(!ended){
    let step;try{step=(await device(['shell','run-as','ca.mercury.guard.httpstest','cat','files/signin-test-step'],'sensor_step',{timeout:5000})).trim();}catch{}
    if(step&&!handled.has(step)){
@@ -104,11 +120,16 @@ async function instrument(){
      // The APK and PackageManager-verified real launcher only. This models a
      // user reopening the app; it never starts the private account Activity,
      // clears state, injects a session or substitutes for the next biometric.
-     await device(['shell','am','start','-W','-a','android.intent.action.MAIN','-c','android.intent.category.LAUNCHER','-n','ca.mercury.guard.httpstest/ca.mercury.guard.LauncherActivity'],'actual_launcher_reopen');
+     // Acknowledge the accepted asynchronous user launch request, not window
+     // drawing/finish accounting. Kotlin independently asserts resume+relock.
+     reopen.started=true;const started=performance.now();let response;
+     try{response=await device(['shell','am','start','-a','android.intent.action.MAIN','-c','android.intent.category.LAUNCHER','-n','ca.mercury.guard.httpstest/ca.mercury.guard.LauncherActivity'],'actual_launcher_reopen');reopen.completed=true;}finally{reopen.amstart_elapsed_ms=Math.min(60000,Math.max(0,Math.round(performance.now()-started)));}
+     reopen.status_ok=/^Starting: Intent \{[^\r\n]*cmp=ca\.mercury\.guard\.httpstest\/ca\.mercury\.guard\.LauncherActivity(?:\s|\})/m.test(response)&&!/(?:^|\n)\s*(?:Error\b|Exception\b)|java\.lang\./i.test(response);
+     if(!reopen.status_ok)throw new GateError('launcher_request_rejected');
     }else{
      await device(['emu','finger','touch',fingers.get(step)],'framework_finger_touch');await pause(150);await device(['emu','finger','remove'],'framework_finger_remove');
     }
-    await device(['shell','run-as','ca.mercury.guard.httpstest','touch','files/signin-test-ack-'+step],'sensor_ack');handled.add(step);
+    await device(['shell','run-as','ca.mercury.guard.httpstest','touch','files/signin-test-ack-'+step],'sensor_ack');if(step==='reopen_launcher')reopen.ack_written=true;handled.add(step);
    }
    await pause(100);
   }}catch(error){pollError=error;}
@@ -116,11 +137,13 @@ async function instrument(){
   if(!ended){try{await device(['shell','am','force-stop','ca.mercury.guard.httpstest'],'failed_instrumentation_stop',{cleanup:true});}catch{unconfirmedShutdown=true;pollError=new GateError('instrumentation_stop_unconfirmed');}running.child?.kill('SIGTERM');await Promise.race([task,pause(10000)]);if(!ended){unconfirmedShutdown=true;pollError=new GateError('instrumentation_child_unconfirmed');}}
   else await task;
  }
- if(pollError)throw pollError;
+ if(pollError){recordFailureFacts();throw pollError;}
  // Never persist raw UI/instrumentation errors: Espresso can include entered
  // credentials in its hierarchy diagnostics. Only fixed acceptance fields leave memory.
  if(executionError||!output||!/OK \(1 test\)/.test(output)||/INSTRUMENTATION_STATUS_CODE: -\d|FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/.test(output)){
-  const stage=/failed at bounded stage: ([a-z_]+)/.exec(output??'')?.[1],type=/failure_type=([A-Za-z]+)/.exec(output??'')?.[1];if(stage)result.failed_stage=stage;if(type)result.failure_type=type;throw new GateError('actual_signin_instrumentation_failed');
+  recordFailureFacts();const stage=/failed at bounded stage: ([a-z_]+)/.exec(output??'')?.[1],type=/failure_type=([A-Za-z]+)/.exec(output??'')?.[1];
+  const stages=['initial','first_use_launcher','biometric_button','biometric_prompt_initial','biometric_cancel_control','biometric_cancel_result','unknown_fingerprint','strong_fingerprint_a','company_vendor_denied','guard_a_login','background_exit','background_reopen_ack','background_wait_account','background_wait_locked_form','background_field_lock','guard_switch_biometric','guard_b_login','explicit_signout','logout_server_confirmation','service_read_counts'];
+  if(stages.includes(stage))result.failed_stage=stage;if(type)result.failure_type=['AssertionError','IllegalStateException','IllegalArgumentException','RuntimeException','NoMatchingViewException','PerformException','AmbiguousViewMatcherException','IOException','SocketTimeoutException'].includes(type)?type:'Other';throw new GateError('actual_signin_instrumentation_failed');
  }
  const marker=output.split('\n').find(line=>line.includes('SIGNIN_ACCEPTANCE actual_launcher=true actual_platform_strong_biometric=true'));
  if(!marker||JSON.stringify([...handled])!==JSON.stringify(expectedSteps))throw new GateError('actual_signin_evidence_missing');result.actual_framework_biometric='verified_emulator';result.individual_accounts=2;result.tests_passed=1;privateLog('instrumentation-summary.json',JSON.stringify({status:'passed',tests:1,host_steps:[...handled],raw_ui_output_retained:false})+'\n');
