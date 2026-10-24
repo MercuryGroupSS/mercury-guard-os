@@ -58,6 +58,14 @@ Database connections use verified TLS and a small two-connection pool per warm i
 
 The Auth provider and private Guard tables must share the same database's `auth.users` and current `auth.sessions`. Applying migrations alone does not create the owner-installed deployment marker, an administrator, individual guard, device or assignment. Review and install the exact deployment identity before activation, following [configured service identity](configured-service.md).
 
+## Private-page browser requests
+
+Account setup/recovery and administrator state-changing requests retain `mode: 'same-origin'`, `credentials: 'omit'` and `redirect: 'error'`. They explicitly set `referrerPolicy: 'same-origin'` so that their canonical Origin is present even though the page response has `Referrer-Policy: no-referrer`. Without this override, the Fetch standard and WebKit implementation serialize Origin as `null` for these same-origin-mode POSTs; ingress correctly rejects it. Chromium can instead retain the canonical Origin for the old request, so a Chrome-only baseline must not be reported as an iOS failure reproduction. Changing the page header alone is insufficient because ingress enforces the private response header too.
+
+Strict canonical-origin checks at ingress and application remain unchanged. Literal null and foreign origins must still fail before runtime/provider work. External navigation retains no-referrer; fixed same-origin request URLs have no credential-bearing query parameters. The browser regression runs only against an ephemeral loopback server with synthetic responses and records no real credentials or mail. CI runs it with its preinstalled Chrome and adds no package dependency. Account page-origin errors ask the user to refresh instead of blaming mailbox details.
+
+Implementation references: [WebKit Origin generation](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/page/SecurityPolicy.cpp) and [WebKit fetch header handling](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/loader/cache/CachedResourceRequest.cpp). See the [Fetch Origin algorithm](https://fetch.spec.whatwg.org/#append-a-request-origin-header) and [Referrer-Policy effects on Origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Referrer-Policy#effects_on_other_headers).
+
 ## Pilot mail and integrations
 
 Omitting `mail_recipients`, or setting it to `[]`, blocks every Guard account setup/recovery code and password path before the Auth provider is called. Only explicitly allowlisted lower-case addresses can use these paths. Confirm the operator-controlled pilot mailbox before adding it. This is a Guard portal control; provision the separate Auth/SMTP service consistently rather than relying on this control to restrict every direct provider API.

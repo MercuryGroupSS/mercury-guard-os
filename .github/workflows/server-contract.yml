@@ -35,6 +35,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:netlify
       - run: npm run test:netlify-bundle
+      - name: Real browser account and administration request origins
+        run: node server/scripts/check-browser-origin-ci.mjs
 
   postgres-identity:
     runs-on: ubuntu-24.04

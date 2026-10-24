@@ -97,9 +97,24 @@ test('interrupted writes stay distinguishable from rejected writes and untrusted
 test('default browser transport preserves the global fetch receiver',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=function(path){assert.equal(this,globalThis);return Promise.resolve(json(path.endsWith('/login')?session:member));};const client=new AdminClient({now:()=>1000});await client.login('a@example.test','password');assert.equal(client.session.subject,member.subject);}finally{globalThis.fetch=original;}
 });
+test('administrator login and reviewed POSTs preserve browser origin under private no-referrer pages',async()=>{
+ assert.equal(adminConsoleResponse(new Request('https://guard.test/admin/')).headers.get('referrer-policy'),'no-referrer');
+ const calls=[],client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{calls.push({path,options});return json(path.endsWith('/login')?session:path.endsWith('/me')?member:{status:'applied'});}});
+ await client.login('ADMIN@example.test','synthetic-password');
+ const change=new PendingChange({owner:member.subject,action:'vendor.create',reason:'Approved synthetic supplier',payload:{vendorId:'synthetic-company',kind:'company',active:true},requestId:'synthetic-request'});
+ const original=change.body;
+ for(const path of ['/v1/admin/actions','/v1/admin/resolve'])await client.request(path,{method:'POST',body:change.request(member.subject)});
+ const posts=calls.filter(({options})=>options.method==='POST');assert.deepEqual(posts.map(({path})=>path),['/v1/admin/login','/v1/admin/actions','/v1/admin/resolve']);
+ for(const {path,options}of posts){
+  assert.equal(options.referrerPolicy,'same-origin');assert.equal(options.mode,'same-origin');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert.equal(options.headers['content-type'],'application/json');assert.equal(Object.hasOwn(options.headers,'origin'),false);assert.ok(options.signal instanceof AbortSignal);
+  if(path.endsWith('/login')){assert.deepEqual(JSON.parse(options.body),{email:'admin@example.test',password:'synthetic-password'});assert.equal(options.headers.authorization,undefined);}
+  else{assert.equal(options.body,original);assert.equal(options.headers.authorization,'Bearer synthetic-access');}
+ }
+ assert.equal(change.body,original);
+});
 test('explicit sign-out clears local credentials immediately and posts only the captured bearer to the fixed same-origin endpoint',async()=>{
  let release;const calls=[],client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{calls.push({path,options});if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);return new Promise(resolve=>{release=resolve;});}});await client.login('a@example.test','password');const generation=client.generation,confirmation=client.logout();assert.equal(client.session,null);assert.equal(client.generation,generation+1);
- const {path,options}=calls.at(-1);assert.equal(path,'/v1/session/logout');assert.equal(options.method,'POST');assert.deepEqual(options.headers,{authorization:'Bearer synthetic-access'});assert.equal(options.body,undefined);assert.equal(options.credentials,'omit');assert.equal(options.cache,'no-store');assert.equal(options.redirect,'error');assert.equal(options.mode,'same-origin');assert.equal(path.includes('synthetic-access'),false);release(json({status:'signed_out'}));assert.equal(await confirmation,'signed_out');assert.equal(client.session,null);
+ const {path,options}=calls.at(-1);assert.equal(path,'/v1/session/logout');assert.equal(options.method,'POST');assert.deepEqual(options.headers,{authorization:'Bearer synthetic-access'});assert.equal(options.body,undefined);assert.equal(options.credentials,'omit');assert.equal(options.cache,'no-store');assert.equal(options.redirect,'error');assert.equal(options.mode,'same-origin');assert.equal(options.referrerPolicy,'same-origin');assert.equal(path.includes('synthetic-access'),false);release(json({status:'signed_out'}));assert.equal(await confirmation,'signed_out');assert.equal(client.session,null);
 });
 test('explicit sign-out distinguishes unavailable sessions from unconfirmed provider outcomes without restoring local credentials',async()=>{
  for(const [reply,expected]of [[()=>json({status:'signed_out'}),'signed_out'],[()=>json({},401),'session_unavailable'],[()=>json({},503),'unconfirmed'],[()=>Promise.reject(Error('offline')),'unconfirmed'],[()=>new Response('not json'),'unconfirmed'],[()=>json({status:'other'}),'unconfirmed'],[()=>json({status:'signed_out',extra:true}),'unconfirmed']]){

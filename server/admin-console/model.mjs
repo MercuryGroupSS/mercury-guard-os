@@ -116,6 +116,7 @@ export function valuesForRow(kind,row){
 }
 export class ApiError extends Error{constructor(message,status=0){super(message);this.status=status;}}
 const errors={401:'Sign in again to continue.',403:'Administrator access is unavailable. Contact the owner.',409:'This request ID has different saved contents. Check the audit before submitting another change.',429:'Too many sign-in attempts. Wait a few minutes and try again.',400:'The server rejected this change. Check the IDs, approval revision, account status, and required fields.',503:'The service is temporarily unavailable. Try again.'};
+// Override no-referrer only for fixed same-origin requests, preserving Origin checks.
 export class AdminClient{
  constructor({fetchImpl=(...args)=>globalThis.fetch(...args),now=Date.now,onSessionLost=()=>{}}={}){this.fetch=fetchImpl;this.now=now;this.onSessionLost=onSessionLost;this.session=null;this.generation=0;}
  clear(){this.session=null;this.generation++;}
@@ -123,7 +124,7 @@ export class AdminClient{
   const session=this.session;this.clear();const generation=this.generation,finish=result=>generation===this.generation?result:null;
   if(!session)return finish('session_unavailable');
   try{
-   const response=await this.fetch('/v1/session/logout',{method:'POST',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:AbortSignal.timeout(15000),headers:{authorization:'Bearer '+session.token}});
+   const response=await this.fetch('/v1/session/logout',{method:'POST',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',referrerPolicy:'same-origin',signal:AbortSignal.timeout(15000),headers:{authorization:'Bearer '+session.token}});
    if(response.status===401){await response.body?.cancel();return finish('session_unavailable');}
    if(response.status!==200){await response.body?.cancel();return finish('unconfirmed');}
    const result=await response.json();return finish(result&&Object.keys(result).join()==='status'&&result.status==='signed_out'?'signed_out':'unconfirmed');
@@ -131,7 +132,7 @@ export class AdminClient{
  }
  async send(path,{method='GET',body,token,signal}={}){
   if(!/^\/v1\/admin\/(login|me|catalog(?:\?[^#]*)?|actions|resolve)$/.test(path))throw Error('Invalid administration path');
-  let response;try{response=await this.fetch(path,{method,cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:signal??AbortSignal.timeout(15000),headers:{...(token?{authorization:'Bearer '+token}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});}catch{throw new ApiError('Connection interrupted. Keep this tab open and retry the same request.');}
+  let response;try{response=await this.fetch(path,{method,cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',referrerPolicy:'same-origin',signal:signal??AbortSignal.timeout(15000),headers:{...(token?{authorization:'Bearer '+token}:{}),...(body?{'content-type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});}catch{throw new ApiError('Connection interrupted. Keep this tab open and retry the same request.');}
   if(!response.ok)throw new ApiError(errors[response.status]??'The service could not complete this request.',response.status);
   try{return await response.json();}catch{throw new ApiError('The response could not be confirmed. Keep this tab open and retry the same request.');}
  }
