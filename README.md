@@ -1,31 +1,33 @@
-# Mercury One — Mercury Guard OS Android prototype
+# Mercury One — Mercury Guard OS
 
-A native Android local pilot for Mercury guard workflows. The current build combines the white Mercury One interface and particle-face sign-in surface with encrypted offline records, explicit demo assignments, native secure biometrics, patrols in any order, incident/photo capture, timed readiness/check-ins and calm alerts. Escalate is available off shift; scheduled clock-out and confirmed reasoned early exit control local tracking.
+Mercury One is a native Android guard application with a white/cyan interface and particle-face sign-in surface. It includes an offline demonstration and a separately configured, individually authenticated account flow. A valid trusted configuration launches enrollment/sign-in directly; a missing configuration opens the demo, and a malformed configuration blocks connected entry.
 
-The face animation is decorative; native Android biometrics authenticate an enrolled device user, not a named Mercury guard. Assignments and site schematic are synthetic. GPS observations do not establish checkpoint presence. No emergency, dispatch, payroll or live backend message is sent.
+The connected implementation supports approved assignments and confirmed shifts, encrypted incidents/drafts/photos, any-order checkpoints and explicit patrol rounds, timed check-ins, dispatch acknowledgements, signed scoped grants/batches, durable queued delivery and separate receipt states. Escalate works without an active assignment and distinguishes service receipt from explicit operator acknowledgement. Optional shift location requires an approved exact notice/policy, separate individual consent and a short signed lease; withdrawal stops collection and blocks original location retries without blocking independent incidents.
 
-See [v0.23 local pilot closeout and physical acceptance](docs/local-pilot-closeout.md), [combined interface/workflows](docs/build-v0.22.md), [development brief](docs/project-brief.md) and [Fold6 guide](docs/fold6-test-guide.md).
+The current [v0.34 Preview](docs/build-v0.34.md) is unconfigured and debug-signed. Its source passed all GitHub build, API 28/API 35, HTTPS and typed-location jobs. This is a tested local build, not a live deployment or current Fold acceptance. See the [current project brief](docs/project-brief.md) and [attended Fold checklist](docs/fold-acceptance-v0.34.md).
 
 ## Data and integration boundaries
 
-Retained event payloads, drafts and photos are encrypted locally; IDs/counts remain visible and history is not immutable. Camera output is temporarily plaintext in private cache. Key-loss recovery, retention and crash recovery require production work. Use harmless synthetic data. See [local data security](docs/local-data-security.md).
+Individual Supabase Auth subjects remain distinct from company Vendor IDs. Handset biometrics gate local access; they do not identify a named guard to the server. Demo records do not become operational records. GPS observations do not establish checkpoint presence. Camera output is temporarily plaintext in private cache; original records remain encrypted under their own scope. See [local data security](docs/local-data-security.md).
 
-Signed batches, installation keys, scoped grant verification, an encrypted incoming cache and offline Node reference tests provide integration foundations. Demo records are disconnected from production authority. No live transport, authenticated guard identity, authoritative schedules, real site geometry, durable production ingest or existing-app integration is enabled. No new hosted project or charge is required for this local pilot.
+The PostgreSQL backend implements current Auth-session checks, guard/device/site approvals, reviewed administration, immutable ingestion/receipts, original-scope private photo transfer and receiver rendering. Source reads and observation/media sending require explicit approved mappings and credentials. An isolated receiver receipt does not prove processing or display in an existing Ops application. Existing repositories/applications remain unchanged; no hosted project, real contact, payroll action or alert transport is activated by this source.
 
-Timed local alerts depend on execution and Android settings; background/doze/process-death delivery is not guaranteed. The isolated Preview variant omits full-screen notification special access. The default developer variant retains a separately opt-in pathway. Device-owner/kiosk management is not enabled.
+There are two service paths: the existing loopback [local stack](docs/service-configuration.md), and the explicit [configured HTTPS service](docs/configured-service.md). The latter requires supplied private runtime/TLS/issuer files and an owner-installed deployment binding; it creates no accounts or approvals at startup. Inspect/check commands do not activate workers. Local Auth tests use the owned isolated stack and require no new hosted project.
+
+Android controls scheduling, Doze and battery restrictions. Actual SDK GNSS, cover/inner-screen behavior, camera/biometric return and full-shift endurance remain attended hardware gates. Typed synthetic emulator transport is separately labelled and does not establish physical GPS. The Preview omits full-screen notification special access; the default developer variant has a separate opt-in pathway. Device-owner/kiosk management is not enabled.
 
 ## Build and install
 
-Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`; APK output is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions compiles, tests, lints and verifies the APK, then runs instrumented suites on API 28 and 35.
+Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`; APK output is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds, tests, lints and verifies the APK, runs API 28/35 suites and separate HTTPS checks, and replays canonical PostgreSQL migrations/contracts. The location job explicitly uses synthetic typed observations and leaves SDK GNSS unverified.
 
 For a separate review app, build with `-PlocalPreview=true -PlocalDebugKeystore=/absolute/path/to/your/debug.keystore`. The application ID becomes `ca.mercury.guard.preview`, labelled Mercury One Preview. Keep signing material private and stable for updates; never commit it. These are debug APKs, not production release signing.
 
 Preserve the original installed application if signing certificates differ. Uninstalling it destroys access to its Keystore-protected local data. Preview data/permissions are separate; no automatic migration is performed. No root, reset, flashing or device enrollment is needed for APK testing.
 
-The original v0.1 source was recovered in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Subsequent design history and protocol work remain documented under docs.
+The original v0.1 source was recovered in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Earlier immutable builds and [development history](docs/development-history-through-shared-delivery.md) remain preserved.
 
-## After physical acceptance
+## Remaining activation
 
-Connect authoritative identity/schedules through approved restricted adapters, persist capture-time scope and implement authenticated durable two-way sync. Complete privacy/retention/revocation, operational authorization, production distribution, background/battery testing and monitoring. Existing apps/data remain unchanged until a separately reviewed integration is authorized.
+Supply the approved reachable HTTPS origin, owner/individual identities, enrollment and Ops source/destination configuration; verify real email and actual connected-app exchange. Complete production signing/update recovery, retention/backups, capacity/security acceptance and attended Fold testing. These operational inputs and hardware results are not inferred from local fixtures or green CI.
 
 Dedicated-device management and [flashable OS feasibility](docs/firmware-track.md) are separate tracks after APK acceptance. No compatible Fold6 system image or bootloader/recovery route has been validated.

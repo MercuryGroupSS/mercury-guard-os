@@ -8,6 +8,7 @@ import {verifyPostgresOwnerMembership} from './verify-postgres-owner-membership.
 import {verifyPostgresReceivedReports} from './verify-postgres-received-reports.mjs';
 import {verifyPostgresPatrolRounds} from './verify-postgres-patrol-rounds.mjs';
 import {verifyPostgresLocation} from './verify-postgres-location.mjs';
+import {verifyPostgresConfiguredService} from './verify-postgres-configured-service.mjs';
 import {verifyPostgresEscalations} from './verify-postgres-escalations.mjs';
 import {verifyPostgresDashboard} from './verify-postgres-dashboard.mjs';
 import {verifyPostgresDispatch} from './verify-postgres-dispatch.mjs';
@@ -70,6 +71,8 @@ try{
  await verifyPostgresPatrolRounds(url.toString(),fixture);
  await verifyPostgresEscalations(url.toString(),fixture);
  await verifyPostgresLocation(url.toString(),fixture);
+ await fixture.query(readFileSync(new URL('../../supabase/migrations/20261024011341_guard_deployment_identity.sql',import.meta.url),'utf8'));
+ await verifyPostgresConfiguredService(url.toString(),fixture);
  console.log('PASS: migration replay, concurrent shared per-account/global limits, expiry and private function grants');
 }finally{
  for(const c of clients)await c.end();await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated limiter verification database removed');}await admin.end();
