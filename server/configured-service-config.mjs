@@ -22,7 +22,8 @@ function apiKey(value,role){
 // Pure validation: never discovers credentials, loads environment variables or opens a network.
 export function validateConfiguredServiceConfig(value){
  try{
-  if(!exact(value,['version','mode','deployment_id','public_origin','listen','auth','database','issuer','tls','ops_refresh','dashboard_delivery'])||value.version!==1||!['isolated_local_pilot','configured'].includes(value.mode)||!/^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value.deployment_id))fail();
+  const fields=['version','mode','deployment_id','public_origin','listen','auth','database','issuer','tls','ops_refresh','dashboard_delivery'];
+  if(!exact(value,Object.hasOwn(value??{},'dashboard_receiver')?[...fields,'dashboard_receiver']:fields)||value.version!==1||!['isolated_local_pilot','configured'].includes(value.mode)||!/^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/.test(value.deployment_id))fail();
   const c=structuredClone(value),local=c.mode==='isolated_local_pilot';origin(c.public_origin);
   if(!exact(c.listen,['host','port'])||!isIP(c.listen.host)||!Number.isSafeInteger(c.listen.port)||c.listen.port<1||c.listen.port>65535||Number(new URL(c.public_origin).port||443)!==c.listen.port)fail();
   if(local&&(!['127.0.0.1','::1'].includes(c.listen.host)||!['localhost','127.0.0.1','[::1]'].includes(new URL(c.public_origin).hostname)))fail();
@@ -36,6 +37,7 @@ export function validateConfiguredServiceConfig(value){
   if(!exact(c.tls,['certificate_path','private_key_path'])||!path(c.tls.certificate_path)||!path(c.tls.private_key_path))fail();
   if(c.ops_refresh!==null){if(!exact(c.ops_refresh,['origin','server_key','interval_ms'])||!Number.isSafeInteger(c.ops_refresh.interval_ms)||c.ops_refresh.interval_ms<1000||c.ops_refresh.interval_ms>3600000)fail();origin(c.ops_refresh.origin);apiKey(c.ops_refresh.server_key,'service_role');}
   if(c.dashboard_delivery!==null&&(!exact(c.dashboard_delivery,['configuration_path','interval_ms'])||!path(c.dashboard_delivery.configuration_path)||!Number.isSafeInteger(c.dashboard_delivery.interval_ms)||c.dashboard_delivery.interval_ms<1000||c.dashboard_delivery.interval_ms>3600000))fail();
+  if(c.dashboard_receiver!=null&&(!exact(c.dashboard_receiver,['configuration_path'])||!path(c.dashboard_receiver.configuration_path)))fail();
   return c;
  }catch{fail();}
 }

@@ -22,9 +22,10 @@ import {createLocationConsentHandler} from './location-consent-handler.mjs';
 
 const reply=(status,error)=>new Response(JSON.stringify({error}),{status,headers:{'content-type':'application/json','cache-control':'no-store','x-content-type-options':'nosniff'}});
 // This composition deliberately has no legacy authorizations-table/SQLite fallback.
-export function createConfiguredApplication({config,pool,directory,devices,grantIssuer,store,dispatch,shiftLifecycle,admin,escalations,locationConsents,fetchImpl=fetch}){
+export function createConfiguredApplication({config,pool,directory,devices,grantIssuer,store,dispatch,shiftLifecycle,admin,escalations,locationConsents,receiver=null,fetchImpl=fetch}){
  const c=validateConfiguredServiceConfig(config);
  if(!pool||!directory||!devices||!grantIssuer||!store||!dispatch||!shiftLifecycle||!admin||!escalations||!locationConsents||[devices,grantIssuer,escalations,locationConsents].some(v=>v.audience!==c.issuer.audience)||grantIssuer.issuer!==c.issuer.issuer||grantIssuer.keyId!==c.issuer.key_id)throw Error('Complete configured Guard components required');
+ if(c.dashboard_receiver!=null?typeof receiver?.observations!=='function'||typeof receiver?.media!=='function':receiver!==null)throw Error('Explicit configured receiver composition required');
  const auth={url:c.auth.origin,publishableKey:c.auth.publishable_key,allowLocal:c.mode==='isolated_local_pilot',loadSession:createPostgresAuthSessionReader(pool),fetchImpl};
  const verifySession=createSupabaseSessionVerifier(auth),passwordSession=createPasswordSession(auth),credentials=createAccountCredentials({...auth,verifySession});
  const account=createAccountHandler({credentials,consumeAttempt:createPostgresLoginLimiter(pool)}),logout=createSessionLogoutHandler({...auth,verifySession});
@@ -34,6 +35,8 @@ export function createConfiguredApplication({config,pool,directory,devices,grant
   const u=new URL(request.url);if(u.origin!==c.public_origin)return reply(421,'origin_unavailable');
   const origin=request.headers.get('origin');if(origin!==null&&origin!==c.public_origin)return reply(403,'origin_denied');
   const p=u.pathname;
+  if(receiver&&p==='/v1/mercury-one/observations')return receiver.observations(request);
+  if(receiver&&p.startsWith('/v1/mercury-one/media/'))return receiver.media(request);
   if(p==='/account'||p.startsWith('/account/'))return accountPageResponse(request);
   if(p.startsWith('/v1/account/'))return account(request);
   if(p==='/admin'||p.startsWith('/admin/'))return adminConsoleResponse(request);

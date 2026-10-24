@@ -39,13 +39,22 @@ The exact runtime shape follows below. Every placeholder needs an approved value
     "private_key_path": "/ABS/PRIVATE/tls-private.pem"
   },
   "ops_refresh": null,
-  "dashboard_delivery": null
+  "dashboard_delivery": null,
+  "dashboard_receiver": null
 }
 ```
 
 The public origin has no path, query, fragment or credentials. Its port must match the listener; no implicit proxy trust is used. PostgreSQL URLs also reject query/fragment overrides. If needed, `database.ca_path` is an absolute CA-file path. Configured Auth keys are server inputs and never part of the Android public configuration.
 
 An approved optional `ops_refresh` object has exactly `origin`, `server_key`, `interval_ms`; it reads only approved Ops bindings. An approved optional `dashboard_delivery` object has exactly `configuration_path`, `interval_ms`; its private destination file follows [receiver delivery configuration](dashboard-receiver.md). Intervals must be explicitly supplied integers from 1000 through 3600000 milliseconds. These protocol bounds are not a recommended operating cadence. No observation/media sending or remote Ops reads start when these fields are null. The private projection/check-in workers still run after explicit service activation.
+
+## Optional HTTPS receiver
+
+`dashboard_receiver` is independently disabled when omitted or null. To enable the Guard integration inbox on this same strict HTTPS listener, supply exactly `{"configuration_path":"/ABS/PRIVATE/receiver.json"}`. That private file must contain exactly `version`, `destination` and `token`, for example `{"version":1,"destination":"APPROVED_DESTINATION_ID","token":"SUPPLIED_DEDICATED_RECEIVER_TOKEN"}`. The example is not a usable credential. The file uses the same bounded, owner-private, regular-file/no-leaf-symlink checks. Its token must be 32–4096 printable non-space ASCII characters and differ from the configured Auth and Ops server keys. Keep it out of Android assets, source, URLs, public records and browser pages. Changing the file does not rotate a running process; drain and restart with reviewed inputs.
+
+Explicit enablement exposes only `POST /v1/mercury-one/observations` and `POST /v1/mercury-one/media/DELIVERY_ID` using the existing bounded handlers. The machine credential supplies no guard or administrator access and no media GET route. Receiver mappings must already be independently approved in the private receiver ledger; startup creates none. The original sender approval is a separate requirement. Protected Reports/JPEG access continues to require the existing current individual administrator session.
+
+The runtime checks its deployment marker on entry. The receiver also checks that exact identity inside the storage transaction before work and before returning its original/new receipt, including media metadata and exact retries. Drift during a body upload or a failed post-insert check prevents acknowledgement and rolls back that transaction. Existing mapping locks and revocation checks remain in place. Work can finish after its last successful check; drain before changing deployment identity or restoring a backup. This is a configured Guard inbox, not an Ops Dashboard deployment or proof of rendering there.
 
 ## Bind this database to this deployment
 

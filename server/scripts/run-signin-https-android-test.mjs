@@ -14,7 +14,7 @@ const root=fileURLToPath(new URL('../../',import.meta.url));process.chdir(root);
 const adb=process.env.MERCURY_ADB_BIN??'adb',gradle=process.env.MERCURY_GRADLE_BIN??'gradle',aapt=process.env.MERCURY_AAPT_BIN??(process.env.ANDROID_HOME?resolve(process.env.ANDROID_HOME,'build-tools/35.0.0/aapt'):'aapt');
 const apkRoot=resolve(process.env.MERCURY_ANDROID_APK_ROOT??'app/build/outputs/apk'),privateDir=new URL('../../.local-backend/signin-android-ci/',import.meta.url),publicDir=new URL('../../app/build/reports/signin-acceptance/',import.meta.url),securityFile=new URL('emulator-security.json',privateDir),ownership=new URL('../../.local-backend/https-signin-android-fixture.json',import.meta.url),ca=new URL('../../app/build/https-test/res/raw/https_fixture_ca.pem',import.meta.url);
 mkdirSync(privateDir,{recursive:true,mode:0o700});chmodSync(privateDir,0o700);
-const execute=promisify(execFile),abort=new AbortController(),uiPath='/data/local/tmp/mercury-signin-enrollment.xml',runId=randomUUID(),runDir=new URL(runId+'/',privateDir),runnerFile=new URL('runner-owner.json',privateDir);mkdirSync(runDir,{mode:0o700});
+const execute=promisify(execFile),abort=new AbortController(),runId=randomUUID(),runDir=new URL(runId+'/',privateDir),runnerFile=new URL('runner-owner.json',privateDir),ownedUiFiles=new Set();let uiSequence=0;mkdirSync(runDir,{mode:0o700});
 const result={version:1,run_id:runId,test:'ca.mercury.guard.HttpsSignInIntegrationTest',status:'failed',actual_framework_biometric:'not_verified',individual_accounts:0,fixture_cleanup:'not_started',emulator_security_cleanup:'not_started',started_at:new Date().toISOString()};
 let serial,approvedEmulator=false,ownsRunner=false,claimedRunner=false,security,ownsSecurity=false,uiTouched=false,fixture,fixtureResult,fixtureClosed,createdReverse=false,unconfirmedShutdown=false,cleanupOkay=true,failed,phase='initial';
 class GateError extends Error{constructor(code){super(code);this.code=code;}}
@@ -24,15 +24,47 @@ async function assertResourceWindow(){
  for(const port of [55443,55444,55446,55450]){const live=await new Promise(resolve=>{const socket=connect({host:'127.0.0.1',port});let done=false;const finish=value=>{if(done)return;done=true;socket.destroy();resolve(value);};socket.setTimeout(500,()=>finish(false));socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));});if(live)throw new GateError('existing_https_listener_requires_owner_coordination');}
 }
 function privateLog(name,value){const path=new URL(name,runDir);writeFileSync(path,value,{mode:0o600});chmodSync(path,0o600);}
-async function command(binary,args,label,{timeout=30000,log=false,cleanup=false}={}){try{const output=await execute(binary,args,{cwd:root,env:process.env,encoding:'utf8',timeout,maxBuffer:32*1024*1024,...(cleanup?{}:{signal:abort.signal})});if(log)privateLog(label+'.log',output.stdout+'\n'+output.stderr);return output.stdout;}catch(error){if(log)privateLog(label+'.log',(error.stdout??'')+'\n'+(error.stderr??''));throw new GateError(label+'_failed');}}
+async function command(binary,args,label,{timeout=30000,maxBuffer=32*1024*1024,log=false,cleanup=false}={}){try{const output=await execute(binary,args,{cwd:root,env:process.env,encoding:'utf8',timeout,maxBuffer,...(cleanup?{}:{signal:abort.signal})});if(log)privateLog(label+'.log',output.stdout+'\n'+output.stderr);return output.stdout;}catch(error){if(log)privateLog(label+'.log',(error.stdout??'')+'\n'+(error.stderr??''));throw new GateError(label+'_failed');}}
 const device=(args,label,options)=>command(adb,['-s',serial,...args],label,options);
 process.once('SIGINT',()=>abort.abort());process.once('SIGTERM',()=>abort.abort());
 function fingerprints(text){const json=text.split('\n').find(line=>line.startsWith('{')&&line.includes('"prints"'));if(!json)throw new GateError('fingerprint_inventory_unavailable');return JSON.parse(json).prints.reduce((sum,p)=>sum+p.count,0);}
 async function secureState(cleanup=false){const options={cleanup};const lock=await device(['shell','dumpsys','lock_settings'],'lock_state',options),prints=await device(['shell','dumpsys','fingerprint'],'fingerprint_state',options);return {credential:/CredentialType: (\w+)/.exec(lock)?.[1],fingers:fingerprints(prints)};}
 function securityRecord(){writeFileSync(securityFile,JSON.stringify(security)+'\n',{mode:0o600});chmodSync(securityFile,0o600);}
 function decode(text){return text.replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
-async function nodes(){await device(['shell','uiautomator','dump',uiPath],'settings_dump');const xml=await device(['shell','cat',uiPath],'settings_read');return [...xml.matchAll(/<node\b([^>]*?)\/?\s*>/g)].map(match=>Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/g)].map(a=>[a[1],decode(a[2])])));}
-async function waitNode(predicate,label,timeout=20000){const until=Date.now()+timeout;while(Date.now()<until){if(abort.signal.aborted)throw new GateError('interrupted');const found=(await nodes()).filter(predicate);if(found.length===1)return found[0];await pause(200);}throw new GateError(label+'_not_found');}
+async function nodes(timeout=30000){
+ if(!approvedEmulator||!ownsRunner||!ownsSecurity||!uiTouched)throw new GateError('settings_ui_ownership_required');
+ const until=Date.now()+timeout;let reason='dump_not_ready';
+ while(Date.now()<until){
+  if(abort.signal.aborted)throw new GateError('interrupted');
+  // AOSP DumpCommand returns without a file on null-root/idle-timeout paths,
+  // sometimes with exit0. A new path and positive completion are both required;
+  // an earlier hierarchy can never satisfy a later readiness attempt.
+  const path=`/data/local/tmp/mercury-signin-${runId}-${++uiSequence}.xml`;ownedUiFiles.add(path);let current;
+  try{
+   const completion=await device(['shell','uiautomator','dump',path],'settings_dump',{timeout:Math.max(1,Math.min(15000,until-Date.now())),maxBuffer:8192});
+   const written=completion.split(/\r?\n/).some(line=>line===`UI hierchary dumped to: ${path}`||line===`UI hierarchy dumped to: ${path}`);
+   if(written&&Date.now()<until){
+    const xml=await device(['shell','cat',path],'settings_read',{timeout:Math.max(1,Math.min(5000,until-Date.now())),maxBuffer:256*1024});
+    if(/^<\?xml[^>]*\?>\s*<hierarchy\b[^>]*>[\s\S]*<\/hierarchy>\s*$/.test(xml)&&!/<!(?:DOCTYPE|ENTITY)\b/i.test(xml)){
+     const parsed=[...xml.matchAll(/<node\b([^>]*?)\/?\s*>/g)].map(match=>Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/g)].map(a=>[a[1],decode(a[2])])));
+     if(parsed.length>0&&parsed.some(n=>n.package==='com.android.settings'))current=parsed;else reason='settings_window_not_ready';
+    }else reason='hierarchy_not_complete';
+   }else reason='dump_not_ready';
+  }catch(error){
+   if(!(error instanceof GateError)||!['settings_dump_failed','settings_read_failed'].includes(error.code))throw error;
+   reason=error.code==='settings_read_failed'?'fresh_file_not_ready':'dump_not_ready';
+  }finally{
+   // XML stays in memory only and the exact temporary device file is removed
+   // before returning nodes or trying again. Never persist raw UI diagnostics.
+   try{await device(['shell','rm','-f',path],'owned_ui_dump_remove',{timeout:5000,cleanup:true});ownedUiFiles.delete(path);}catch{cleanupOkay=false;throw new GateError('owned_ui_dump_cleanup_unconfirmed');}
+  }
+  if(current)return current;
+  result.ui_readiness_retries=(result.ui_readiness_retries??0)+1;
+  if(abort.signal.aborted)throw new GateError('interrupted');await pause(Math.min(200,Math.max(0,until-Date.now())));
+ }
+ result.ui_readiness_last_reason=reason;throw new GateError('settings_ui_readiness_timeout');
+}
+async function waitNode(predicate,label,timeout=30000){const until=Date.now()+timeout;while(Date.now()<until){if(abort.signal.aborted)throw new GateError('interrupted');const found=(await nodes(Math.max(1,until-Date.now()))).filter(predicate);if(found.length===1)return found[0];await pause(200);}throw new GateError(label+'_not_found');}
 async function tapNode(node,label){const b=/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(node.bounds??'')?.slice(1).map(Number);if(!b||b[2]<=b[0]||b[3]<=b[1]||node.enabled!=='true')throw new GateError(label+'_not_reachable');await device(['shell','input','tap',String(Math.floor((b[0]+b[2])/2)),String(Math.floor((b[1]+b[3])/2))],label);}
 const textNode=value=>n=>n.package==='com.android.settings'&&n.text?.toUpperCase()===value&&n.enabled==='true';
 async function tapText(value){await tapNode(await waitNode(textNode(value),'settings_'+value),'settings_action');}
@@ -93,7 +125,7 @@ async function cleanup(){
    if(clean.credential!=='NONE'||clean.fingers!==0)throw new GateError('original_security_state_unconfirmed');unlinkSync(securityFile);result.emulator_security_cleanup='confirmed_none_pin_zero_fingerprints';
   }catch{cleanupOkay=false;result.emulator_security_cleanup='unconfirmed_ownership_retained';failed='emulator_security_cleanup_unconfirmed';}
  }
- if(approvedEmulator&&(ownsSecurity||uiTouched))try{await device(['shell','rm','-f',uiPath],'owned_ui_dump_remove',{cleanup:true});}catch{cleanupOkay=false;failed??='owned_ui_dump_cleanup_unconfirmed';}
+ if(approvedEmulator&&(ownsSecurity||uiTouched))for(const path of [...ownedUiFiles])try{await device(['shell','rm','-f',path],'owned_ui_dump_remove',{cleanup:true});ownedUiFiles.delete(path);}catch{cleanupOkay=false;failed??='owned_ui_dump_cleanup_unconfirmed';}
  if(ownsRunner){
   if(cleanupOkay&&!unconfirmedShutdown&&(!fixture||result.fixture_cleanup==='confirmed')&&(!ownsSecurity||result.emulator_security_cleanup==='confirmed_none_pin_zero_fingerprints')){const saved=JSON.parse(readPrivateBuildFile(runnerFile.pathname,4096));if(saved.pid!==process.pid||saved.run!==runId||saved.serial!==serial)throw new GateError('runner_ownership_changed');unlinkSync(runnerFile);ownsRunner=false;}
   else result.runner_ownership='retained_for_recovery';

@@ -21,6 +21,7 @@ import {createDashboardBridge} from './dashboard-bridge.mjs';
 import {PostgresDashboardMedia} from './postgres-dashboard-media.mjs';
 import {deliverDashboardMediaOnce} from './dashboard-media.mjs';
 import {createCheckInWorker} from './check-in-worker.mjs';
+import {createConfiguredReceiver} from './configured-receiver.mjs';
 
 // No migrations, users, memberships, mappings, issuer keys or enrollment are created here.
 export async function openConfiguredRuntime(config,materials,{fetchImpl=fetch,poolFactory,schedule=setInterval,cancel=clearInterval}={}){
@@ -31,7 +32,8 @@ export async function openConfiguredRuntime(config,materials,{fetchImpl=fetch,po
   const directory=new PostgresGuardDirectory({client:pool}),devices=new PostgresDeviceAssignments(pool,config.issuer.audience),locationConsents=new PostgresLocationConsents({devices,audience:config.issuer.audience}),store=new PostgresDurableIngest(devices,{locationConsents}),shiftLifecycle=new PostgresShiftLifecycle(devices),dispatch=new PostgresDispatchFeed(devices);
   const grantIssuer=new PostgresShiftGrantIssuer({devices,locationConsents,privateKey:materials.issuerKey,keyId:config.issuer.key_id,issuer:config.issuer.issuer, audience:config.issuer.audience});
   const admin=new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.auth.origin,serverKey:config.auth.server_key,allowLocal:config.mode==='isolated_local_pilot',fetchImpl})}),escalations=new PostgresEscalations({devices,audience:config.issuer.audience});
-  const application=createConfiguredApplication({config,pool,directory,devices,grantIssuer,store,dispatch,shiftLifecycle,admin,escalations,locationConsents,fetchImpl}),identity=configuredDeploymentIdentity(config,materials),handle=application.handle;
+  const identity=configuredDeploymentIdentity(config,materials),receiver=createConfiguredReceiver({config,pool,identity});
+  const application=createConfiguredApplication({config,pool,directory,devices,grantIssuer,store,dispatch,shiftLifecycle,admin,escalations,locationConsents,receiver,fetchImpl}),handle=application.handle;
   application.handle=async request=>{try{await assertConfiguredDeploymentIdentity(pool,identity);}catch{return new Response('{"error":"deployment_unavailable"}',{status:503,headers:{'content-type':'application/json','cache-control':'no-store'}});}return handle(request);};
   const requireDeployment=()=>{if(shutdownRequested)throw Error('Configured runtime stopping');return assertConfiguredDeploymentIdentity(pool,identity);},workerDevices=Object.create(devices);
   workerDevices.scheduledAfter=async(...args)=>{await requireDeployment();return devices.scheduledAfter(...args);};
