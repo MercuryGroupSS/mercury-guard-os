@@ -12,7 +12,21 @@ import java.security.MessageDigest
 data class DispatchScope(val binding:GrantBinding,val vendorId:String){
  fun json()=JSONObject().put("guard_id",binding.guardId).put("vendor_id",vendorId).put("site_id",binding.siteId).put("assignment_id",binding.assignmentId).put("device_thumbprint",binding.deviceThumbprint).put("revocation_version",binding.revocationVersion)
 }
+
+/** Original local account owner. This does not change the dispatch or acknowledgement wire scope. */
+data class ConnectedDispatchOwner(val configuration:String,val deviceId:String,val subject:String,val scope:DispatchScope){
+ init{
+  require(configuration.matches(Regex("[a-f0-9]{64}"))&&scope.binding.deviceThumbprint.matches(Regex("[a-f0-9]{64}")))
+  require(EscalationRules.uuid(subject)&&listOf(deviceId,scope.binding.guardId,scope.vendorId,scope.binding.siteId,scope.binding.assignmentId).all{PatrolPlan.identifier(it)})
+  require(scope.binding.revocationVersion in 0..9007199254740991L)
+ }
+ internal fun json()=JSONObject().put("version",1).put("configuration",configuration).put("device_id",deviceId).put("subject",subject).put("scope",scope.json())
+ internal fun owner()=MessageDigest.getInstance("SHA-256").digest(("mercury-connected-dispatch-owner-v1\n"+json().toString()).toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ override fun toString()="ConnectedDispatchOwner(redacted)"
+}
+
 class DispatchInbox internal constructor(context:Context,name:String="mercury_dispatch.db"):SQLiteOpenHelper(context,name,null,1),java.io.Closeable{
+ private data class Address(val scope:DispatchScope,val key:String,val connected:ConnectedDispatchOwner?=null)
  private val cipher=DeviceCipher()
  override fun onCreate(db:SQLiteDatabase){db.execSQL("CREATE TABLE messages(owner TEXT NOT NULL, lookup TEXT NOT NULL, version INTEGER NOT NULL, active INTEGER NOT NULL, body TEXT NOT NULL, PRIMARY KEY(owner,lookup))");db.execSQL("CREATE TABLE cursors(owner TEXT PRIMARY KEY, body TEXT NOT NULL)")}
  override fun onOpen(db:SQLiteDatabase){
@@ -23,13 +37,23 @@ class DispatchInbox internal constructor(context:Context,name:String="mercury_di
  override fun onUpgrade(db:SQLiteDatabase,oldVersion:Int,newVersion:Int){error("Unsupported inbox upgrade")}
  override fun onConfigure(db:SQLiteDatabase){super.onConfigure(db);db.rawQuery("PRAGMA secure_delete=ON",null).use{check(it.moveToFirst()&&it.getInt(0)==1)}}
  private fun hash(s:String)=MessageDigest.getInstance("SHA-256").digest(s.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
- private fun owner(scope:DispatchScope)=hash(scope.json().toString())
+ private fun address(scope:DispatchScope)=Address(scope,hash(scope.json().toString()))
+ private fun address(owner:ConnectedDispatchOwner)=Address(owner.scope,owner.owner(),owner)
  private fun decode(body:String,aad:String)=JSONObject(String(cipher.decrypt(body,aad),Charsets.UTF_8))
  private fun encode(value:JSONObject,aad:String)=cipher.encrypt(value.toString().toByteArray(Charsets.UTF_8),aad)
  private fun number(j:JSONObject,key:String):Long {val n=j.get(key);require(n is Int||n is Long);return (n as Number).toLong()}
- private fun metadata(db:SQLiteDatabase,owner:String):JSONObject?=db.rawQuery("SELECT body FROM cursors WHERE owner=?",arrayOf(owner)).use{if(it.moveToFirst())decode(it.getString(0),"dispatch-cursor:$owner") else null}
- fun cursor(scope:DispatchScope):String?=metadata(readableDatabase,owner(scope))?.let{if(it.isNull("cursor"))null else it.getString("cursor")}
- private fun saveMetadata(db:SQLiteDatabase,owner:String,value:JSONObject){db.insertWithOnConflict("cursors",null,ContentValues().apply{put("owner",owner);put("body",encode(value,"dispatch-cursor:$owner"))},SQLiteDatabase.CONFLICT_REPLACE).also{check(it!=-1L)}}
+ private fun verifyOwner(address:Address,value:JSONObject):JSONObject {
+  if(address.connected==null)check(!value.has("connected_owner")){"Legacy cache cannot adopt a connected owner"}
+  else check(value.getJSONObject("connected_owner").toString()==address.connected.json().toString()){ "Original connected dispatch owner mismatch" }
+  return value
+ }
+ private fun owned(address:Address,value:JSONObject):JSONObject {address.connected?.let{value.put("connected_owner",it.json())};return value}
+ private fun metadata(db:SQLiteDatabase,address:Address):JSONObject?=db.rawQuery("SELECT body FROM cursors WHERE owner=?",arrayOf(address.key)).use{if(it.moveToFirst())verifyOwner(address,decode(it.getString(0),"dispatch-cursor:${address.key}")) else null}
+ private fun cursor(address:Address):String?=metadata(readableDatabase,address)?.let{if(it.isNull("cursor"))null else it.getString("cursor")}
+ /** Legacy scope-only namespace; connected account screens must supply their complete owner. */
+ fun cursor(scope:DispatchScope):String?=cursor(address(scope))
+ fun cursor(owner:ConnectedDispatchOwner):String?=cursor(address(owner))
+ private fun saveMetadata(db:SQLiteDatabase,address:Address,value:JSONObject){db.insertWithOnConflict("cursors",null,ContentValues().apply{put("owner",address.key);put("body",encode(owned(address,value),"dispatch-cursor:${address.key}"))},SQLiteDatabase.CONFLICT_REPLACE).also{check(it!=-1L)}}
  private fun message(value:JSONObject):JSONObject {
   require(value.keys().asSequence().toSet()==setOf("message_id","version","state","title","body","issued_at","due_at"))
   val id=value.get("message_id") as? String?:error("Message ID required");require(id.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}")))
@@ -40,10 +64,13 @@ class DispatchInbox internal constructor(context:Context,name:String="mercury_di
   val due=if(value.isNull("due_at"))null else number(value,"due_at").also{require(it>=issued)}
   return JSONObject().put("message_id",id).put("version",version).put("state",state).put("title",title).put("body",body).put("issued_at",issued).put("due_at",due?:JSONObject.NULL)
  }
- fun apply(scope:DispatchScope,expectedCursor:String?,page:JSONObject):Boolean {
+ /** Legacy scope-only namespace. Its ciphertext is never copied into a connected account. */
+ fun apply(scope:DispatchScope,expectedCursor:String?,page:JSONObject)=apply(address(scope),expectedCursor,page)
+ fun apply(owner:ConnectedDispatchOwner,expectedCursor:String?,page:JSONObject)=apply(address(owner),expectedCursor,page)
+ private fun apply(address:Address,expectedCursor:String?,page:JSONObject):Boolean {
   require(page.toString().toByteArray(Charsets.UTF_8).size<=262144)
   require(page.keys().asSequence().toSet()==setOf("scope","changes","next_cursor","has_more","server_time_ms"))
-  val expected=scope.json();val received=page.getJSONObject("scope")
+  val scope=address.scope;val expected=scope.json();val received=page.getJSONObject("scope")
   require(received.keys().asSequence().toSet()==expected.keys().asSequence().toSet())
   for(key in expected.keys())if(key!="revocation_version")require(received.get(key) is String && received.getString(key)==expected.getString(key))
   require(number(received,"revocation_version")==scope.binding.revocationVersion)
@@ -51,40 +78,46 @@ class DispatchInbox internal constructor(context:Context,name:String="mercury_di
   val more=page.get("has_more") as? Boolean?:error("Page state required");if(more)require(next!=expectedCursor)
   val time=number(page,"server_time_ms");require(time>0)
   val changes=page.getJSONArray("changes");require(changes.length()<=25)
-  val owner=owner(scope);val db=writableDatabase;db.beginTransaction()
+  val owner=address.key;val db=writableDatabase;db.beginTransaction()
   try{
-   val old=metadata(db,owner);val current=old?.let{if(it.isNull("cursor"))null else it.getString("cursor")};check(current==expectedCursor){"Inbox advanced during refresh"}
+   val old=metadata(db,address);val current=old?.let{if(it.isNull("cursor"))null else it.getString("cursor")};check(current==expectedCursor){"Inbox advanced during refresh"}
    require(time>=(old?.optLong("server_time_ms")?:0));val seen=mutableSetOf<String>()
    for(i in 0 until changes.length()){
     val incoming=message(changes.getJSONObject(i));val id=incoming.getString("message_id");require(seen.add(id));val lookup=hash(id);val version=incoming.getLong("version");val aad="dispatch-message:$owner:$lookup"
-    val prior=db.rawQuery("SELECT version,body FROM messages WHERE owner=? AND lookup=?",arrayOf(owner,lookup)).use{if(it.moveToFirst()){val wrapped=decode(it.getString(1),aad);check(wrapped.getJSONObject("message").getLong("version")==it.getLong(0));wrapped}else null}
+    val prior=db.rawQuery("SELECT version,body FROM messages WHERE owner=? AND lookup=?",arrayOf(owner,lookup)).use{if(it.moveToFirst()){val wrapped=verifyOwner(address,decode(it.getString(1),aad));check(wrapped.getJSONObject("message").getLong("version")==it.getLong(0));wrapped}else null}
     if(prior!=null){val previous=prior.getJSONObject("message");require(version>=previous.getLong("version"));if(version==previous.getLong("version"))require(previous.toString()==incoming.toString())}
-    val wrapped=if(prior!=null&&prior.getJSONObject("message").getLong("version")==version)prior else JSONObject().put("message",incoming).put("read_at",JSONObject.NULL)
+    val wrapped=if(prior!=null&&prior.getJSONObject("message").getLong("version")==version)prior else owned(address,JSONObject().put("message",incoming).put("read_at",JSONObject.NULL))
     check(db.insertWithOnConflict("messages",null,ContentValues().apply{put("owner",owner);put("lookup",lookup);put("version",version);put("active",if(incoming.getString("state")=="active")1 else 0);put("body",encode(wrapped,aad))},SQLiteDatabase.CONFLICT_REPLACE)!=-1L)
    }
-   saveMetadata(db,owner,JSONObject().put("cursor",next).put("server_time_ms",time).put("has_more",more))
+   saveMetadata(db,address,JSONObject().put("cursor",next).put("server_time_ms",time).put("has_more",more))
    db.setTransactionSuccessful();return more
   }finally{db.endTransaction()}
  }
  /** Explicit reset hides old content until the authenticated full feed returns it again. */
- fun resetCursor(scope:DispatchScope,expectedCursor:String?){
-  val owner=owner(scope);val db=writableDatabase;db.beginTransaction();try{
-   check(cursor(scope)==expectedCursor)
+ fun resetCursor(scope:DispatchScope,expectedCursor:String?)=resetCursor(address(scope),expectedCursor)
+ fun resetCursor(owner:ConnectedDispatchOwner,expectedCursor:String?)=resetCursor(address(owner),expectedCursor)
+ private fun resetCursor(address:Address,expectedCursor:String?){
+  val owner=address.key;val db=writableDatabase;db.beginTransaction();try{
+   val old=metadata(db,address);val current=old?.let{if(it.isNull("cursor"))null else it.getString("cursor")};check(current==expectedCursor)
    db.update("messages",ContentValues().apply{put("active",0)},"owner=?",arrayOf(owner))
-   val old=metadata(db,owner)?:JSONObject();saveMetadata(db,owner,old.put("cursor",JSONObject.NULL).put("has_more",true))
+   saveMetadata(db,address,(old?:JSONObject()).put("cursor",JSONObject.NULL).put("has_more",true))
    db.setTransactionSuccessful()
   }finally{db.endTransaction()}
  }
- fun list(scope:DispatchScope,offset:Int=0):List<JSONObject>{
-  require(offset>=0);val owner=owner(scope);val result=mutableListOf<JSONObject>()
+ fun list(scope:DispatchScope,offset:Int=0)=list(address(scope),offset)
+ fun list(owner:ConnectedDispatchOwner,offset:Int=0)=list(address(owner),offset)
+ private fun list(address:Address,offset:Int):List<JSONObject>{
+  require(offset>=0);val owner=address.key;val result=mutableListOf<JSONObject>()
   readableDatabase.rawQuery("SELECT lookup,body FROM messages WHERE owner=? AND active=1 ORDER BY rowid DESC LIMIT 30 OFFSET ?",arrayOf(owner,offset.toString())).use{c->while(c.moveToNext()){
-   val wrapped=decode(c.getString(1),"dispatch-message:$owner:${c.getString(0)}");val m=wrapped.getJSONObject("message");check(m.getString("state")=="active"&&hash(m.getString("message_id"))==c.getString(0));result.add(wrapped)
+   val wrapped=verifyOwner(address,decode(c.getString(1),"dispatch-message:$owner:${c.getString(0)}"));val m=wrapped.getJSONObject("message");check(m.getString("state")=="active"&&hash(m.getString("message_id"))==c.getString(0));result.add(wrapped)
   }};return result
  }
- fun markRead(scope:DispatchScope,id:String,version:Long,at:Long):JSONObject {
-  require(at>0);val owner=owner(scope);val lookup=hash(id);val aad="dispatch-message:$owner:$lookup";val db=writableDatabase;db.beginTransaction()
+ fun markRead(scope:DispatchScope,id:String,version:Long,at:Long)=markRead(address(scope),id,version,at)
+ fun markRead(owner:ConnectedDispatchOwner,id:String,version:Long,at:Long)=markRead(address(owner),id,version,at)
+ private fun markRead(address:Address,id:String,version:Long,at:Long):JSONObject {
+  require(at>0);val owner=address.key;val lookup=hash(id);val aad="dispatch-message:$owner:$lookup";val db=writableDatabase;db.beginTransaction()
   try{
-   val wrapped=db.rawQuery("SELECT body FROM messages WHERE owner=? AND lookup=? AND active=1",arrayOf(owner,lookup)).use{check(it.moveToFirst());decode(it.getString(0),aad)}
+   val wrapped=db.rawQuery("SELECT body FROM messages WHERE owner=? AND lookup=? AND active=1",arrayOf(owner,lookup)).use{check(it.moveToFirst());verifyOwner(address,decode(it.getString(0),aad))}
    val m=wrapped.getJSONObject("message");check(m.getString("message_id")==id&&m.getLong("version")==version&&m.getString("state")=="active")
    if(wrapped.isNull("read_at"))wrapped.put("read_at",at)
    check(db.update("messages",ContentValues().apply{put("body",encode(wrapped,aad))},"owner=? AND lookup=?",arrayOf(owner,lookup))==1)

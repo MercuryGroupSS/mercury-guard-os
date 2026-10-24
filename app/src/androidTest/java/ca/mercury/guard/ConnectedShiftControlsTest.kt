@@ -42,10 +42,10 @@ class ConnectedShiftControlsTest {
   while(SystemClock.elapsedRealtime()<limit){var found=false;scenario.onActivity{found=control(it,"Clock out")!=null};if(found)return;SystemClock.sleep(50)}
   fail("Visible deadline did not reveal Clock out")
  }
- private fun account(activity:GuardAccountActivity,config:GuardServiceConfig){
+ private fun account(activity:GuardAccountActivity,config:GuardServiceConfig):String{
   val type=GuardAccountActivity::class.java.declaredClasses.single{it.simpleName=="AccountIdentity"}
-  val identity=type.getDeclaredConstructor(String::class.java,String::class.java,String::class.java).apply{isAccessible=true}.newInstance(UUID.randomUUID().toString(),"clock-guard","clock-company")
-  field(activity,"config",config);field(activity,"accountIdentity",identity);field(activity,"session",GuardAccountClient.Session("synthetic-clock-no-network",SystemClock.elapsedRealtime()+60000))
+  val subject=UUID.randomUUID().toString();val identity=type.getDeclaredConstructor(String::class.java,String::class.java,String::class.java).apply{isAccessible=true}.newInstance(subject,"clock-guard","clock-company")
+  field(activity,"config",config);field(activity,"accountIdentity",identity);field(activity,"session",GuardAccountClient.Session("synthetic-clock-no-network",SystemClock.elapsedRealtime()+60000));return subject
  }
  private fun configured(action:(GuardServiceConfig,String)->Unit){
   val device=DeviceIdentity(context);val existing=device.publicIdentity();val identity=existing?:device.create()
@@ -60,13 +60,13 @@ class ConnectedShiftControlsTest {
  }
  @Test fun earlyExitExistsOnlyInsideAssignedEscalateAndBlankOrCancelledReasonCannotEnd(){configured{config,thumb->
   for(active in listOf(true,false))ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
-   lateinit var assignment:JSONObject
-   scenario.onActivity{account(it,config);assignment=item(60000,thumb,active);call(it,"assignmentOverview",assignment);assertNull(control(it,"End shift early"));assertNull(control(it,"Clock out"));press(it,"Escalate");assertNotNull(control(it,"End shift early"));press(it,"End shift early")}
+   lateinit var assignment:JSONObject;lateinit var owner:ConnectedDispatchOwner
+   scenario.onActivity{val subject=account(it,config);assignment=item(60000,thumb,active);owner=ConnectedDispatchOwner(config.uploadBinding(),config.deviceId,subject,scope(assignment));call(it,"assignmentOverview",assignment);assertNull(control(it,"End shift early"));assertNull(control(it,"Clock out"));press(it,"Escalate");assertNotNull(control(it,"End shift early"));press(it,"End shift early")}
    onView(withId(android.R.id.button1)).inRoot(isDialog()).perform(click())
    onView(withHint("Reason for leaving early")).check{view,_->assertEquals("A reason is required",(view as EditText).error.toString())}
-   assertNull(ShiftTransitionStore(context).use{it.saved(scope(assignment),"end")})
+   assertNull(ShiftTransitionStore(context).use{it.saved(owner,"end")})
    onView(withId(android.R.id.button2)).inRoot(isDialog()).perform(click())
-   assertNull(ShiftTransitionStore(context).use{it.saved(scope(assignment),"end")});assertTrue(assignment.getJSONObject("shift_state").isNull("clocked_out_at_ms"))
+   assertNull(ShiftTransitionStore(context).use{it.saved(owner,"end")});assertTrue(assignment.getJSONObject("shift_state").isNull("clocked_out_at_ms"))
   }
  }}
  @Test fun visibleOverviewRevealsClockOutAtDeadlineWithoutAnyAttendanceWrite(){
@@ -81,10 +81,24 @@ class ConnectedShiftControlsTest {
  }
  @Test fun pausedClockStopsUpdatingAndResumeRechecksElapsedDeadline(){
   ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
-   scenario.onActivity{call(it,"assignmentOverview",item(1000))}
-   scenario.moveToState(Lifecycle.State.STARTED);SystemClock.sleep(1300)
-   scenario.onActivity{assertNull(control(it,"Clock out"))}
-   scenario.moveToState(Lifecycle.State.RESUMED);waitClock(scenario)
+   fun value(activity:GuardAccountActivity,name:String)=GuardAccountActivity::class.java.getDeclaredField(name).apply{isAccessible=true}.get(activity)
+   lateinit var shown:JSONObject;var displayedRoot:Any?=null;var stamp:Any?=null;var callback:Any?=null
+   scenario.onActivity{activity->
+    shown=item(1000);call(activity,"assignmentOverview",shown);displayedRoot=value(activity,"root");stamp=value(activity,"generation");callback=value(activity,"shiftDeadlineRefresh");assertNotNull(callback)
+    // ActivityScenario STARTED launches EmptyFloatingActivity as a user departure.
+    // This contract is a system pause without departure, as for a system prompt.
+    InstrumentationRegistry.getInstrumentation().callActivityOnPause(activity)
+    assertEquals(false,value(activity,"visibleForLocation"));assertEquals(false,value(activity,"stopped"));assertSame(callback,value(activity,"shiftDeadlineRefresh"))
+   }
+   SystemClock.sleep(1300) // Deliberately cross the approved deadline while the callback is paused.
+   scenario.onActivity{activity->
+    assertNull(control(activity,"Clock out"));assertSame(displayedRoot,value(activity,"root"));assertEquals(stamp,value(activity,"generation"))
+    InstrumentationRegistry.getInstrumentation().callActivityOnResume(activity)
+    assertSame(displayedRoot,value(activity,"root"));assertEquals(stamp,value(activity,"generation"))
+   }
+   waitClock(scenario)
+   scenario.onActivity{assertNotNull(control(it,"Clock out"));assertNull(control(it,"Continue shift"))}
+   assertNull(ShiftTransitionStore(context).use{it.saved(scope(shown),"end")});assertTrue(shown.getJSONObject("shift_state").isNull("clocked_out_at_ms"))
   }
  }
  @Test fun navigatingAwayOrPendingOriginalEndCannotAppendAClockOutControl(){
@@ -92,17 +106,18 @@ class ConnectedShiftControlsTest {
    scenario.onActivity{call(it,"assignmentOverview",item(500));press(it,"Escalate")}
    SystemClock.sleep(800);scenario.onActivity{assertNull(control(it,"Clock out"))}
   }
-  lateinit var assignment:JSONObject
-  lateinit var original:String
-  var cleanupScope:DispatchScope?=null
-  try{ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
-   scenario.onActivity{assignment=item(500);cleanupScope=scope(assignment);original=ShiftTransitionStore(context).use{it.prepare(scope(assignment),"end","Original unresolved reason")}.toString();call(it,"assignmentOverview",assignment)}
-   SystemClock.sleep(800);scenario.onActivity{assertNotNull(control(it,"Resolve pending end"));assertNull(control(it,"Clock out"))}
-   assertEquals(original,ShiftTransitionStore(context).use{it.saved(scope(assignment),"end")!!.getJSONObject("request").toString()})
-  }}finally{
-   cleanupScope?.let{savedScope->
-    val owner=java.security.MessageDigest.getInstance("SHA-256").digest((savedScope.json().toString()+"\nend").toByteArray()).joinToString(""){"%02x".format(it.toInt() and 255)}
-    ShiftTransitionStore(context).use{it.writableDatabase.delete("transitions","owner=?",arrayOf(owner))}
+  configured{config,thumb->
+   lateinit var assignment:JSONObject;lateinit var original:String
+   var cleanupOwner:ConnectedDispatchOwner?=null
+   try{ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
+    scenario.onActivity{val subject=account(it,config);assignment=item(500,thumb);cleanupOwner=ConnectedDispatchOwner(config.uploadBinding(),config.deviceId,subject,scope(assignment));original=ShiftTransitionStore(context).use{it.prepare(cleanupOwner!!,"end","Original unresolved reason")}.toString();call(it,"assignmentOverview",assignment)}
+    SystemClock.sleep(800);scenario.onActivity{assertNotNull(control(it,"Resolve pending end"));assertNull(control(it,"Clock out"))}
+    assertEquals(original,ShiftTransitionStore(context).use{it.saved(cleanupOwner!!,"end")!!.getJSONObject("request").toString()})
+   }}finally{
+    cleanupOwner?.let{savedOwner->
+     val key=java.security.MessageDigest.getInstance("SHA-256").digest(("mercury-connected-shift-transition-v1\n"+savedOwner.json().toString()+"\nend").toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+     ShiftTransitionStore(context).use{it.writableDatabase.delete("transitions","owner=?",arrayOf(key))}
+    }
    }
   }
  }

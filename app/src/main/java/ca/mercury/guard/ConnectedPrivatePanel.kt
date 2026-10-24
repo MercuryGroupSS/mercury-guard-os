@@ -17,6 +17,7 @@ internal class ConnectedPrivatePanel(context:Context,stillAuthorized:()->Boolean
  private val handler=Handler(Looper.getMainLooper())
  private val fence=ConnectedReadFence()
  private var closed=false
+ private var initialWork:(()->Unit)?=null
  private val checkExpiry=object:Runnable{override fun run(){if(isAttachedToWindow&&permit())handler.postDelayed(this,500)}}
  init{orientation=VERTICAL;isSaveEnabled=false}
  private fun permit():Boolean {
@@ -27,13 +28,15 @@ internal class ConnectedPrivatePanel(context:Context,stillAuthorized:()->Boolean
  private fun scrub(v:View){v.setOnClickListener(null);if(v is TextView)v.text="";if(v is ViewGroup)for(i in 0 until v.childCount)scrub(v.getChildAt(i))}
  private fun reset(){for(i in 0 until childCount)scrub(getChildAt(i));removeAllViews()}
  fun begin(message:String):Long? {if(!permit())return null;val ticket=fence.begin();reset();text(message);return ticket}
+ /** Initial cached work can finish before the replacement root attaches; start it only at attach. */
+ fun startWhenAttached(start:()->Unit){if(!permit())return;if(isAttachedToWindow)start()else initialWork=start}
  fun render(ticket:Long,show:ConnectedPrivatePanel.()->Unit):Boolean {
   if(!fence.accepts(ticket)||!isAttachedToWindow||!permit())return false
   reset();show();return true
  }
  fun text(value:String){if(!permit())return;addView(TextView(context).apply{text=value;textSize=16f;setTextColor(Color.rgb(25,42,54));setPadding(0,12,0,12);isSaveEnabled=false;setTextIsSelectable(true)})}
  fun action(value:String,run:()->Unit){if(!permit())return;addView(Button(context).apply{text=value;isAllCaps=false;isSaveEnabled=false;setOnClickListener{if(permit())run()}})}
- override fun onAttachedToWindow(){super.onAttachedToWindow();handler.post(checkExpiry)}
+ override fun onAttachedToWindow(){super.onAttachedToWindow();if(permit()){val start=initialWork;initialWork=null;start?.invoke();if(!closed)handler.post(checkExpiry)}}
  override fun onDetachedFromWindow(){close();super.onDetachedFromWindow()}
- override fun close(){if(closed)return;closed=true;fence.close();handler.removeCallbacks(checkExpiry);authorized=null;unavailable=null;reset()}
+ override fun close(){if(closed)return;closed=true;fence.close();initialWork=null;handler.removeCallbacks(checkExpiry);authorized=null;unavailable=null;reset()}
 }

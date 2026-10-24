@@ -36,7 +36,7 @@ class ConnectedIncidentDraftLifecycleTest {
   }
   assertTrue("Real navigation control missing: $title",find(activity.window.decorView)?.performClick()==true)
  }
- /** Wait for the replaced screen's actual layout, then use the same scroll gestures as a guard. */
+ /** Wait for actual layout, then request the exact rectangle from the real scrolling parent. */
  private fun enterDraft(scenario:ActivityScenario<GuardAccountActivity>,text:String){
   fun editor(view:android.view.View):android.widget.EditText? {
    if(view is android.widget.EditText&&view.hint?.toString()=="Describe the incident")return view
@@ -56,19 +56,28 @@ class ConnectedIncidentDraftLifecycleTest {
   try{check(measured.await(5,TimeUnit.SECONDS)){"Incident editor did not complete layout"}}
   finally{scenario.onActivity{layoutListener?.let{listener->observed?.removeOnLayoutChangeListener(listener)}}}
   androidx.test.espresso.Espresso.closeSoftKeyboard()
-  for(attempt in 0..8){
-   var visible=false;var above=false
-   scenario.onActivity{activity->
-    val target=editor(activity.window.decorView)?:error("Incident editor disappeared")
-    val shown=android.graphics.Rect();val window=android.graphics.Rect();val position=IntArray(2)
-    activity.window.decorView.getWindowVisibleDisplayFrame(window);target.getLocationOnScreen(position)
-    above=position[1]<window.top
-    visible=target.width>0&&target.height>0&&target.getGlobalVisibleRect(shown)&&shown.width().toLong()*shown.height()*100>=target.width.toLong()*target.height*90
+  onView(withHint("Describe the incident")).perform(object:androidx.test.espresso.ViewAction{
+   override fun getDescription()="scroll the measured incident editor rectangle into its actual viewport"
+   override fun getConstraints():org.hamcrest.Matcher<android.view.View> = org.hamcrest.Matchers.allOf(isAssignableFrom(android.widget.EditText::class.java),isDescendantOfA(isAssignableFrom(android.widget.ScrollView::class.java)))
+   override fun perform(ui:androidx.test.espresso.UiController,target:android.view.View){
+    ui.loopMainThreadUntilIdle()
+    check(target.isLaidOut&&target.width>0&&target.height>0){"Incident editor lost its measured layout"}
+    var ancestor=target.parent
+    while(ancestor is android.view.View&&ancestor !is android.widget.ScrollView)ancestor=ancestor.parent
+    val scroll=ancestor as? android.widget.ScrollView?:error("Incident editor scroll parent missing")
+    val content=scroll.getChildAt(0) as? android.view.ViewGroup?:error("Incident editor scroll content missing")
+    val rectangle=android.graphics.Rect(0,0,target.width,target.height)
+    content.offsetDescendantRectToMyCoords(target,rectangle)
+    scroll.requestChildRectangleOnScreen(content,rectangle,true)
+    ui.loopMainThreadUntilIdle()
+    if(!isDisplayingAtLeast(90).matches(target)){
+     val visible=android.graphics.Rect();val viewport=android.graphics.Rect();val position=IntArray(2)
+     target.getGlobalVisibleRect(visible);scroll.getGlobalVisibleRect(viewport);target.getLocationOnScreen(position)
+     // Pixel bounds and booleans only. Never dump editor text, account data or the view hierarchy.
+     error("Incident editor visibility: target=${target.width}x${target.height}@${position[0]},${position[1]}; visible=$visible; viewport=$viewport; scrollY=${scroll.scrollY}; contentHeight=${content.height}; canUp=${scroll.canScrollVertically(-1)}; canDown=${scroll.canScrollVertically(1)}")
+    }
    }
-   if(visible){onView(withHint("Describe the incident")).perform(click(),replaceText(text),closeSoftKeyboard());return}
-   check(attempt<8){"Incident editor remained outside the visible viewport"}
-   onView(isAssignableFrom(android.widget.ScrollView::class.java)).perform(if(above)swipeDown()else swipeUp())
-  }
+  }).check(matches(isDisplayingAtLeast(90))).perform(click(),replaceText(text),closeSoftKeyboard())
  }
  @Test fun rotationBackgroundPatrolAndEscalationRecoverOnlyTheOriginalVerifiedIndividualDraft(){
   val suffix=UUID.randomUUID().toString();val key=KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair().public

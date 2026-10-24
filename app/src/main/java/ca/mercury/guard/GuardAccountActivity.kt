@@ -106,7 +106,11 @@ class GuardAccountActivity : Activity() {
  private fun cancelShiftDeadline(retainForResume:Boolean=false){shiftDeadlineRefresh?.let{shiftDeadlineHandler.removeCallbacks(it)};if(!retainForResume)shiftDeadlineRefresh=null}
  private fun shiftScope(item:JSONObject)=DispatchScope(GrantBinding(item.getString("guardId"),item.getString("siteId"),item.getString("assignmentId"),item.getString("deviceThumbprint"),item.getLong("revocationVersion")),item.getString("vendorId"))
  private fun shiftObserved(item:JSONObject)=ConnectedLocationTiming.observationAt(item.getLong("status_server_time_ms"),item.getLong("status_elapsed_ms"),SystemClock.elapsedRealtime())
- private fun pendingShift(item:JSONObject)=ShiftTransitionStore(this).use{db->listOf("start","end").any{action->db.saved(shiftScope(item),action)?.let{!it.has("receipt")&&!it.has("rejection")}==true}}
+ private fun connectedShiftOwner(item:JSONObject):ConnectedDispatchOwner?=try{val read=assignmentReadContext(item);ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)}catch(_:Exception){null}
+ private fun pendingShift(item:JSONObject):Boolean {
+  val owner=connectedShiftOwner(item)?:return false
+  return ShiftTransitionStore(this).use{db->listOf("start","end").any{action->db.saved(owner,action)?.let{!it.has("receipt")&&!it.has("rejection")}==true}}
+ }
  /** Presentation only. The service still decides whether an explicit end request is accepted. */
  private fun watchShiftEnd(item:JSONObject,reached:()->Unit){
   cancelShiftDeadline()
@@ -125,20 +129,22 @@ class GuardAccountActivity : Activity() {
   }}
   shiftDeadlineRefresh=refresh;refresh.run()
  }
- private fun confirmClockOut(item:JSONObject,scope:DispatchScope){
+ private fun confirmClockOut(item:JSONObject,scope:DispatchScope)=confirmClockOut(item,scope,connectedShiftOwner(item))
+ private fun confirmClockOut(item:JSONObject,scope:DispatchScope,owner:ConnectedDispatchOwner?){
   try{check(shiftObserved(item)>=item.getLong("endsAt"))}catch(_:Exception){status.text="Refresh assignments before confirming scheduled clock-out.";return}
   val stamp=generation;val displayedRoot=root
-  AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,scope,"end","")}.showOwned()
+  AlertDialog.Builder(this).setTitle("Confirm clock-out").setMessage("Record the end of your shift now?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-out"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped&&owner?.scope==scope)submitShift(item,owner,"end","")}.showOwned()
  }
- private fun earlyExit(item:JSONObject,scope:DispatchScope){
-  try{if(shiftObserved(item)>=item.getLong("endsAt")){confirmClockOut(item,scope);return}}catch(_:Exception){status.text="Refresh assignments before requesting an early exit.";return}
+ private fun earlyExit(item:JSONObject,scope:DispatchScope)=earlyExit(item,scope,connectedShiftOwner(item))
+ private fun earlyExit(item:JSONObject,scope:DispatchScope,owner:ConnectedDispatchOwner?){
+  try{if(shiftObserved(item)>=item.getLong("endsAt")){confirmClockOut(item,scope,owner);return}}catch(_:Exception){status.text="Refresh assignments before requesting an early exit.";return}
   val reason=EditText(this).apply{hint="Reason for leaving early";isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(2000))}
   val stamp=generation;val displayedRoot=root
   val dialog=AlertDialog.Builder(this).setTitle("End shift early").setMessage("Give a reason, then confirm. This records an early exit; it does not notify dispatch yet.").setView(reason).setNegativeButton("Cancel",null).setPositiveButton("Confirm early exit",null).create()
   dialog.setOnShowListener{dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener{
    if(stamp!=generation||root!==displayedRoot||!visibleForLocation||stopped){dialog.dismiss();return@setOnClickListener}
-   try{if(shiftObserved(item)>=item.getLong("endsAt")){dialog.dismiss();confirmClockOut(item,scope);return@setOnClickListener}}catch(_:Exception){reason.error="Refresh assignment timing before confirming";return@setOnClickListener}
-   val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else if(!ShiftTransitionStore.validReason(text))reason.error="Please shorten the reason before confirming" else{dialog.dismiss();submitShift(item,scope,"end",text)}
+   try{if(shiftObserved(item)>=item.getLong("endsAt")){dialog.dismiss();confirmClockOut(item,scope,owner);return@setOnClickListener}}catch(_:Exception){reason.error="Refresh assignment timing before confirming";return@setOnClickListener}
+   val text=reason.text.toString();if(text.isBlank())reason.error="A reason is required" else if(!ShiftTransitionStore.validReason(text))reason.error="Please shorten the reason before confirming" else if(owner?.scope!=scope)reason.error="Sign in and refresh this assignment before confirming" else{dialog.dismiss();submitShift(item,owner,"end",text)}
   }};showOwnedDialog(dialog)
  }
  private fun startScreen(){
@@ -256,18 +262,19 @@ class GuardAccountActivity : Activity() {
   captureGrant=null;captureBinding=null;captureAnchor=null
   if(!item.has("shift_state")){verifyAssignment(item);return}
   val scope=shiftScope(item)
+  val owner=connectedShiftOwner(item)
   val state=item.getJSONObject("shift_state").getString("state")
   val observed=shiftObserved(item)
   val windowElapsed=state=="active"&&observed>=item.getLong("endsAt")
   screen("SHIFT · ${item.getString("siteId")}",if(windowElapsed)"Scheduled window elapsed · clock-out unconfirmed. New capture is unavailable. Confirm the actual clock-out separately; no end time has been recorded automatically.\nAttendance records remain local to the pilot service; payroll is not connected." else "Service status: ${state.replace('_',' ')}. Attendance records remain local to the pilot service; payroll is not connected.")
   try{
-   val pending=ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(scope,action)?.takeIf{!it.has("receipt")&&!it.has("rejection")}}}
-   for(saved in pending){val request=saved.getJSONObject("request");button("Resolve pending ${request.getString("action")}"){submitShift(item,scope,request.getString("action"),request.getString("reason"))}}
+   val pending=if(owner==null)emptyList()else ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(owner,action)?.takeIf{!it.has("receipt")&&!it.has("rejection")}}}
+   for(saved in pending){val request=saved.getJSONObject("request");button("Resolve pending ${request.getString("action")}"){submitShift(item,owner,request.getString("action"),request.getString("reason"))}}
    if(pending.isEmpty()){
     when(state){
      "not_started"->if(item.getBoolean("canStart"))button("Clock in"){
       val stamp=generation;val displayedRoot=root
-      AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,scope,"start","")}.showOwned()
+      AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)submitShift(item,owner,"start","")}.showOwned()
      }else status.text="This assignment is outside its clock-in window. Refresh assignments when it begins."
      "active"->{
       val continuing=if(observed<item.getLong("endsAt")&&item.optBoolean("assignmentActive",true))button("Continue shift"){verifyAssignment(item)}else null
@@ -275,7 +282,7 @@ class GuardAccountActivity : Activity() {
       watchShiftEnd(item){
        continuing?.let{root.removeView(it)}
        status.text="Scheduled window elapsed · clock-out unconfirmed. New capture is unavailable. Confirm the actual clock-out separately; no end time has been recorded automatically.\nAttendance records remain local to the pilot service; payroll is not connected."
-       button("Clock out"){confirmClockOut(item,scope)}
+       button("Clock out"){confirmClockOut(item,scope,owner)}
       }
      }
      "ended"->status.text=if(item.optBoolean("assignmentActive",true))"Shift ended. Saved records remain available for upload." else "Cancelled assignment closed. Saved records are preserved; upload requires administrator review."
@@ -291,9 +298,11 @@ class GuardAccountActivity : Activity() {
   button("Send my queued records"){sendScoped(scope.binding.guardId)}
   button("Refresh assignments"){loadAssignments()};button("Sign out",true){signOut()}
  }
- private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
+ private fun submitShift(item:JSONObject,owner:ConnectedDispatchOwner?,action:String,reason:String){
   if(busy)return
-  val c=config?:return;val active=session?:return;val stamp=generation
+  val read=try{assignmentReadContext(item)}catch(_:Exception){status.text="Sign in and refresh this assignment before confirming.";return}
+  if(owner==null||owner!=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)){status.text="This confirmation belongs to another account or phone configuration. Refresh assignments.";return}
+  val c=read.config;val active=read.session;val scope=owner.scope;val stamp=generation;val displayedRoot=root
   cancelShiftDeadline()
   if(action=="end")ConnectedLocationRuntime.stopForAssignment(this,scope,"End requested for assignment ${scope.binding.assignmentId}")
   busy=true;captureGrant=null;captureBinding=null;captureAnchor=null
@@ -303,16 +312,17 @@ class GuardAccountActivity : Activity() {
    try{
     active.bearer()
     ShiftTransitionStore(this).use{db->
-     val request=db.prepare(scope,action,reason)
+     val request=db.prepare(owner,action,reason)
      val receipt=GuardAccountClient(c.endpoint).transition(active,c.deviceId,scope.binding.assignmentId,DeviceIdentity(this),c.audience,request)
-     success=db.accept(scope,action,receipt);definitiveRejection=!success
+     success=db.accept(owner,action,receipt);definitiveRejection=!success
     }
     if(success&&action=="end")AuthorizedReminders(this).stopForAssignment(scope.binding)
    }catch(_:Exception){}
    val accepted=success;val declined=definitiveRejection
    runOnUiThread{
-    if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
+    if(!assignmentReadAuthorized(read,displayedRoot,stamp,true))return@runOnUiThread
     busy=false
+    if(!visibleForLocation){status.text="Shift confirmation processing finished. Refresh assignments when you return to check the recorded result.";return@runOnUiThread}
     if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed for assignment ${scope.binding.assignmentId}. This screen is locked. Other current assignment resources and queued records remain preserved; automatic delivery may continue until your upload session expires. Sign out stops it."}
     else if(accepted)loadAssignments()
     else if(declined){assignmentOverview(item);status.text="The service declined this request. No clock time was recorded. Refresh assignments before confirming a corrected request."}
@@ -348,6 +358,7 @@ class GuardAccountActivity : Activity() {
   }.start()
  }
  private fun captureScreen(item:JSONObject){
+  val closeoutOwner=connectedShiftOwner(item)
   screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nAuthorized capture · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
   button("Escalate"){escalationScreen(item)};button("My escalation requests"){escalationList()};button("Shift location and consent"){locationScreen(item)}
   button("Connected device readiness"){connectedReadiness(item)}
@@ -398,7 +409,7 @@ class GuardAccountActivity : Activity() {
   watchShiftEnd(item){
    captureGrant=null
    status.text="Scheduled window elapsed · clock-out unconfirmed. New capture is unavailable. Your unfinished incident remains preserved; confirm clock-out separately."
-   button("Clock out"){confirmClockOut(item,shiftScope(item))}
+   button("Clock out"){confirmClockOut(item,shiftScope(item),closeoutOwner)}
   }
  }
  private data class AssignmentReadContext(val config:GuardServiceConfig,val session:GuardAccountClient.Session,val account:AccountIdentity,val owner:ConnectedIncidentDraftScope,val scope:DispatchScope)
@@ -409,8 +420,8 @@ class GuardAccountActivity : Activity() {
   check(scope.binding.guardId==who.guardId&&scope.vendorId==who.vendorId&&scope.binding.deviceThumbprint==thumb)
   return AssignmentReadContext(c,active,who,ConnectedIncidentDraftScope(c.uploadBinding(),c.deviceId,thumb,who.subject,who.guardId,who.vendorId,scope.binding.siteId,scope.binding.assignmentId),scope)
  }
- private fun assignmentReadAuthorized(read:AssignmentReadContext,displayedRoot:LinearLayout,stamp:Int):Boolean=try{
-  check(visibleForLocation&&!stopped&&!isFinishing&&!isDestroyed&&root===displayedRoot&&generation==stamp&&config===read.config&&session===read.session&&accountIdentity==read.account)
+ private fun assignmentReadAuthorized(read:AssignmentReadContext,displayedRoot:LinearLayout,stamp:Int,allowPaused:Boolean=false):Boolean=try{
+  check((allowPaused||visibleForLocation)&&!stopped&&!isFinishing&&!isDestroyed&&root===displayedRoot&&generation==stamp&&config===read.config&&session===read.session&&accountIdentity==read.account)
   read.session.bearer();check(read.owner.configuration==read.config.uploadBinding()&&read.owner.deviceId==read.config.deviceId&&DeviceIdentity(this).publicIdentity()?.thumbprint==read.owner.thumbprint);true
  }catch(_:Exception){false}
  /** Current profile and possession-verified assignment; this never requests a grant or changes attendance. */
@@ -422,19 +433,23 @@ class GuardAccountActivity : Activity() {
   if(matches.size!=1)throw AssignmentReadDenied();val epoch=response.getLong("server_time_ms");check(epoch>0)
   return JSONObject(matches.single().toString()).put("status_server_time_ms",epoch).put("status_elapsed_ms",SystemClock.elapsedRealtime())
  }
- private fun newAssignmentPanel(item:JSONObject,title:String):Pair<AssignmentReadContext,ConnectedPrivatePanel>? {
+ private fun newAssignmentPanel(item:JSONObject,title:String)=newAssignmentPanel(item,title,false)
+ private fun newAssignmentPanel(item:JSONObject,title:String,activeDispatch:Boolean):Pair<AssignmentReadContext,ConnectedPrivatePanel>? {
   val read=try{assignmentReadContext(item)}catch(_:Exception){startScreen();return null}
+  val originalAnchor=captureAnchor
+  if(activeDispatch&&(captureBinding!=read.scope.binding||originalAnchor==null)){status.text="Refresh this assignment's authorization before opening its messages.";return null}
   screen(title,"Private information for your individually signed-in account and this phone's assignment. Leaving this panel locks it.")
   val displayedRoot=root;val stamp=generation
-  val panel=ConnectedPrivatePanel(this,{assignmentReadAuthorized(read,displayedRoot,stamp)},{startScreen()})
+  fun authorized()=assignmentReadAuthorized(read,displayedRoot,stamp)&&(!activeDispatch||(captureBinding==read.scope.binding&&captureAnchor===originalAnchor))
+  val panel=ConnectedPrivatePanel(this,::authorized,{startScreen()})
   connectedPrivatePanel=panel;root.addView(panel)
-  button("Back to assignment"){if(assignmentReadAuthorized(read,displayedRoot,stamp))assignmentOverview(item)else startScreen()}
+  button("Back to assignment"){if(authorized()){if(activeDispatch)captureScreen(item)else assignmentOverview(item)}else startScreen()}
   button("Sign out",true){signOut()}
   return read to panel
  }
  private fun readAssignmentInstructions(item:JSONObject){
   val (read,panel)=newAssignmentPanel(item,"ASSIGNMENT INSTRUCTIONS")?:return
-  fetchAssignmentInstructions(read,panel,null)
+  panel.startWhenAttached{fetchAssignmentInstructions(read,panel,null)}
  }
  private fun fetchAssignmentInstructions(read:AssignmentReadContext,panel:ConnectedPrivatePanel,cursor:String?){
   val ticket=panel.begin("Checking your account and assignment, then loading instructions… Reading does not acknowledge an instruction.")?:return
@@ -490,7 +505,7 @@ class GuardAccountActivity : Activity() {
  }
  private fun connectedReadiness(item:JSONObject){
   val (read,panel)=newAssignmentPanel(item,"CONNECTED DEVICE READINESS")?:return
-  refreshConnectedReadiness(read,panel)
+  panel.startWhenAttached{refreshConnectedReadiness(read,panel)}
  }
  private fun refreshConnectedReadiness(read:AssignmentReadContext,panel:ConnectedPrivatePanel){
   val ticket=panel.begin("Refresh requested. Reconnecting to verify your account and assignment… This does not request a location, start sharing or enable a reminder.")?:return
@@ -515,74 +530,82 @@ class GuardAccountActivity : Activity() {
   }.start()
  }
  private fun loadDispatch(item:JSONObject,refresh:Boolean,offset:Int=0){
-  val c=config?:return;val active=session?:return;val binding=captureBinding?:return
-  if(binding.assignmentId!=item.getString("assignmentId"))return
-  val scope=DispatchScope(binding,item.getString("vendorId"));val stamp=generation
-  screen("ASSIGNMENT MESSAGES",if(refresh)"Checking assignment messages…" else "Opening encrypted inbox…");busy=true
+  val (read,panel)=newAssignmentPanel(item,"ASSIGNMENT MESSAGES",true)?:return
+  val owner=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)
+  panel.startWhenAttached{fetchDispatch(read,panel,owner,item,refresh,offset)}
+ }
+ private fun fetchDispatch(read:AssignmentReadContext,panel:ConnectedPrivatePanel,owner:ConnectedDispatchOwner,item:JSONObject,refresh:Boolean,offset:Int){
+  if(owner!=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)){startScreen();return}
+  val ticket=panel.begin(if(refresh)"Checking your current account and assignment messages…"else"Opening this account's encrypted messages…")?:return
   Thread{
-   var rows:List<JSONObject>?=null;var message="Cached messages · reading does not acknowledge them.";var deny=false
-   val db=DispatchInbox(this)
+   var rows:List<JSONObject>?=null;var summary="Cached messages may be out of date. Reading does not acknowledge them.";var denied=false
    try{
-    active.bearer()
-    if(refresh){
-     val client=GuardAccountClient(c.endpoint);var more=true;var pages=0
-     while(more&&pages<4){
-      var cursor=db.cursor(scope)
-      val page=try{client.dispatch(active,c.deviceId,binding.assignmentId,DeviceIdentity(this),c.audience,cursor)}catch(e:GuardAccountClient.HttpFailure){
-       if(e.statusCode!=409)throw e
-       db.resetCursor(scope,cursor);cursor=null
-       client.dispatch(active,c.deviceId,binding.assignmentId,DeviceIdentity(this),c.audience,null)
+    read.session.bearer()
+    DispatchInbox(this).use{db->
+     if(refresh){
+      verifyAssignmentRead(read)
+      val client=GuardAccountClient(read.config.endpoint);var more=true;var pages=0
+      while(more&&pages<4){
+       var cursor=db.cursor(owner)
+       val page=try{client.dispatch(read.session,read.config.deviceId,owner.scope.binding.assignmentId,DeviceIdentity(this),read.config.audience,cursor)}catch(e:GuardAccountClient.HttpFailure){
+        if(e.statusCode!=409)throw e
+        read.session.bearer();db.resetCursor(owner,cursor);cursor=null
+        client.dispatch(read.session,read.config.deviceId,owner.scope.binding.assignmentId,DeviceIdentity(this),read.config.audience,null)
+       }
+       read.session.bearer();more=db.apply(owner,cursor,page);pages++
       }
-      more=db.apply(scope,cursor,page);pages++
+      summary=if(more)"More updates remain. Refresh again to continue. No acknowledgement was sent."else"Messages refreshed. Opening a message marks it viewed on this phone only."
      }
-     message=if(more)"More updates remain. Refresh again to continue. These messages are not acknowledged." else "Inbox refreshed. Opening a message marks it viewed on this phone only."
+     read.session.bearer();rows=db.list(owner,offset)
     }
-    rows=db.list(scope,offset)
-   }catch(_:GuardAccountClient.HttpFailure){deny=true;message="Message access could not be authorized. Sign in again and refresh assignments."}
+   }catch(_:AssignmentReadDenied){denied=true;summary="The current individual account or assignment could not be confirmed. Sign in again."}
+   catch(_:GuardAccountClient.HttpFailure){denied=true;summary="Message access could not be authorized. Sign in again and refresh assignments."}
    catch(_:Exception){
-    message="Refresh unavailable. Cached messages may be out of date; no acknowledgement was sent."
-    try{active.bearer();rows=db.list(scope,offset)}catch(_:Exception){deny=true;message="Messages unavailable. Sign in again; encrypted records remain preserved."}
-   }finally{db.close()}
-   val result=rows;val summary=message;val blocked=deny
-   runOnUiThread{
-    if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
-    busy=false;status.text=summary
-    if(!blocked&&result!=null){
-     if(result.isEmpty())root.addView(TextView(this).apply{text="No active messages on this page.";textSize=16f})
-     for(wrapped in result){val m=wrapped.getJSONObject("message");button("${m.getString("title")} · v${m.getLong("version")}"){viewDispatch(item,scope,m)}}
-     if(offset>0)button("Previous messages"){loadDispatch(item,false,maxOf(0,offset-30))}
-     if(result.size==30)button("Next messages"){loadDispatch(item,false,offset+30)}
-     button("Refresh messages"){loadDispatch(item,true)}
-    }
-    button("Back to assignment"){captureScreen(item)};button("Sign out",true){signOut()}
+    summary="Refresh unavailable. These are only this account's cached messages and may be out of date. No acknowledgement was sent."
+    try{read.session.bearer();rows=DispatchInbox(this).use{it.list(owner,offset)}}catch(_:Exception){denied=true;summary="Messages unavailable. Sign in again; encrypted originals remain preserved."}
    }
+   val result=rows;val detail=summary;val blocked=denied
+   runOnUiThread{panel.render(ticket){
+    if(blocked){startScreen();status.text=detail;return@render}
+    text(detail)
+    if(result!=null){
+     if(result.isEmpty())text("No active messages for this original account and assignment on this page.")
+     for(wrapped in result){val message=wrapped.getJSONObject("message");action("${message.getString("title")} · v${message.getLong("version")}"){viewDispatch(read,panel,owner,item,message,offset)}}
+     if(offset>0)action("Previous messages"){fetchDispatch(read,panel,owner,item,false,maxOf(0,offset-30))}
+     if(result.size==30)action("Next messages"){fetchDispatch(read,panel,owner,item,false,offset+30)}
+    }
+    action("Refresh messages"){fetchDispatch(read,panel,owner,item,true,offset)}
+   }}
   }.start()
  }
- private fun viewDispatch(item:JSONObject,scope:DispatchScope,message:JSONObject){
+ private fun viewDispatch(read:AssignmentReadContext,panel:ConnectedPrivatePanel,owner:ConnectedDispatchOwner,item:JSONObject,message:JSONObject,offset:Int){
+  val ticket=panel.begin("Opening the original encrypted message version…")?:return
   try{
-   session?.bearer()?:error("Sign in again");check(captureBinding==scope.binding)
+   check(owner==ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope))
+   read.session.bearer();check(captureBinding==owner.scope.binding)
    val anchor=captureAnchor?:error("Refresh authorization")
    val at=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
-   val db=DispatchInbox(this);val wrapped=try{db.markRead(scope,message.getString("message_id"),message.getLong("version"),at)}finally{db.close()}
+   val wrapped=DispatchInbox(this).use{it.markRead(owner,message.getString("message_id"),message.getLong("version"),at)}
    val current=wrapped.getJSONObject("message")
-   screen(current.getString("title"),"Version ${current.getLong("version")} · viewed on this phone. No acknowledgement has been sent.")
-   root.addView(TextView(this).apply{text=current.getString("body");textSize=18f;setPadding(0,dp(16),0,dp(16));setTextIsSelectable(true)})
-   if(!current.isNull("due_at"))root.addView(TextView(this).apply{text="Due: ${java.util.Date(current.getLong("due_at"))}";textSize=16f})
-   val events=ScopedEventStore(this)
-   val acknowledged=try{events.dispatchAcknowledged(scope.binding,current.getString("message_id"),current.getLong("version"))}finally{events.close()}
-   if(acknowledged)status.text="Version ${current.getLong("version")} · acknowledgement recorded on this phone. Check upload receipts for service acceptance."
-   else button("Acknowledge version ${current.getLong("version")}"){
-    try{
-     session?.bearer()?:error("Sign in again");check(captureBinding==scope.binding)
-     val grant=captureGrant?:error("Refresh authorization")
-     val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
-     DispatchInbox(this).use{it.markRead(scope,current.getString("message_id"),current.getLong("version"),observed)}
-     ScopedEventStore(this).use{it.acknowledgeDispatch(scope.binding,grant,DeviceIdentity(this),current.getString("message_id"),current.getLong("version"),observed)}
-     UploadCoordinator(this).request();viewDispatch(item,scope,current)
-    }catch(_:Exception){status.text="Acknowledgement not added. Refresh authorization and messages; existing records remain preserved."}
+   val acknowledged=ScopedEventStore(this).use{it.dispatchAcknowledged(owner,current.getString("message_id"),current.getLong("version"))}
+   panel.render(ticket){
+    text(current.getString("title"))
+    text(if(acknowledged)"Version ${current.getLong("version")} · acknowledgement recorded on this phone for this account. Check upload receipts for service acceptance."else"Version ${current.getLong("version")} · viewed on this phone. No acknowledgement has been sent.")
+    text(current.getString("body"));if(!current.isNull("due_at"))text("Due: ${java.util.Date(current.getLong("due_at"))}")
+    if(!acknowledged)action("Acknowledge version ${current.getLong("version")}"){
+     try{
+      read.session.bearer();check(captureBinding==owner.scope.binding&&captureAnchor===anchor)
+      val grant=captureGrant?:error("Refresh authorization")
+      val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
+      DispatchInbox(this@GuardAccountActivity).use{it.markRead(owner,current.getString("message_id"),current.getLong("version"),observed)}
+      ScopedEventStore(this@GuardAccountActivity).use{it.acknowledgeDispatch(owner,grant,DeviceIdentity(this@GuardAccountActivity),current.getString("message_id"),current.getLong("version"),observed)}
+      UploadCoordinator(this@GuardAccountActivity).request();viewDispatch(read,panel,owner,item,current,offset)
+     }catch(_:Exception){val failure=panel.begin("Acknowledgement not added. Refresh authorization and messages; existing records remain preserved.")?:return@action;panel.render(failure){action("Return to messages"){fetchDispatch(read,panel,owner,item,false,offset)}}}
+    }
+    action("Back to messages"){fetchDispatch(read,panel,owner,item,false,offset)}
+    action("Refresh messages"){fetchDispatch(read,panel,owner,item,true,offset)}
    }
-   button("Back to messages"){loadDispatch(item,false)};button("Refresh messages"){loadDispatch(item,true)}
-  }catch(_:Exception){status.text="This message changed or access expired. Refresh messages before opening it again."}
+  }catch(_:Exception){panel.render(ticket){text("This message changed or access expired. Refresh messages before opening it again.");action("Refresh messages"){fetchDispatch(read,panel,owner,item,true,offset)}}}
  }
  private fun reminderSettings(item:JSONObject){
   val reminders=AuthorizedReminders(this)
@@ -916,11 +939,11 @@ class GuardAccountActivity : Activity() {
   button("Open phone dialer",true){openDialer()}
   if(item?.optJSONObject("shift_state")?.optString("state")=="active")try{
    check(!pendingShift(item))
-   val closeout=shiftScope(item);check(closeout.binding.deviceThumbprint==scope.thumbprint)
-   val early=if(shiftObserved(item)<item.getLong("endsAt"))button("End shift early"){earlyExit(item,closeout)}else null
+   val closeout=shiftScope(item);val closeoutOwner=connectedShiftOwner(item);check(closeoutOwner?.scope==closeout&&closeout.binding.deviceThumbprint==scope.thumbprint)
+   val early=if(shiftObserved(item)<item.getLong("endsAt"))button("End shift early"){earlyExit(item,closeout,closeoutOwner)}else null
    watchShiftEnd(item){
     early?.let{root.removeView(it)}
-    button("Clock out"){confirmClockOut(item,closeout)}
+    button("Clock out"){confirmClockOut(item,closeout,closeoutOwner)}
    }
   }catch(_:Exception){root.addView(TextView(this).apply{text="Refresh assignments to verify shift closeout timing."})}
   val urgency=RadioGroup(this);val assistance=RadioButton(this).apply{id=View.generateViewId();text="Assistance"};val urgent=RadioButton(this).apply{id=View.generateViewId();text="Urgent"};urgency.addView(assistance);urgency.addView(urgent);urgency.check(assistance.id);root.addView(urgency)
@@ -1030,6 +1053,7 @@ class GuardAccountActivity : Activity() {
   }
  }
  private fun patrolScreen(item:JSONObject,selectedRoundId:String?=null){
+  val closeoutOwner=connectedShiftOwner(item)
   val binding=captureBinding?:return
   screen("ASSIGNED PATROL","Select checkpoints in any order. The approved route determines whether each checkpoint requires a fresh GPS fix.")
   try{
@@ -1070,7 +1094,7 @@ class GuardAccountActivity : Activity() {
   button("Send my queued records"){sendScoped(binding.guardId)}
   button("Back to assignment"){captureScreen(item)}
   button("Sign out",true){signOut()}
-  watchShiftEnd(item){cancelPatrolPoint();captureGrant=null;status.text="Scheduled window elapsed · clock-out unconfirmed. Checkpoint capture is unavailable; no clock-out was recorded automatically.";button("Clock out"){confirmClockOut(item,shiftScope(item))}}
+  watchShiftEnd(item){cancelPatrolPoint();captureGrant=null;status.text="Scheduled window elapsed · clock-out unconfirmed. Checkpoint capture is unavailable; no clock-out was recorded automatically.";button("Clock out"){confirmClockOut(item,shiftScope(item),closeoutOwner)}}
  }
  private fun sendScoped(guardId:String){
   try{

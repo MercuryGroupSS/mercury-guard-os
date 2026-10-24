@@ -108,7 +108,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   check(record.accepted&&record.id==approved.id&&record.policy.sha256==approved.policy.sha256&&record.policy.payload==approved.policy.payload)
   return captureInternal("location",sample.data(approved),record.scope.binding,grant,identity,sample.at,record.scope)
  }
- private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null):String {
+ private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null,dispatchOwner:ConnectedDispatchOwner?=null):String {
   require(observedAt in 0..9007199254740991L)
   check(grant.permits(requiredAction(kind),original,elapsedNow(),bootNow())) { "Capture not authorized" }
   check(identity.publicIdentity()?.thumbprint == original.deviceThumbprint) { "Capture device mismatch" }
@@ -119,6 +119,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   val record=JSONObject().put("scope",binding(original)).put("event",event)
   if(locationOwner!=null)record.put("location_owner",locationOwner.json())
   if(incidentOwner!=null){check(kind=="incident"&&ConnectedIncidentHistory.matches(incidentOwner,original));record.put("incident_owner",incidentOwner.json())}
+  if(dispatchOwner!=null){check(kind=="dispatch_ack"&&dispatchOwner.scope.binding==original);record.put("dispatch_owner",dispatchOwner.json())}
   require(record.toString().toByteArray(Charsets.UTF_8).size <= 240000)
   val db=writableDatabase;db.beginTransaction()
   try {
@@ -167,6 +168,45 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   try{
    check(!dispatchAcknowledged(original,messageId,version)){"Acknowledgement already recorded"}
    val result=capture("dispatch_ack",JSONObject().put("message_id",messageId).put("message_version",version),original,grant,identity,observedAt)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
+ /** Strict local attribution only. These fields never enter the signed event or its retry snapshot. */
+ private fun originalDispatchOwner(value:JSONObject):ConnectedDispatchOwner {
+  require(value.keys().asSequence().toSet()==setOf("version","configuration","device_id","subject","scope"))
+  fun number(j:JSONObject,key:String):Long {val n=j.get(key);require(n is Int||n is Long);return (n as Number).toLong()}
+  fun text(j:JSONObject,key:String)=j.get(key) as? String?:error("Original dispatch owner required")
+  require(number(value,"version")==1L)
+  val scope=value.getJSONObject("scope")
+  require(scope.keys().asSequence().toSet()==setOf("guard_id","vendor_id","site_id","assignment_id","device_thumbprint","revocation_version"))
+  return ConnectedDispatchOwner(text(value,"configuration"),text(value,"device_id"),text(value,"subject"),DispatchScope(
+   GrantBinding(text(scope,"guard_id"),text(scope,"site_id"),text(scope,"assignment_id"),text(scope,"device_thumbprint"),number(scope,"revocation_version")),text(scope,"vendor_id")))
+ }
+ /** A legacy or differently owned acknowledgement never counts for the connected account. */
+ internal fun dispatchAcknowledged(owner:ConnectedDispatchOwner,messageId:String,version:Long):Boolean {
+  require(messageId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}"))&&version>0)
+  readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
+   val event=record.getJSONObject("event")
+   if(event.getString("kind")!="dispatch_ack"||binding(record.getJSONObject("scope"))!=owner.scope.binding)continue
+   if(!record.has("dispatch_owner"))continue
+   val original=originalDispatchOwner(record.getJSONObject("dispatch_owner"))
+   check(original.scope.binding==binding(record.getJSONObject("scope"))){"Original dispatch acknowledgement binding mismatch"}
+   if(original!=owner)continue
+   val data=event.getJSONObject("data");val recordedVersion=data.get("message_version")
+   check(recordedVersion is Int||recordedVersion is Long)
+   if(data.get("message_id")==messageId&&(recordedVersion as Number).toLong()==version)return true
+  }}
+  return false
+ }
+ /** Keep original wire shape and retry identity while retaining the complete local owner atomically. */
+ internal fun acknowledgeDispatch(owner:ConnectedDispatchOwner,grant:VerifiedShiftGrant,identity:DeviceIdentity,messageId:String,version:Long,observedAt:Long):String {
+  require(messageId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}"))&&version>0)
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(!dispatchAcknowledged(owner,messageId,version)){"Acknowledgement already recorded"}
+   val data=JSONObject().put("message_id",messageId).put("message_version",version)
+   val result=captureInternal("dispatch_ack",data,owner.scope.binding,grant,identity,observedAt,null,dispatchOwner=owner)
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
  }
