@@ -20,7 +20,7 @@ function validate(action,p){
   case 'guard.status':exact(p,['guardId','active']);ids(p,['guardId']);bool(p.active);break;
   case 'device.enroll':exact(p,['deviceId','mode','active','revoked','publicKeySpki'],['siteId','guardId']);ids(p,['deviceId']);break;
   case 'device.revoke':exact(p,['deviceId']);ids(p,['deviceId']);break;
-  case 'ops_binding.approve':exact(p,['opsShiftId','guardId','vendorId','siteId','authSubject','revision','active'],['patrolRoute','checkInPolicy']);break;
+  case 'ops_binding.approve':exact(p,['opsShiftId','guardId','vendorId','siteId','authSubject','revision','active'],['patrolRoute','checkInPolicy','locationPolicy']);break;
   case 'dashboard_mapping.approve':exact(p,['assignmentId','guardId','vendorId','siteId','dashboardShiftId','destination','revision','active']);break;
   case 'dispatch.publish':exact(p,['scope','message']);exact(p.scope,['guardId','vendorId','siteId','assignmentId']);exact(p.message,['message_id','version','state','title','body','issued_at','due_at']);break;
   default:throw Error('Unknown administration action');
@@ -52,7 +52,7 @@ export class PostgresAdministration{
    guards:['guard_id','SELECT g.guard_id,g.vendor_id,g.auth_subject,g.active,l.email FROM mercury_guard.guards g LEFT JOIN mercury_guard.guard_login l USING(guard_id) WHERE g.guard_id>$1 ORDER BY g.guard_id LIMIT 51'],
    sites:['site_id','SELECT site_id,active FROM mercury_guard.sites WHERE site_id>$1 ORDER BY site_id LIMIT 51'],
    devices:['device_id','SELECT device_id,mode,site_id,guard_id,thumbprint,active,revoked,revocation_version FROM mercury_guard.devices WHERE device_id>$1 ORDER BY device_id LIMIT 51'],
-   assignments:['assignment_id','SELECT assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy FROM mercury_guard.assignments WHERE assignment_id>$1 ORDER BY assignment_id LIMIT 51'],
+   assignments:['assignment_id','SELECT assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy,location_policy FROM mercury_guard.assignments WHERE assignment_id>$1 ORDER BY assignment_id LIMIT 51'],
    ops_bindings:['source_id','SELECT source_id,revision,body FROM mercury_guard.ops_bindings WHERE source_id>$1 ORDER BY source_id LIMIT 51'],
    dashboard_bindings:['assignment_id','SELECT * FROM mercury_guard.dashboard_bindings WHERE assignment_id>$1 ORDER BY assignment_id LIMIT 51'],
    outbox:['id','SELECT id,status,attempts,next_at,lease_until,destination,assignment_id,guard_id,vendor_id,site_id FROM mercury_guard.dashboard_outbox WHERE id>$1 ORDER BY id LIMIT 51']};

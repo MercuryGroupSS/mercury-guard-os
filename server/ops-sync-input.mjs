@@ -7,8 +7,8 @@ export function prepareOpsSync(shift,binding){
   const sourceAt=time(shift.updated_at),startsAt=time(shift.scheduled_start),endsAt=time(shift.scheduled_end);
   if(startsAt>=endsAt||!['scheduled','clocked_in','late','not_clocked_in','completed','cancelled'].includes(shift.status))throw Error('Invalid upstream assignment');
   const active=binding.active&&!['completed','cancelled'].includes(shift.status);
-  const material={guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,startsAt,endsAt,...(binding.patrolRoute?{patrolRoute:binding.patrolRoute}:{}),...(binding.checkInPolicy?{checkInPolicy:binding.checkInPolicy}:{})};
-  const sourceDigest=hash({startsAt,endsAt,status:shift.status}),bindingDigest=hash({guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,active:binding.active,patrolRoute:binding.patrolRoute??null,checkInPolicy:binding.checkInPolicy??null});
+  const material={guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,startsAt,endsAt,...(binding.patrolRoute?{patrolRoute:binding.patrolRoute}:{}),...(binding.checkInPolicy?{checkInPolicy:binding.checkInPolicy}:{}),...(binding.locationPolicy?{locationPolicy:binding.locationPolicy}:{})};
+  const sourceDigest=hash({startsAt,endsAt,status:shift.status}),bindingDigest=hash({guardId:binding.guardId,vendorId:binding.vendorId,siteId:binding.siteId,active:binding.active,patrolRoute:binding.patrolRoute??null,checkInPolicy:binding.checkInPolicy??null,locationPolicy:binding.locationPolicy??null});
   const materialHash=hash(material),digest=hash({material,active,sourceAt,revision:binding.revision,status:shift.status});
  return {sourceAt,active,material,sourceDigest,bindingDigest,materialHash,digest};
 }

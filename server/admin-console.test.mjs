@@ -2,7 +2,8 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {adminConsoleResponse} from './admin-console-handler.mjs';
-import {buildPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,maxReportPhotoBytes} from './admin-console/model.mjs';
+import {locationPolicy as validateLocationPolicy} from './location-policy.mjs';
+import {buildPayload,buildReviewedPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,locationReportPresentation,maxReportPhotoBytes} from './admin-console/model.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
 const session={access_token:'synthetic-access',expires_at:1000},member={subject:'individual-admin',role:'guard_os_admin',expires_at:1000};
 test('operator escalation review binds the original ID and preserves guard-visible response',()=>{
@@ -36,6 +37,25 @@ test('optional patrol rounds preserve legacy omission, reject ambiguous authorit
  const payload=buildPayload('ops_binding.approve',{...values,rounds:'opening | Opening patrol\nclosing | Closing patrol'});assert.deepEqual(payload.patrolRoute.rounds,[{id:'opening',label:'Opening patrol'},{id:'closing',label:'Closing patrol'}]);const review=new PendingChange({owner:'admin',action:'ops_binding.approve',reason:'Approved two explicit patrol rounds',payload,requestId:'round-request'});payload.patrolRoute.rounds[0].id='edited-after-review';const request=review.request('admin');assert.equal(request.payload.patrolRoute.rounds[0].id,'opening');request.payload.patrolRoute.rounds.pop();assert.equal(review.request('admin').payload.patrolRoute.rounds.length,2);assert.equal(valuesForRow('ops_bindings',{body:request.payload,revision:3}).patrolRoute.rounds[0].id,'opening');
  for(const rounds of ['opening','| Missing ID','a | First\na | Second','a | First\nb | first','a | ','bad/id | Bad',Array.from({length:101},(_,index)=>'round-'+index+' | Round '+index).join('\n')])assert.throws(()=>buildPayload('ops_binding.approve',{...values,rounds}));
  const noRoute=buildPayload('ops_binding.approve',{...values,routeEnabled:undefined,rounds:'unapproved | Must not attach'});assert.equal('patrolRoute' in noRoute,false);
+});
+const locationApproval={opsShiftId:'synthetic-ops',guardId:'synthetic-guard',vendorId:'synthetic-company',siteId:'synthetic-site',authSubject:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',revision:'4',active:'true',locationPolicyEnabled:'on',locationRevision:'3',locationNoticeRevision:'2',locationNotice:'  Synthetic review only — café.\nCollection stops when this authorized shift or lease ends.  ',locationInterval:'12000',locationDistance:'0',locationFreshness:'20000',locationAccuracy:'25.5',locationLease:'60000'};
+test('location approval is absent by default and hashes the exact reviewed notice before immutable audited retry',async()=>{
+ const omitted=await buildReviewedPayload('ops_binding.approve',{...locationApproval,locationPolicyEnabled:undefined});assert.equal('locationPolicy'in omitted,false);
+ await assert.rejects(buildReviewedPayload('ops_binding.approve',{...locationApproval,locationInterval:''}),/interval/);assert.throws(()=>buildPayload('ops_binding.approve',locationApproval),/fingerprint/);
+ const values={...locationApproval},preparing=buildReviewedPayload('ops_binding.approve',values);values.locationNotice='Changed after review started';values.locationLease='900000';const payload=await preparing,policy=payload.locationPolicy,notice=locationApproval.locationNotice.trim();
+ assert.equal(policy.notice_text,notice);assert.equal(policy.notice_sha256,createHash('sha256').update(notice,'utf8').digest('hex'));assert.equal(policy.max_capture_lease_ms,60000);assert.equal(policy.geofence,null);assert.equal(policy.min_distance_m,0);assert.equal(policy.max_accuracy_m,25.5);
+ assert.deepEqual(validateLocationPolicy(policy),policy);
+ const change=new PendingChange({owner:'operator',action:'ops_binding.approve',reason:'Approved the synthetic notice and explicit collection bounds',payload,requestId:'same-location-request'}),original=change.body;payload.locationPolicy.notice_text='mutated';payload.locationPolicy.sample_interval_ms=1000;
+ assert.equal(change.body,original);assert.equal(change.request('operator').payload.locationPolicy.notice_text,notice);assert.equal(change.request('operator').payload.locationPolicy.sample_interval_ms,12000);assert.throws(()=>change.request('other-operator'));
+ const saved=valuesForRow('ops_bindings',{body:change.request('operator').payload,revision:4});assert.equal(saved.revision,5);assert.deepEqual(saved.locationPolicy,JSON.parse(original).payload.locationPolicy);
+});
+test('explicit location policy bounds, valid Unicode and optional circle geometry fail closed without invented values',async()=>{
+ for(const change of [{locationRevision:''},{locationNoticeRevision:'0'},{locationNotice:' \n '},{locationNotice:'bad\tcontrol'},{locationNotice:'bad\rline'},{locationNotice:'bad\ud800'},{locationNotice:'x'.repeat(2001)},{locationInterval:'999'},{locationInterval:'3600001'},{locationDistance:''},{locationDistance:'-1'},{locationDistance:'Infinity'},{locationFreshness:'300001'},{locationAccuracy:'0'},{locationAccuracy:'1001'},{locationLease:'900001'},{locationLease:'1.5'}])await assert.rejects(buildReviewedPayload('ops_binding.approve',{...locationApproval,...change}));
+ const circle={...locationApproval,locationCircleEnabled:'on',locationFenceId:'synthetic-circle',locationFenceRevision:'2',locationLatitude:'0',locationLongitude:'0',locationRadius:'100.25'},policy=(await buildReviewedPayload('ops_binding.approve',circle)).locationPolicy;
+ assert.deepEqual(policy.geofence,{type:'circle',id:'synthetic-circle',revision:2,latitude:0,longitude:0,radius_m:100.25});
+ assert.deepEqual(validateLocationPolicy(policy),policy);
+ for(const change of [{locationFenceId:''},{locationFenceRevision:'0'},{locationLatitude:''},{locationLatitude:'90.01'},{locationLongitude:'-180.01'},{locationRadius:''},{locationRadius:'0'},{locationRadius:'100001'}])await assert.rejects(buildReviewedPayload('ops_binding.approve',{...circle,...change}));
+ assert.equal((await buildReviewedPayload('ops_binding.approve',{...circle,locationCircleEnabled:undefined})).locationPolicy.geofence,null);
 });
 test('unconfirmed changes retry the identical request body and remain bound to the preparing administrator',()=>{
  const payload={vendorId:'company-1',kind:'company',active:true},change=new PendingChange({owner:'admin-1',action:'vendor.create',reason:' Supplier approved ',payload,requestId:'request-1'});payload.active=false;
@@ -116,4 +136,19 @@ test('report presentation preserves literal incident text and distinguishes deli
 test('received patrol details preserve the recorded round ID and explicitly label legacy single passes',()=>{
  const report={observation:{kind:'patrol_checkpoint',data:{route_id:'route',route_revision:2,checkpoint_id:'entrance',round_id:'closing'}}},view=reportPresentation(report);assert.match(view.summary,/Round closing/);assert.ok(view.rows.some(([title,value])=>title==='Patrol round'&&value==='closing'));
  delete report.observation.data.round_id;const legacy=reportPresentation(report);assert.doesNotMatch(legacy.summary,/Round/);assert.ok(legacy.rows.some(([title,value])=>title==='Patrol round'&&value==='Single pass (no declared round)'));
+});
+const locationSample={capture_grant_id:'33333333-3333-4333-8333-333333333333',consent_id:'11111111-1111-4111-8111-111111111111',policy_revision:3,policy_sha256:'a'.repeat(64),fix_at_ms:1730000000000,latitude:0,longitude:0,accuracy_m:12,mock:false,server_validation:{version:1,status:'validated_device_observation',policy_revision:3,policy_sha256:'a'.repeat(64),consent_id:'11111111-1111-4111-8111-111111111111',notice_sha256:'b'.repeat(64),geofence:{state:'inside',fence_id:'synthetic-circle',fence_revision:2,distance_m:15}}};
+test('typed received location preserves original consent, policy and sample attribution and labels only the server assessment',()=>{
+ const names={inside:'Inside configured circle',outside:'Outside configured circle',uncertain:'Uncertain relative to configured circle',not_configured:'Geofence not configured'};
+ for(const [state,name]of Object.entries(names)){
+  const sample=structuredClone(locationSample);sample.server_validation.geofence=state==='not_configured'?{state,fence_id:null,fence_revision:null,distance_m:null}:{...sample.server_validation.geofence,state};
+  const view=reportPresentation({observation:{kind:'location',data:sample},media:{state:'not_applicable'}}),rows=Object.fromEntries(view.rows);
+  assert.equal(view.title,'Location observation');assert.equal(rows['Server assessment'],name);assert.equal(rows['Original capture grant'],sample.capture_grant_id);assert.equal(rows['Original consent ID'],sample.consent_id);assert.equal(rows['Original policy revision'],3);assert.equal(rows['Original policy fingerprint'],sample.policy_sha256);assert.equal(rows['Original notice fingerprint'],sample.server_validation.notice_sha256);assert.equal(rows.Latitude,0);assert.equal(rows.Longitude,0);assert.match(rows.Meaning,/does not prove physical presence or trigger a geofence alert/);assert.equal(view.photoLabel,'No photo attached');
+  assert.equal('Configured geofence ID'in rows,state!=='not_configured');
+ }
+});
+test('missing or mismatched location validation cannot turn malformed observations into a server inside/outside assertion',()=>{
+ const changed=[];for(const patch of [{server_validation:undefined},{mock:true},{latitude:'0'},{accuracy_m:0},{fix_at_ms:NaN},{policy_revision:'3'}])changed.push({...structuredClone(locationSample),...patch});
+ for(const patch of [{policy_sha256:'c'.repeat(64)},{consent_id:'another-consent'},{notice_sha256:'not-a-hash'},{status:'device_asserted'},{geofence:{state:'not_configured',fence_id:'invented',fence_revision:null,distance_m:null}},{geofence:{state:'inside',fence_id:'fence',fence_revision:1,distance_m:'15'}},{geofence:{state:'<script>alert(1)</script>',fence_id:'fence',fence_revision:1,distance_m:15}}]){const sample=structuredClone(locationSample);Object.assign(sample.server_validation,patch);changed.push(sample);}
+ for(const sample of changed){const view=locationReportPresentation(sample),rows=Object.fromEntries(view.rows);assert.equal(view.validated,false);assert.equal(rows['Server assessment'],'Validation unavailable');assert.equal(rows['Original notice fingerprint'],'Unavailable');assert.equal('Configured geofence ID'in rows,false);}
 });

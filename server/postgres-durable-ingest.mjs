@@ -1,3 +1,4 @@
+import {validateLocationSample} from './location-policy.mjs';
 import {reconcilePostgresCheckIns} from './postgres-check-in-status.mjs';
 import {postgresCheckInWorkerState} from './check-in-worker-state.mjs';
 import {isDeepStrictEqual} from 'node:util';
@@ -9,7 +10,7 @@ const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('h
 const actions={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location',dispatch_ack:'dispatch_ack'};
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
 export class PostgresDurableIngest{
- constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.workerState=postgresCheckInWorkerState(this.pool);}
+ constructor(devices,{locationConsents=null}={}){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.locationConsents=locationConsents;this.workerState=postgresCheckInWorkerState(this.pool);}
  async lockAuthority(client,c,batch){
   if(!uuid(c.subject)||typeof c.vendorId!=='string')throw Error('Verified individual identity required');
   const r=(await client.query(`SELECT h.clocked_in,h.clocked_out,h.ends_at FROM mercury_guard.assignments a
@@ -30,10 +31,17 @@ export class PostgresDurableIngest{
   const ids=[...new Set(batch.events.map(e=>e.data.capture_grant_id))].sort();
   const grants=(await client.query('SELECT id,subject,vendor_id,payload,policy FROM mercury_guard.capture_grants WHERE id=ANY($1::uuid[]) AND NOT revoked ORDER BY id FOR SHARE',[ids])).rows;
   const lookup=new Map(grants.map(g=>[g.id,g]));
+  const validations=new Map();
   for(const e of batch.events){const saved=lookup.get(e.data.capture_grant_id),g=saved?JSON.parse(Buffer.from(saved.payload,'base64url').toString('utf8')):null;
    if(!g||saved.subject!==c.subject||saved.vendor_id!==c.vendorId||g.guard_id!==c.guardId||g.site_id!==c.siteId||g.assignment_id!==c.assignmentId||g.device_thumbprint!==c.thumbprint||g.revocation_version!==c.revocationVersion||g.audience!==c.audience||!g.actions.includes(actions[e.kind])||e.at<g.not_before_ms||e.at>=g.expires_at_ms)throw Error('Capture grant unavailable');
    if(e.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy?.patrolRoute,e.data))throw Error('Checkpoint round not authorized');
+   if(e.kind==='location'){
+    if(!this.locationConsents||JSON.stringify(saved.policy?.location)!==JSON.stringify(g.location))throw Error('Current original location consent unavailable');
+    await this.locationConsents.forIngest(client,{...c,locationEventAt:e.at},g.location);
+    validations.set(e.event_id,validateLocationSample(g.location,e,g,c.receivedAtMs));
+   }
   }
+  return validations;
  }
  async ingest(raw,c,now){
   const verified=verifyScopedBatch(raw,c,now),batch=verified.batch,hash=digest({hash:verified.payloadHash,vendorId:c.vendorId});
@@ -41,12 +49,12 @@ export class PostgresDurableIngest{
   return this.devices.transaction(async client=>{
    // Serialize through commit for stable event cursors, sequence and retry receipts.
    await client.query('SELECT pg_advisory_xact_lock(724910621355083::bigint)');
-   await this.lockAuthority(client,{...c,receivedAtMs:received},batch);
+   const validations=await this.lockAuthority(client,{...c,receivedAtMs:received},batch);
    const old=(await client.query('SELECT digest,body FROM mercury_guard.ingest_receipts WHERE device=$1 AND id=$2',[c.thumbprint,batch.batch_id])).rows[0];
-   if(old){if(old.digest!==hash)throw Error('Batch ID content conflict');return old.body;}
+   if(old){if(old.digest!==hash)throw Error('Batch ID content conflict');if(validations.size)await this.locationConsents.requireSession(client,c.session);return old.body;}
    let last=Number((await client.query('SELECT COALESCE(MAX(sequence),0) n FROM mercury_guard.ingested_events WHERE device=$1',[c.thumbprint])).rows[0].n);
    for(const e of batch.events){
-    const record={scope:batch.scope,event:e,vendor_id:c.vendorId},eventHash=digest(record);
+    const record={scope:batch.scope,event:e,vendor_id:c.vendorId,...(validations.has(e.event_id)?{location_validation:validations.get(e.event_id)}:{})},eventHash=digest(record);
     const prior=(await client.query('SELECT digest FROM mercury_guard.ingested_events WHERE device=$1 AND id=$2',[c.thumbprint,e.event_id])).rows[0];
     if(prior){if(prior.digest!==eventHash)throw Error('Event ID content or scope conflict');continue;}
     if(e.sequence<=last&&c.allowHistoricalSequence!==true)throw Error('Device sequence rollback');
@@ -56,7 +64,7 @@ export class PostgresDurableIngest{
     last=e.sequence;
    }
    const receipt={batch_id:batch.batch_id,event_ids:batch.events.map(e=>e.event_id),status:'accepted_local_only'};
-   await client.query('INSERT INTO mercury_guard.ingest_receipts VALUES($1,$2,$3,$4)',[c.thumbprint,batch.batch_id,hash,receipt]);return receipt;
+   await client.query('INSERT INTO mercury_guard.ingest_receipts VALUES($1,$2,$3,$4)',[c.thumbprint,batch.batch_id,hash,receipt]);if(validations.size)await this.locationConsents.requireSession(client,c.session);return receipt;
   });
  }
  async photoForGuard(guardId,eventId){if(!uuid(eventId))return null;const rows=(await this.pool.query('SELECT body FROM mercury_guard.ingested_events WHERE id=$1 AND guard_id=$2',[eventId,guardId])).rows;return rows.length===1&&rows[0].body.event.kind==='photo_evidence'?rows[0].body:null;}

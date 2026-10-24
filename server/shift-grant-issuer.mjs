@@ -9,8 +9,8 @@ export class ShiftGrantIssuer extends ShiftGrantSigner {
    CREATE TABLE IF NOT EXISTS issued_grants(id TEXT PRIMARY KEY,subject TEXT NOT NULL,vendor_id TEXT NOT NULL,payload TEXT NOT NULL,revoked INTEGER NOT NULL DEFAULT 0);
    CREATE TABLE IF NOT EXISTS grant_policies(id TEXT PRIMARY KEY,body TEXT NOT NULL);`);
  }
- issue({identity,assignment,device,sessionExpiresAt,allowedActions,now=Date.now()}){
-  const {claims,policy,payload,response}=this.prepare({identity,assignment,device,sessionExpiresAt,allowedActions,now});
+ issue({identity,assignment,device,sessionExpiresAt,allowedActions,location=null,now=Date.now()}){
+  const {claims,policy,payload,response}=this.prepare({identity,assignment,device,sessionExpiresAt,allowedActions,location,now});
   this.db.exec('BEGIN IMMEDIATE');
   try{
    this.db.prepare('INSERT INTO issued_grants(id,subject,vendor_id,payload) VALUES(?,?,?,?)').run(claims.grant_id,identity.subject,identity.vendorId,payload);

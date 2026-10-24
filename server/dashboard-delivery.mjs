@@ -2,6 +2,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {strictJson} from './verify-batch.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
+import {projectLocationObservation} from './location-policy.mjs';
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const requiredText=(x,max)=>{if(typeof x!=='string'||!x.trim()||x.length>max)throw Error('Required observation text');return x;};
@@ -22,6 +23,7 @@ export function projectDashboardObservation(record,mapping){
    else if(d.clocked_out_at_ms!==event.at||event.at<d.clocked_in_at_ms||typeof d.reason!=='string'||d.reason.length>2000||d.early_exit&&!d.reason.trim())throw Error('Invalid clock-out');
    data={clocked_in_at_ms:d.clocked_in_at_ms,clocked_out_at_ms:d.clocked_out_at_ms,early_exit:d.early_exit,reason:d.reason};break;
   case 'incident':data={description:requiredText(d.description,8000)};break;
+  case 'location':data=projectLocationObservation(record);break;
   case 'patrol_checkpoint':if(!stable(d.route_id)||!stable(d.checkpoint_id)||!Number.isSafeInteger(d.route_revision)||d.route_revision<1||Object.hasOwn(d,'round_id')&&!stable(d.round_id))throw Error('Invalid checkpoint');data={route_id:d.route_id,route_revision:d.route_revision,checkpoint_id:d.checkpoint_id,...(Object.hasOwn(d,'round_id')?{round_id:d.round_id}:{})};break;
   case 'photo_evidence':data={...photoMetadata(d),media_delivery:'not_transferred'};break;
   case 'check_in':
@@ -38,8 +40,9 @@ export function validateProjectedDashboardObservation(value,mapping){
  if(!value||typeof value!=='object')throw Error('Observation required');
  // The public projection deliberately omits the local capture marker. Restore
  // that fixed input discriminator when validating projected photo metadata.
- const data=value.observation?.kind==='photo_evidence'?{...value.observation.data,capture:'camera_intent'}:value.observation?.data;
- const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data}},mapping);
+ let data=value.observation?.kind==='photo_evidence'?{...value.observation.data,capture:'camera_intent'}:value.observation?.data,locationValidation;
+ if(value.observation?.kind==='location'){const {server_validation,...sample}=data??{};data=sample;locationValidation=server_validation;}
+ const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data},...(locationValidation?{location_validation:locationValidation}:{})},mapping);
  if(JSON.stringify(expected)!==JSON.stringify(value))throw Error('Observation projection or mapping changed');
  return value;
 }

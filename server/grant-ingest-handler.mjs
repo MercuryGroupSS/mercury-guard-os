@@ -1,3 +1,4 @@
+import {validateLocationSample} from './location-policy.mjs';
 import {reconcileCheckIns} from './check-in-status.mjs';
 import {validateCheckIn,validateMissReason} from './check-in-policy.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
@@ -30,7 +31,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
    const first=await grantIssuer.lookup(grantId);
    if(!first||first.subject!==identity.subject||first.vendorId!==identity.vendorId)throw Error('Grant unavailable');
    const c=first.claims,at=now(),seconds=Math.floor(at/1000);
-   const context={subject:identity.subject,enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
+   const context={session,subject:identity.subject,enrolled:true,revoked:false,audience:c.audience,thumbprint:c.device_thumbprint,publicKeySpki:envelope.public_key_spki,
     guardId:c.guard_id,siteId:c.site_id,assignmentId:c.assignment_id,revocationVersion:c.revocation_version,vendorId:first.vendorId,allowHistoricalSequence:true,receivedAtMs:at,
     notBefore:seconds,expiresAt:Math.min(seconds+60,session.expiresAt),allowedKinds:Object.keys(required)};
    if(!await devices.authorizes(identity,context,at,true))throw Error('Device or assignment unavailable');
@@ -41,6 +42,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id,deviceThumbprint:c.device_thumbprint},event.at))throw Error('Observation outside confirmed shift');
     if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');await dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
     if(event.kind==='photo_evidence')photoMetadata(event.data);
+    if(event.kind==='location')validateLocationSample(g.location,event,g,at);
     if(event.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy.patrolRoute,event.data))throw Error('Checkpoint not authorized');
    }
    // Resolve photo links only after every supplied event has passed its capture grant.

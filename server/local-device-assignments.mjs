@@ -1,3 +1,4 @@
+import {locationPolicySnapshot} from './location-policy.mjs';
 import {checkInPolicy} from './check-in-policy.mjs';
 import {patrolRoute} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
@@ -29,6 +30,7 @@ export class LocalDeviceAssignments {
  assign(a){
   if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const row=Object.fromEntries(['assignmentId','guardId','vendorId','siteId','startsAt','endsAt','active'].map(k=>[k,a[k]]));
+  if(a.locationPolicy)row.locationPolicy=locationPolicySnapshot(a.locationPolicy).policy;
   if(a.patrolRoute)row.patrolRoute=patrolRoute(a.patrolRoute);
   if(a.checkInPolicy)row.checkInPolicy=checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt);
   this.db.prepare('INSERT INTO assignments VALUES(?,?,?)').run(a.assignmentId,a.guardId,JSON.stringify(row));
@@ -56,7 +58,7 @@ export class LocalDeviceAssignments {
    if(!verify('sha256',Buffer.from(message),key(d.publicKeySpki).key,decode(proof.signature_der,80)))throw Error('Invalid signature');
    this.db.prepare('DELETE FROM challenges WHERE id=?').run(c.id);
    const assignments=this.db.prepare('SELECT body FROM assignments WHERE guard_id=?').all(identity.guardId)
-    .map(r=>{const original=JSON.parse(r.body),mapped=historical&&now>original.endsAt+86400000?null:assignmentForGuard({identity,assignment:includeCancelled?{...original,active:true}:original,device:d,now:historical?Math.min(now,original.endsAt-1):now});return mapped?{...mapped,...(includeCancelled?{assignmentActive:original.active}:{}),...(original.checkInPolicy?{checkInPolicy:original.checkInPolicy}:{}),...(original.patrolRoute?{patrolRoute:original.patrolRoute}:{})}:null;}).filter(Boolean)
+    .map(r=>{const original=JSON.parse(r.body),mapped=historical&&now>original.endsAt+86400000?null:assignmentForGuard({identity,assignment:includeCancelled?{...original,active:true}:original,device:d,now:historical?Math.min(now,original.endsAt-1):now});return mapped?{...mapped,...(includeCancelled?{assignmentActive:original.active}:{}),...(original.checkInPolicy?{checkInPolicy:original.checkInPolicy}:{}),...(original.locationPolicy?{locationPolicy:original.locationPolicy,locationPolicySha256:locationPolicySnapshot(original.locationPolicy).policy_sha256,locationPolicyPayload:locationPolicySnapshot(original.locationPolicy).policy_payload}:{}),...(original.patrolRoute?{patrolRoute:original.patrolRoute}:{})}:null;}).filter(Boolean)
     .map(a=>({...a,deviceThumbprint:d.thumbprint,revocationVersion:d.revocationVersion}));
    this.db.exec('COMMIT');return {assignments};
   }catch(e){this.db.exec('ROLLBACK');throw e;}

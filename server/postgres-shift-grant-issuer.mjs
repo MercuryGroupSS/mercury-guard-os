@@ -1,8 +1,8 @@
 import {ShiftGrantSigner} from './shift-grant-signer.mjs';
 export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
- constructor({devices,...config}){super(config);if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;}
+ constructor({devices,locationConsents=null,...config}){super(config);if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.locationConsents=locationConsents;}
  async issue(context){
-  const {claims,policy,payload,response}=this.prepare(context),{identity,assignment,device,now=Date.now()}=context;
+  const base={...context,allowedActions:context.allowedActions.filter(action=>action!=='location'),location:null},prepared=this.prepare(base),{identity,assignment,device,now=Date.now()}=context;
   return this.devices.transaction(async client=>{
    // Shares the clock-event lock: clock-out and grant issuance have one commit order.
    await client.query('SELECT pg_advisory_xact_lock(724910621355082::bigint)');
@@ -18,10 +18,14 @@ export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
      AND a.starts_at_ms=$9 AND a.ends_at_ms=$10 AND h.starts_at=a.starts_at_ms AND h.ends_at=a.ends_at_ms
      AND h.clocked_in<=$11 AND $11<a.ends_at_ms
      AND a.patrol_route IS NOT DISTINCT FROM $12::jsonb
+     AND a.location_policy IS NOT DISTINCT FROM $13::jsonb
      AND ((d.mode='site' AND d.site_id=a.site_id) OR (d.mode='personal' AND d.guard_id=g.guard_id))
-    FOR SHARE OF a,g,v,s,d,h`,[device.thumbprint,assignment.assignmentId,identity.subject,identity.guardId,identity.vendorId,assignment.siteId,device.deviceId,device.revocationVersion,assignment.startsAt,assignment.endsAt,now,policy.patrolRoute??null]);
+    FOR SHARE OF a,g,v,s,d,h`,[device.thumbprint,assignment.assignmentId,identity.subject,identity.guardId,identity.vendorId,assignment.siteId,device.deviceId,device.revocationVersion,assignment.startsAt,assignment.endsAt,now,prepared.policy.patrolRoute??null,assignment.locationPolicy??null]);
    if(rows.length!==1)throw Error('Confirmed capture scope unavailable');
+   const location=this.locationConsents?await this.locationConsents.forGrant(client,context):null;
+   const {claims,policy,payload,response}=location?this.prepare({...base,location,allowedActions:[...base.allowedActions,'location']}):prepared;
    await client.query('INSERT INTO mercury_guard.capture_grants(id,subject,vendor_id,assignment_id,device_thumbprint,payload,policy) VALUES($1,$2,$3,$4,$5,$6,$7)',[claims.grant_id,identity.subject,identity.vendorId,assignment.assignmentId,device.thumbprint,payload,policy]);
+   if(location)await this.locationConsents.requireSession(client,context.session);
    return response;
   });
  }

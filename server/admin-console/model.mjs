@@ -13,7 +13,7 @@ export const actions={
  'guard.status':{label:'Change guard access',help:'Activation verifies the individual account again. Deactivation blocks the existing session.',fields:[guard,status]},
  'device.enroll':{label:'Enroll phone',help:'Approve the public enrollment key exported by the phone. Private keys stay on the phone.',fields:[id('deviceId','Device ID'),{key:'mode',label:'Phone use',type:'select',options:[['site','Shared site phone'],['personal','Individual guard phone']]},{...site,optional:true},{...guard,optional:true},{key:'publicKeySpki',label:'Phone public enrollment key',type:'textarea',max:512,hint:'Paste the public enrollment value from Mercury One.'}]},
  'device.revoke':{label:'Revoke phone',help:'Revocation blocks new requests from this enrollment. Historical records remain.',fields:[id('deviceId','Device ID')]},
- 'ops_binding.approve':{label:'Approve Ops assignment link',help:'Approve an exact Ops shift and individually authenticated guard. A running refresh worker imports approved shifts; withdrawal cancels the imported assignment.',fields:[id('opsShiftId','Ops shift ID'),guard,vendor,site,subject,revision,status],route:true,policy:true},
+ 'ops_binding.approve':{label:'Approve Ops assignment link',help:'Approve an exact Ops shift and individually authenticated guard. A running refresh worker imports approved shifts; withdrawal cancels the imported assignment. Continuous location stays disabled unless its reviewed policy and notice are explicitly included.',fields:[id('opsShiftId','Ops shift ID'),guard,vendor,site,subject,revision,status],route:true,policy:true,locationPolicy:true},
  'dashboard_mapping.approve':{label:'Approve Dashboard delivery link',help:'Map one Guard assignment to its receiving Dashboard shift and destination. A destination label alone does not enable a transport.',fields:[assignment,guard,vendor,site,id('dashboardShiftId','Dashboard shift ID'),id('destination','Approved destination'),revision,status]},
  'dispatch.publish':{label:'Publish assignment message',help:'Publish or retract a versioned message for one assignment. The phone receives it on its next authorized refresh.',fields:[assignment,guard,vendor,site,id('messageId','Message ID'),{...revision,key:'version',label:'Message version'},{key:'state',label:'Message status',type:'select',options:[['active','Active'],['retracted','Retracted']]},{key:'title',label:'Title',type:'text',max:200,optional:true},{key:'body',label:'Message',type:'textarea',max:8000,optional:true},{key:'due',label:'Due at (your local time)',type:'datetime-local',optional:true}]}
 };
@@ -23,7 +23,7 @@ export const catalogs={
  administrators:{label:'Administrators',columns:['auth_subject','email','active']},access_audit:{label:'Access audit',columns:['request_id','email','active','operator_label','reason','recorded_at','receipt']},
  vendors:{label:'Vendors',columns:['vendor_id','kind','active'],action:'vendor.status'},guards:{label:'Guards',columns:['guard_id','vendor_id','email','active','auth_subject'],action:'guard.status'},
  sites:{label:'Sites',columns:['site_id','active'],action:'site.status'},devices:{label:'Phones',columns:['device_id','mode','site_id','guard_id','active','revoked','revocation_version','thumbprint'],action:'device.revoke'},
- assignments:{label:'Assignments',columns:['assignment_id','guard_id','vendor_id','site_id','starts_at_ms','ends_at_ms','active','patrol_route','check_in_policy'],action:'dispatch.publish'},
+ assignments:{label:'Assignments',columns:['assignment_id','guard_id','vendor_id','site_id','starts_at_ms','ends_at_ms','active','patrol_route','check_in_policy','location_policy'],action:'dispatch.publish'},
  ops_bindings:{label:'Ops links',columns:['source_id','revision','body'],action:'ops_binding.approve'},dashboard_bindings:{label:'Delivery links',columns:['assignment_id','dashboard_shift_id','destination','revision','active'],action:'dashboard_mapping.approve'},
   outbox:{label:'Delivery queue',columns:['id','status','attempts','next_at','lease_until','destination','assignment_id']},audit:{label:'Audit',columns:['request_id','actor_subject','action','status','recorded_at','reason','receipt']}
 };
@@ -31,8 +31,34 @@ export const labels={escalation_id:'Escalation ID',received_at_ms:'Received',ack
 export const label=key=>labels[key]??key.replaceAll('_',' ').replace(/^./,x=>x.toUpperCase());
 export const formatValue=(key,value)=>value===null||value===undefined?'—':typeof value==='boolean'?(value?'Yes':'No'):['starts_at_ms','ends_at_ms','next_at','lease_until','received_at_ms'].includes(key)&&Number(value)>0?new Date(Number(value)).toLocaleString():key==='status'&&value==='received_by_guard_service'?'Service received':key==='status'&&value==='operator_acknowledged'?'Operator acknowledged':typeof value==='object'?JSON.stringify(value,null,2):String(value);
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
-const integer=(value,min,max,name)=>{const n=Number(value);if(!String(value).trim()||!Number.isSafeInteger(n)||n<min||n>max)throw Error(`${name} must be a whole number between ${min} and ${max}.`);return n;};
-export function buildPayload(action,values,now=Date.now()){
+const integer=(value,min,max,name)=>{const n=Number(value);if(!String(value??'').trim()||!Number.isSafeInteger(n)||n<min||n>max)throw Error(`${name} must be a whole number between ${min} and ${max}.`);return n;};
+const decimal=(value,min,max,name,exclusiveMin=false)=>{const raw=String(value??'').trim(),n=Number(raw);if(!raw||!Number.isFinite(n)||(exclusiveMin?n<=min:n<min)||n>max)throw Error(`${name} must be ${exclusiveMin?'greater than '+min:'at least '+min} and no more than ${max}.`);return n;};
+function reviewedLocationNotice(values){
+ const notice=String(values.locationNotice??'').trim();
+ if(!notice||notice.length>2000||new TextEncoder().encode(notice).length>6000||/[\u0000-\u0009\u000b-\u001f\u007f]/.test(notice))throw Error('Enter the complete reviewed location notice: up to 2,000 characters, with line breaks and no other control characters.');
+ for(let i=0;i<notice.length;i++){const code=notice.charCodeAt(i);if(code>=0xd800&&code<=0xdbff){const next=notice.charCodeAt(++i);if(!(next>=0xdc00&&next<=0xdfff))throw Error('The location notice contains an invalid character.');}else if(code>=0xdc00&&code<=0xdfff)throw Error('The location notice contains an invalid character.');}
+ return notice;
+}
+function locationPolicyPayload(values,noticeSha256){
+ const notice=reviewedLocationNotice(values);if(!/^[a-f0-9]{64}$/.test(noticeSha256??''))throw Error('Review the location notice before preparing its fingerprint.');
+ const policy={version:1,revision:integer(values.locationRevision,1,Number.MAX_SAFE_INTEGER,'Location policy revision'),notice_revision:integer(values.locationNoticeRevision,1,Number.MAX_SAFE_INTEGER,'Location notice revision'),notice_text:notice,notice_sha256:noticeSha256,
+  sample_interval_ms:integer(values.locationInterval,1000,3600000,'Location sample interval (milliseconds)'),min_distance_m:decimal(values.locationDistance,0,10000,'Minimum displacement (metres)'),max_fix_age_ms:integer(values.locationFreshness,1000,300000,'Location freshness (milliseconds)'),max_accuracy_m:decimal(values.locationAccuracy,0,1000,'Maximum GPS uncertainty (metres)',true),max_capture_lease_ms:integer(values.locationLease,1000,900000,'Location capture lease (milliseconds)'),geofence:null};
+ if(values.locationCircleEnabled==='on'){
+  const fenceId=String(values.locationFenceId??'').trim();if(!stable(fenceId))throw Error('Enter the approved geofence ID.');
+  policy.geofence={type:'circle',id:fenceId,revision:integer(values.locationFenceRevision,1,Number.MAX_SAFE_INTEGER,'Geofence revision'),latitude:decimal(values.locationLatitude,-90,90,'Approved circle latitude'),longitude:decimal(values.locationLongitude,-180,180,'Approved circle longitude'),radius_m:decimal(values.locationRadius,0,100000,'Approved circle radius (metres)',true)};
+ }
+ return policy;
+}
+export async function buildReviewedPayload(action,values,now=Date.now()){
+ values={...values};
+ let digest;
+ if(action==='ops_binding.approve'&&values.locationPolicyEnabled==='on'){
+  const notice=reviewedLocationNotice(values),bytes=new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',new TextEncoder().encode(notice)));
+  digest=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
+ }
+ return buildPayload(action,values,now,digest);
+}
+export function buildPayload(action,values,now=Date.now(),locationNoticeSha256){
  const schema=actions[action];if(!schema)throw Error('Choose an action.');const p={};
  for(const f of schema.fields){const raw=String(values[f.key]??'').trim();if(!raw&&f.optional)continue;if(!raw)throw Error(`${f.label} is required.`);
   if(raw.length>(f.max??(f.type==='number'?20:10000))&&f.type!=='number')throw Error(`${f.label} is too long.`);
@@ -63,6 +89,7 @@ export function buildPayload(action,values,now=Date.now()){
    if(window>interval||age>window||!Number.isFinite(accuracy)||accuracy<=0||accuracy>1000)throw Error('The check-in window must fit the interval, evidence freshness must fit the window, and GPS accuracy must be 1–1000 metres.');
    p.checkInPolicy={revision:integer(values.policyRevision,1,2147483647,'Policy revision'),interval_ms:interval,window_ms:window,max_evidence_age_ms:age,max_accuracy_m:accuracy};
   }
+  if(values.locationPolicyEnabled==='on')p.locationPolicy=locationPolicyPayload(values,locationNoticeSha256);
  }
  if(action==='dispatch.publish'){
   const {assignmentId,guardId,vendorId,siteId,messageId,version,state,title='',body='',due}=p;
@@ -163,12 +190,28 @@ export class ReportPhotoPreview{
   finally{if(version===this.version)this.controller=null;}
  }
 }
-const reportTitles={incident:'Incident report',check_in:'Timed check-in',patrol_checkpoint:'Patrol checkpoint',shift_start:'Shift started',shift_end:'Shift ended',dispatch_ack:'Message acknowledged',photo_evidence:'Photo evidence',check_in_miss_reason:'Missed check-in explanation',check_in_delivery_missing:'Check-in delivery overdue'};
+const reportTitles={incident:'Incident report',location:'Location observation',check_in:'Timed check-in',patrol_checkpoint:'Patrol checkpoint',shift_start:'Shift started',shift_end:'Shift ended',dispatch_ack:'Message acknowledged',photo_evidence:'Photo evidence',check_in_miss_reason:'Missed check-in explanation',check_in_delivery_missing:'Check-in delivery overdue'};
 export const reportDate=value=>{const date=new Date(value);return Number.isFinite(date.getTime())?date.toLocaleString():'Unavailable';};
+const positiveSafe=value=>Number.isSafeInteger(value)&&value>0;
+const reportUuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
+const fingerprint=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+const finiteRange=(value,min,max)=>typeof value==='number'&&Number.isFinite(value)&&value>=min&&value<=max;
+export function locationReportPresentation(data={}){
+ const validation=data.server_validation,fence=validation?.geofence,states={inside:'Inside configured circle',outside:'Outside configured circle',uncertain:'Uncertain relative to configured circle',not_configured:'Geofence not configured'};
+ const sample=reportUuid(data.capture_grant_id)&&reportUuid(data.consent_id)&&positiveSafe(data.policy_revision)&&fingerprint(data.policy_sha256)&&positiveSafe(data.fix_at_ms)&&finiteRange(data.latitude,-90,90)&&finiteRange(data.longitude,-180,180)&&finiteRange(data.accuracy_m,0,1000)&&data.accuracy_m>0&&data.mock===false;
+ const geometry=fence&&Object.hasOwn(states,fence.state)&&(fence.state==='not_configured'?fence.fence_id===null&&fence.fence_revision===null&&fence.distance_m===null:stable(fence.fence_id)&&positiveSafe(fence.fence_revision)&&finiteRange(fence.distance_m,0,Number.MAX_VALUE));
+ const validated=!!(sample&&validation?.version===1&&validation.status==='validated_device_observation'&&validation.policy_revision===data.policy_revision&&validation.policy_sha256===data.policy_sha256&&validation.consent_id===data.consent_id&&fingerprint(validation.notice_sha256)&&geometry);
+ const assessment=validated?states[fence.state]:'Validation unavailable';
+ const typed=(value,predicate)=>predicate(value)?value:'Unavailable';
+ const rows=[['Server assessment',assessment],['Meaning','Device-reported observation only. This does not prove physical presence or trigger a geofence alert.'],['Fix recorded',positiveSafe(data.fix_at_ms)?reportDate(data.fix_at_ms):'Unavailable'],['Latitude',typed(data.latitude,x=>finiteRange(x,-90,90))],['Longitude',typed(data.longitude,x=>finiteRange(x,-180,180))],['GPS uncertainty',finiteRange(data.accuracy_m,0,1000)&&data.accuracy_m>0?data.accuracy_m+' metres':'Unavailable'],['Original capture grant',typed(data.capture_grant_id,reportUuid)],['Original consent ID',typed(data.consent_id,reportUuid)],['Original policy revision',typed(data.policy_revision,positiveSafe)],['Original policy fingerprint',typed(data.policy_sha256,fingerprint)],['Original notice fingerprint',validated?validation.notice_sha256:'Unavailable']];
+ if(validated&&fence.state!=='not_configured')rows.push(['Configured geofence ID',fence.fence_id],['Configured geofence revision',fence.fence_revision],['Server distance to circle centre',String(fence.distance_m)+' metres']);
+ return {summary:'Location sample · '+assessment,rows,validated};
+}
 export function reportPresentation(report){
  const observation=report?.observation??{},data=observation.data??{},title=reportTitles[observation.kind]??'Received observation',rows=[];
  let summary='Observation received.';
  switch(observation.kind){
+  case 'location':{const view=locationReportPresentation(data);summary=view.summary;rows.push(...view.rows);break;}
   case 'incident':summary=String(data.description??'');rows.push(['Description',summary]);break;
   case 'patrol_checkpoint':summary='Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'')+(data.round_id?' · Round '+String(data.round_id):'');rows.push(['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision],['Patrol round',data.round_id??'Single pass (no declared round)']);break;
   case 'check_in':summary='Slot '+String(data.slot??'')+' · GPS and local biometric recorded';rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Local biometric','Recorded on this device; individual identity comes from the signed-in guard account.'],['Biometric recorded',reportDate(data.biometric?.at)],['GPS recorded',reportDate(data.location?.at)],['Latitude',data.location?.latitude],['Longitude',data.location?.longitude],['GPS uncertainty',String(data.location?.accuracy_m??'—')+' metres'],['Evidence ID',data.evidence_id]);break;

@@ -1,9 +1,9 @@
-import {actions,catalogs,label,formatValue,buildPayload,valuesForRow,AdminClient,PendingChange,ReportPhotoPreview,reportPresentation,reportDate} from './model.mjs';
+import {actions,catalogs,label,formatValue,buildReviewedPayload,valuesForRow,AdminClient,PendingChange,ReportPhotoPreview,reportPresentation,reportDate} from './model.mjs';
 const $=id=>document.getElementById(id);
 const node=(tag,text,className)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(className)e.className=className;return e;};
-let pending=null,kind='vendors',page=0,cursors=[''],items=[],nextCursor=null,readVersion=0,loading=false,applying=false,selectedReport=null,reportVersion=0;
+let pending=null,kind='vendors',page=0,cursors=[''],items=[],nextCursor=null,readVersion=0,loading=false,applying=false,selectedReport=null,reportVersion=0,reviewVersion=0,reviewing=false;
 function notice(text,error=false){$('notice').textContent=text;$('notice').dataset.error=String(error);}
-function signedOut(){readVersion++;items=[];clearReport();if(pending?.attempted)pending.uncertain=true;$('records').replaceChildren();$('review-details').replaceChildren();$('request-id').textContent='';$('receipt-details').replaceChildren();$('receipt-title').textContent='';$('reason').value='';renderFields();$('workspace').hidden=true;$('session').hidden=true;$('sign-in').hidden=false;$('password').value='';$('email').focus();}
+function signedOut(){readVersion++;reviewVersion++;items=[];clearReport();if(pending?.attempted)pending.uncertain=true;$('records').replaceChildren();$('review-details').replaceChildren();$('request-id').textContent='';$('receipt-details').replaceChildren();$('receipt-title').textContent='';$('reason').value='';renderFields();$('workspace').hidden=true;$('session').hidden=true;$('sign-in').hidden=false;$('password').value='';$('email').focus();}
 const client=new AdminClient({onSessionLost:()=>{signedOut();notice('Your session or administrator access is unavailable. Sign in again to continue.',true);}});
 const photoPreview=new ReportPhotoPreview({client});
 function clearReport(){
@@ -29,13 +29,14 @@ function textField(field,parent,values={}){
  else{input=node('input');input.type=field.type??'text';}
  input.name=field.key;input.id='field-'+field.key;input.setAttribute('aria-label',field.label);input.required=!field.optional;input.autocomplete='off';
  if(field.max&&field.type!=='number')input.maxLength=field.max;if(field.min!==undefined)input.min=field.min;if(field.max!==undefined&&field.type==='number')input.max=field.max;if(field.pattern)input.pattern=field.pattern;
+ if(field.step!==undefined)input.step=field.step;
  if(values[field.key]!==undefined&&values[field.key]!==null)input.value=String(values[field.key]);else if(field.value!==undefined)input.value=field.value;
  wrapper.append(input);if(field.hint)wrapper.append(node('small',field.hint));parent.append(wrapper);return input;
 }
 function optionalGroup(parent,key,title,fields,values,enabled){
  const group=node('fieldset',undefined,'optional-group'),legend=node('legend',title),toggleLabel=node('label','Include '+title.toLowerCase(),'checkbox-label'),toggle=node('input');toggle.type='checkbox';toggle.name=key;toggle.checked=enabled;toggleLabel.prepend(toggle);group.append(legend,toggleLabel);
  const content=node('div');for(const field of fields)textField(field,content,values);group.append(content);parent.append(group);
- const sync=()=>{content.hidden=!toggle.checked;for(const input of content.querySelectorAll('input,textarea,select'))input.disabled=!toggle.checked;};toggle.addEventListener('change',sync);sync();
+ const sync=()=>{const enabled=toggle.checked&&!toggle.disabled;content.hidden=!enabled;for(const input of content.querySelectorAll('input,textarea,select'))input.disabled=!enabled;};toggle.addEventListener('change',sync);sync();return {content,toggle,sync};
 }
 function renderFields(values={}){
  const schema=actions[$('action').value],escalation=$('action').value==='escalation.acknowledge';$('action-help').textContent=schema.help;$('reason-label').textContent=escalation?'Response shown to guard':'Reason for change';$('reason').placeholder=escalation?'Confirm you received this request and describe the next step.':'Why is this change approved?';$('fields').replaceChildren();
@@ -50,9 +51,31 @@ function renderFields(values={}){
   {key:'window',label:'Response window (seconds)',type:'number',min:1,max:86400,value:120},{key:'evidenceAge',label:'Evidence freshness (seconds)',type:'number',min:1,max:300,value:30},
   {key:'accuracy',label:'Maximum GPS uncertainty (metres)',type:'number',min:1,max:1000,value:50}
  ],{policyRevision:p.revision,interval:p.interval_ms?p.interval_ms/60000:undefined,window:p.window_ms?p.window_ms/1000:undefined,evidenceAge:p.max_evidence_age_ms?p.max_evidence_age_ms/1000:undefined,accuracy:p.max_accuracy_m},!!values.checkInPolicy);}
+ if(schema.locationPolicy){const p=values.locationPolicy??{},f=p.geofence??{},location=optionalGroup($('fields'),'locationPolicyEnabled','Authorized location policy',[
+  {key:'locationRevision',label:'Location policy revision',type:'number',min:1,max:Number.MAX_SAFE_INTEGER},
+  {key:'locationNoticeRevision',label:'Location notice revision',type:'number',min:1,max:Number.MAX_SAFE_INTEGER},
+  {key:'locationNotice',label:'Full reviewed location notice',type:'textarea',max:2000,hint:'Use the complete approved notice shown to the individual guard. Review computes its exact UTF-8 SHA-256 fingerprint; it does not write or infer consent.'},
+  {key:'locationInterval',label:'Sample interval (milliseconds)',type:'number',min:1000,max:3600000},
+  {key:'locationDistance',label:'Minimum displacement (metres)',type:'number',min:0,max:10000,step:'any'},
+  {key:'locationFreshness',label:'Maximum fix age (milliseconds)',type:'number',min:1000,max:300000},
+  {key:'locationAccuracy',label:'Maximum GPS uncertainty (metres)',type:'number',min:0,max:1000,step:'any'},
+  {key:'locationLease',label:'Maximum capture lease (milliseconds)',type:'number',min:1000,max:900000}
+ ],{locationRevision:p.revision,locationNoticeRevision:p.notice_revision,locationNotice:p.notice_text,locationInterval:p.sample_interval_ms,locationDistance:p.min_distance_m,locationFreshness:p.max_fix_age_ms,locationAccuracy:p.max_accuracy_m,locationLease:p.max_capture_lease_ms},!!values.locationPolicy);
+  location.content.prepend(node('p','No operational values or notice are selected for you. Approval does not start collection: the signed-in guard must separately review and consent, and the phone must have a current authorized shift and capture lease.','muted'));
+  const circle=optionalGroup(location.content,'locationCircleEnabled','Approved circle geofence',[
+   {key:'locationFenceId',label:'Geofence ID',type:'text',max:200,pattern:'[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}'},
+   {key:'locationFenceRevision',label:'Geofence revision',type:'number',min:1,max:Number.MAX_SAFE_INTEGER},
+   {key:'locationLatitude',label:'Approved circle latitude',type:'number',min:-90,max:90,step:'any'},
+   {key:'locationLongitude',label:'Approved circle longitude',type:'number',min:-180,max:180,step:'any'},
+   {key:'locationRadius',label:'Approved circle radius (metres)',type:'number',min:0,max:100000,step:'any'}
+  ],{locationFenceId:f.id,locationFenceRevision:f.revision,locationLatitude:f.latitude,locationLongitude:f.longitude,locationRadius:f.radius_m},!!p.geofence);
+  circle.content.prepend(node('p','Leave this circle disabled unless its geometry was explicitly approved. The server labels each uncertain device observation; no geofence alert is triggered.','muted'));
+  const sync=()=>{location.sync();circle.sync();};location.toggle.addEventListener('change',sync);sync();
+ }
 }
 function startChange(action=$('action').value,values={}){
  if(pending){notice('Finish or confirm the current change before preparing another.',true);return;}
+ reviewVersion++;
  $('action').value=action;renderFields(values);$('reason').value='';$('change-form').hidden=false;$('review').hidden=true;$('receipt').hidden=true;$('change-title').textContent='Prepare a change';$('new-change').disabled=false;
 }
 function details(parent,value){parent.replaceChildren();for(const [key,item]of Object.entries(value)){parent.append(node('dt',label(key)),node('dd',formatValue(key,item)));}}
@@ -87,7 +110,7 @@ async function loadPage(reset=false){
 }
 for(const [key,config]of Object.entries(catalogs)){const button=node('button',config.label);button.type='button';button.dataset.kind=key;button.setAttribute('aria-current',key===kind?'page':'false');button.addEventListener('click',()=>{kind=key;$('filter').value='';for(const b of $('catalog-nav').children)b.setAttribute('aria-current',b===button?'page':'false');loadPage(true);});$('catalog-nav').append(button);}
 for(const [key,schema]of Object.entries(actions)){const option=node('option',schema.label);option.value=key;$('action').append(option);}renderFields();
-$('action').addEventListener('change',()=>renderFields());$('filter').addEventListener('input',()=>{clearReport();syncPanels();renderTable();});$('refresh').addEventListener('click',()=>loadPage());$('close-report').addEventListener('click',()=>{clearReport();syncPanels();renderTable();});$('load-photo').addEventListener('click',loadPhoto);
+$('action').addEventListener('change',()=>{reviewVersion++;renderFields();});$('filter').addEventListener('input',()=>{clearReport();syncPanels();renderTable();});$('refresh').addEventListener('click',()=>loadPage());$('close-report').addEventListener('click',()=>{clearReport();syncPanels();renderTable();});$('load-photo').addEventListener('click',loadPhoto);
 $('report-image').addEventListener('error',()=>{if(!selectedReport||!$('report-image').hasAttribute('src'))return;photoPreview.clear();$('report-image').removeAttribute('src');$('report-image').hidden=true;$('load-photo').hidden=false;$('load-photo').disabled=false;$('photo-status').textContent='This photo could not be displayed. Reload it or ask the owner to review the saved evidence.';});
 $('next').addEventListener('click',()=>{if(loading||!nextCursor)return;cursors[++page]=nextCursor;$('filter').value='';loadPage();});$('previous').addEventListener('click',()=>{if(loading||page===0)return;page--;$('filter').value='';loadPage();});
 $('login-form').addEventListener('submit',async event=>{
@@ -104,9 +127,10 @@ $('sign-out').addEventListener('click',async()=>{
  const result=await confirmation;if(generation!==client.generation||result===null||client.session)return;
  notice((result==='signed_out'?'Signed out on this Mac and server sign-out confirmed.':result==='session_unavailable'?'Signed out on this Mac. The server session is already unavailable.':'Signed out on this Mac. Server sign-out could not be confirmed; the server session may remain valid until it expires.')+pendingHelp,result==='unconfirmed');
 });
-$('change-form').addEventListener('submit',event=>{
- event.preventDefault();if(!client.session||pending)return;
- try{const values=Object.fromEntries(new FormData($('change-form'))),action=$('action').value,payload=buildPayload(action,values);pending=new PendingChange({owner:client.session.subject,action,reason:$('reason').value,payload,requestId:crypto.randomUUID()});showReview();renderTable();notice('Review the change before applying.');}catch(error){notice(error.message,true);}
+$('change-form').addEventListener('submit',async event=>{
+ event.preventDefault();if(!client.session||pending||reviewing)return;
+ const owner=client.session.subject,generation=client.generation,version=reviewVersion,values=Object.fromEntries(new FormData($('change-form'))),action=$('action').value,reason=$('reason').value;reviewing=true;$('review-change').disabled=true;
+ try{const payload=await buildReviewedPayload(action,values);if(version!==reviewVersion||generation!==client.generation||client.session?.subject!==owner||pending)return;pending=new PendingChange({owner,action,reason,payload,requestId:crypto.randomUUID()});showReview();renderTable();notice('Review the change before applying.');}catch(error){if(version===reviewVersion&&generation===client.generation)notice(error.message,true);}finally{reviewing=false;$('review-change').disabled=false;}
 });
 $('edit-change').addEventListener('click',()=>{if(applying||pending?.uncertain)return;pending=null;$('review').hidden=true;$('change-form').hidden=false;$('new-change').disabled=false;$('change-title').textContent='Prepare a change';renderTable();$('reason').focus();});
 async function submitChange(resolve=false){

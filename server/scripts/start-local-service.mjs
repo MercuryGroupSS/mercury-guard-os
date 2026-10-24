@@ -5,6 +5,7 @@ import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {DispatchFeed} from '../dispatch-feed.mjs';
 import {PostgresAdministration} from '../postgres-administration.mjs';
 import {PostgresEscalations} from '../postgres-escalations.mjs';
+import {PostgresLocationConsents} from '../postgres-location-consents.mjs';
 import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
 import {PostgresDashboardBindings,PostgresDashboardOutbox} from '../postgres-dashboard-delivery.mjs';
 import {DashboardOutbox} from '../dashboard-delivery.mjs';
@@ -35,9 +36,10 @@ try{assignmentStore=await openLocalAssignmentStore({mode:identityMode,directory,
 const {devices}=assignmentStore;
 let opsRefresh;
 try{opsRefresh=openLocalOpsRefresh({mode:process.env.MERCURY_OPS_REFRESH??'off',config,source:process.env.MERCURY_OPS_REFRESH==='remote'?{url:process.env.MERCURY_OPS_URL,serverKey:process.env.MERCURY_OPS_SERVER_KEY}:undefined,bindingsPath:new URL('ops-bindings.sqlite',dir).pathname,sync:assignmentStore.sync,directory});}catch(error){await assignmentStore.close();await directory.close();throw error;}
-const store=identityMode==='postgres'?new PostgresDurableIngest(devices):new DurableIngest(new URL('events.sqlite',dir).pathname);
+const locationConsents=identityMode==='postgres'?new PostgresLocationConsents({devices}):null;
+const store=identityMode==='postgres'?new PostgresDurableIngest(devices,{locationConsents}):new DurableIngest(new URL('events.sqlite',dir).pathname);
 const GrantIssuer=identityMode==='postgres'?PostgresShiftGrantIssuer:ShiftGrantIssuer;
-const grantIssuer=new GrantIssuer({devices,path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
+const grantIssuer=new GrantIssuer({devices,locationConsents,path:new URL('grants.sqlite',dir).pathname,privateKey:localIssuerKey(new URL('issuer-private.pem',dir)),keyId:'local-v1',issuer:'mercury-local',audience:'mercury-local'});
 const dashboardOutbox=identityMode==='postgres'?new PostgresDashboardOutbox(devices):new DashboardOutbox(new URL('dashboard-outbox.sqlite',dir).pathname);
 const dashboardBindings=identityMode==='postgres'?new PostgresDashboardBindings(devices):new DashboardBindings(new URL('dashboard-bindings.sqlite',dir).pathname);
 const dispatch=identityMode==='postgres'?new PostgresDispatchFeed(devices):new DispatchFeed(new URL('dispatch.sqlite',dir).pathname);
@@ -47,7 +49,7 @@ const dashboardMedia=identityMode==='postgres'?new PostgresDashboardMedia(device
 async function sendMedia(job){const p=JSON.parse(job.body),mapping=await dashboardBindings.get({assignmentId:p.assignment_id,guardId:p.guard_id,vendorId:p.vendor_id,siteId:p.site_id});if(!mapping?.active||mapping.revision!==p.mapping_revision||mapping.destination!==p.destination||mapping.dashboardShiftId!==p.dashboard_shift_id)throw Error('Original photo destination no longer approved');return dashboardSend.media(job);}
 const admin=identityMode==='postgres'?new PostgresAdministration({devices,loadAuthAccount:createAdminAuthAccountReader({url:config.API_URL,serverKey:config.SERVICE_ROLE_KEY,allowLocal:true})}):null;
 const escalations=identityMode==='postgres'?new PostgresEscalations({devices}):null;
-const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin,escalations});
+const service=createLocalService({config,store,directory,devices,grantIssuer,dispatch,shiftLifecycle,admin,escalations,locationConsents});
 try {console.log('Local synthetic-data ingestion service ('+identityMode+' identity/assignments): '+await service.start());await opsRefresh.start();console.log('Ops refresh: '+JSON.stringify(opsRefresh.status()));}
 catch(error){await opsRefresh.close();shiftLifecycle.close();dispatch.close();dashboardOutbox.close();dashboardBindings.close();store.close();await assignmentStore.close();await directory.close();grantIssuer.close();throw error;}
 let bridgeRun=null;
