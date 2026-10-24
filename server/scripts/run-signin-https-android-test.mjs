@@ -95,10 +95,21 @@ async function startFixture(){
 }
 async function instrument(){
  let ended=false,output,executionError,pollError;const running=execute(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','signinIntegration','true','-e','class','ca.mercury.guard.HttpsSignInIntegrationTest','ca.mercury.guard.httpstest.test/androidx.test.runner.AndroidJUnitRunner'],{cwd:root,env:process.env,encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024,signal:abort.signal});const task=running.then(value=>{output=value.stdout;},()=>{executionError=true;}).finally(()=>{ended=true;});
- const handled=new Set(),allowed=new Map([['unknown_finger','32'],['valid_finger_a','31'],['valid_finger_b','31']]);
+ const handled=new Set(),expectedSteps=['unknown_finger','valid_finger_a','reopen_launcher','valid_finger_b'],fingers=new Map([['unknown_finger','32'],['valid_finger_a','31'],['valid_finger_b','31']]);
  try{while(!ended){
    let step;try{step=(await device(['shell','run-as','ca.mercury.guard.httpstest','cat','files/signin-test-step'],'sensor_step',{timeout:5000})).trim();}catch{}
-   if(step&&!handled.has(step)){if(!allowed.has(step))throw new GateError('unexpected_sensor_request');await device(['emu','finger','touch',allowed.get(step)],'framework_finger_touch');await pause(150);await device(['emu','finger','remove'],'framework_finger_remove');await device(['shell','run-as','ca.mercury.guard.httpstest','touch','files/signin-test-ack-'+step],'sensor_ack');handled.add(step);}
+   if(step&&!handled.has(step)){
+    if(step!==expectedSteps[handled.size])throw new GateError('unexpected_host_request');
+    if(step==='reopen_launcher'){
+     // The APK and PackageManager-verified real launcher only. This models a
+     // user reopening the app; it never starts the private account Activity,
+     // clears state, injects a session or substitutes for the next biometric.
+     await device(['shell','am','start','-W','-a','android.intent.action.MAIN','-c','android.intent.category.LAUNCHER','-n','ca.mercury.guard.httpstest/ca.mercury.guard.LauncherActivity'],'actual_launcher_reopen');
+    }else{
+     await device(['emu','finger','touch',fingers.get(step)],'framework_finger_touch');await pause(150);await device(['emu','finger','remove'],'framework_finger_remove');
+    }
+    await device(['shell','run-as','ca.mercury.guard.httpstest','touch','files/signin-test-ack-'+step],'sensor_ack');handled.add(step);
+   }
    await pause(100);
   }}catch(error){pollError=error;}
  finally{
@@ -112,7 +123,7 @@ async function instrument(){
   const stage=/failed at bounded stage: ([a-z_]+)/.exec(output??'')?.[1],type=/failure_type=([A-Za-z]+)/.exec(output??'')?.[1];if(stage)result.failed_stage=stage;if(type)result.failure_type=type;throw new GateError('actual_signin_instrumentation_failed');
  }
  const marker=output.split('\n').find(line=>line.includes('SIGNIN_ACCEPTANCE actual_launcher=true actual_platform_strong_biometric=true'));
- if(!marker||handled.size!==3)throw new GateError('actual_signin_evidence_missing');result.actual_framework_biometric='verified_emulator';result.individual_accounts=2;result.tests_passed=1;privateLog('instrumentation-summary.json',JSON.stringify({status:'passed',tests:1,sensor_steps:[...handled],raw_ui_output_retained:false})+'\n');
+ if(!marker||JSON.stringify([...handled])!==JSON.stringify(expectedSteps))throw new GateError('actual_signin_evidence_missing');result.actual_framework_biometric='verified_emulator';result.individual_accounts=2;result.tests_passed=1;privateLog('instrumentation-summary.json',JSON.stringify({status:'passed',tests:1,host_steps:[...handled],raw_ui_output_retained:false})+'\n');
 }
 async function cleanup(){
  if(approvedEmulator&&fixture)try{await device(['shell','am','force-stop','ca.mercury.guard.httpstest'],'test_package_stop',{cleanup:true});}catch{cleanupOkay=false;unconfirmedShutdown=true;failed??='test_package_stop_unconfirmed';}
@@ -139,7 +150,7 @@ try{
  phase='actual_settings_enrollment';await enroll();
  phase='real_auth_fixture';await startFixture();
  phase='debug_only_build';const build=['--no-daemon',...(process.env.MERCURY_GRADLE_INIT_SCRIPT?['-I',process.env.MERCURY_GRADLE_INIT_SCRIPT]:[]),...(process.env.MERCURY_LOCAL_DEBUG_KEYSTORE?['-PlocalDebugKeystore='+process.env.MERCURY_LOCAL_DEBUG_KEYSTORE]:[]),'-Pkotlin.compiler.execution.strategy=in-process','-PhttpsTest=true',':app:assembleDebug',':app:assembleDebugAndroidTest'];await command(gradle,build,'https_test_build',{timeout:600000,log:true});
- const app=resolve(apkRoot,'debug/app-debug.apk'),test=resolve(apkRoot,'androidTest/debug/app-debug-androidTest.apk');for(const [path,pkg] of [[app,'ca.mercury.guard.httpstest'],[test,'ca.mercury.guard.httpstest.test']]){const badging=await command(aapt,['dump','badging',path],'owned_apk_identity');if(!badging.startsWith(`package: name='${pkg}' `))throw new GateError('unexpected_built_apk_package');}
+ const app=resolve(apkRoot,'debug/app-debug.apk'),test=resolve(apkRoot,'androidTest/debug/app-debug-androidTest.apk');for(const [path,pkg] of [[app,'ca.mercury.guard.httpstest'],[test,'ca.mercury.guard.httpstest.test']]){const badging=await command(aapt,['dump','badging',path],'owned_apk_identity');if(!badging.startsWith(`package: name='${pkg}' `))throw new GateError('unexpected_built_apk_package');if(pkg==='ca.mercury.guard.httpstest'&&!badging.split(/\r?\n/).some(line=>line.startsWith("launchable-activity: name='ca.mercury.guard.LauncherActivity' ")))throw new GateError('unexpected_built_apk_launcher');}
  const reverses=await device(['reverse','--list'],'reverse_inventory'),existing=reverses.split('\n').map(l=>l.trim().split(/\s+/)).filter(p=>p.at(-2)==='tcp:55450');if(existing.length&&existing.some(p=>p.at(-1)!=='tcp:55450'))throw new GateError('conflicting_reverse_mapping');if(!existing.length){await device(['reverse','tcp:55450','tcp:55450'],'reverse_create');createdReverse=true;}
  await device(['install','-r','-t',app],'owned_test_install',{timeout:90000});await device(['install','-r','-t',test],'owned_runner_install',{timeout:90000});await device(['shell','pm','clear','ca.mercury.guard.httpstest'],'fresh_owned_test_install');
  phase='actual_visible_signin';console.log('Testing actual framework biometric and two individual guard sign-ins on the owned API35 emulator; raw credential UI output is withheld.');await instrument();result.status='passed';

@@ -174,7 +174,7 @@ jobs:
           if-no-files-found: warn
 
   signin-https-integration:
-    needs: build
+    # This isolated job builds its own fixture APK; start it alongside the ordinary build.
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:

@@ -41,11 +41,11 @@ class HttpsSignInIntegrationTest {
   for(i in 0..8){val g=geometry(label)?:error("Action layout disappeared");if(g.visible){onView(withText(label)).perform(click());return};check(i<8){"Action remained outside the visible viewport"};onView(isAssignableFrom(android.widget.ScrollView::class.java)).perform(if(g.y<g.windowTop)swipeDown()else swipeUp());instrumentation.waitForIdleSync()}
  }
  private fun systemPrompt():Boolean=instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText("Unlock guard sign-in")?.any{it.packageName?.toString()=="com.android.systemui"}==true
- private fun finger(step:String){
+ private fun hostAction(step:String){
   val request=File(context.filesDir,"signin-test-step");val ack=File(context.filesDir,"signin-test-ack-$step");ack.delete();request.writeText(step)
   waitFor("Host sensor input was not acknowledged",15000){ack.exists()};request.delete();ack.delete()
  }
- private fun unlock(step:String){click("Verify with biometrics");waitFor("Real system biometric prompt did not appear"){systemPrompt()};assertFalse("Credentials exposed before biometric",hasCredentials());finger(step);waitFor("Actual biometric success did not reveal credential form"){hasText("YOUR GUARD ACCOUNT")};assertTrue(hasCredentials())}
+ private fun unlock(step:String){click("Verify with biometrics");waitFor("Real system biometric prompt did not appear"){systemPrompt()};assertFalse("Credentials exposed before biometric",hasCredentials());hostAction(step);waitFor("Actual biometric success did not reveal credential form"){hasText("YOUR GUARD ACCOUNT")};assertTrue(hasCredentials())}
  private fun fixture(metadata:JSONObject,path:String,body:JSONObject?=null):JSONObject{
   val c=URL("https://localhost:55450$path").openConnection() as HttpsURLConnection
   try{c.connectTimeout=10000;c.readTimeout=15000;c.instanceFollowRedirects=false;c.setRequestProperty("X-Mercury-Test-Nonce",metadata.getString("test_nonce"));if(body!=null){c.requestMethod="POST";c.doOutput=true;c.setRequestProperty("Content-Type","application/json");c.outputStream.use{it.write(body.toString().toByteArray(Charsets.UTF_8))}};check(c.responseCode==200){"Synthetic fixture operation rejected"};return JSONObject(c.inputStream.bufferedReader().use{it.readText()})}finally{c.disconnect()}
@@ -71,14 +71,16 @@ class HttpsSignInIntegrationTest {
    stage="biometric_cancel_control"
    val cancel=instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText("Cancel")?.firstOrNull{it.packageName?.toString()=="com.android.systemui"&&it.isClickable}?:error("System cancel control absent")
    check(cancel.performAction(AccessibilityNodeInfo.ACTION_CLICK));stage="biometric_cancel_result";waitFor("Cancel did not dismiss platform gate"){!systemPrompt()};assertFalse("Cancel revealed credentials",hasCredentials());assertTrue(hasText("GUARD SIGN-IN"))
-   stage="unknown_fingerprint";click("Verify with biometrics");waitFor("Platform biometric retry absent"){systemPrompt()};finger("unknown_finger");SystemClock.sleep(400);assertTrue("Unknown finger dismissed the gate",systemPrompt());assertFalse("Unknown finger revealed credentials",hasCredentials())
-   stage="strong_fingerprint_a";finger("valid_finger_a");waitFor("Enrolled fingerprint did not unlock form"){hasText("YOUR GUARD ACCOUNT")};assertTrue(hasCredentials())
+   stage="unknown_fingerprint";click("Verify with biometrics");waitFor("Platform biometric retry absent"){systemPrompt()};hostAction("unknown_finger");SystemClock.sleep(400);assertTrue("Unknown finger dismissed the gate",systemPrompt());assertFalse("Unknown finger revealed credentials",hasCredentials())
+   stage="strong_fingerprint_a";hostAction("valid_finger_a");waitFor("Enrolled fingerprint did not unlock form"){hasText("YOUR GUARD ACCOUNT")};assertTrue(hasCredentials())
    stage="company_vendor_denied";login(metadata.getString("vendor_id"),metadata.getString("password"));waitFor("Actual company vendor login did not fail"){hasText("Sign-in failed or is temporarily unavailable.",true)};assertNull(UploadAuthorityStore(context).load(config,public.thumbprint));assertEquals(1,fixture(metadata,"/test/stats").getInt("vendor_login_denied"))
    stage="guard_a_login";login(a.getString("guard_id"),metadata.getString("password"));waitFor("Guard A assignments were not verified"){hasText("Guard: "+a.getString("guard_id"),true)}
    assertTrue(hasText(metadata.getString("site_id")+" · "+a.getString("assignment_id")));assertFalse(hasText(metadata.getString("site_id")+" · "+b.getString("assignment_id")))
    val authorityA=UploadAuthorityStore(context).load(config,public.thumbprint)?:error("Guard A verified authority absent");assertEquals(a.getString("guard_id"),authorityA.guardId);assertEquals(metadata.getString("vendor_id"),authorityA.vendorId)
    stage="background_exit";instrumentation.uiAutomation.executeShellCommand("input keyevent KEYCODE_HOME").use{fd->java.io.FileInputStream(fd.fileDescriptor).use{it.readBytes()}};waitFor("Account did not leave foreground"){activity()==null}
-   stage="background_return_launcher";launch();waitFor("Background return did not relock account"){hasText("GUARD SIGN-IN")}
+   // A launcher tap is a user foreground action. Do not ask the background
+   // target context to launch itself, which API35 may correctly restrict.
+   stage="background_return_launcher";hostAction("reopen_launcher");waitFor("Real user launcher did not reach account flow"){activity() is GuardAccountActivity};waitFor("Background return did not relock account"){hasText("GUARD SIGN-IN")}
    stage="background_field_lock";assertFalse("Background exposed credentials",hasCredentials());assertFalse(hasText("YOUR ASSIGNMENTS"))
    stage="guard_switch_biometric";unlock("valid_finger_b");waitFor("Switch retained prior upload authority"){UploadAuthorityStore(context).load(config,public.thumbprint)==null}
    stage="guard_b_login";login(b.getString("guard_id"),metadata.getString("password"));waitFor("Guard B assignments were not verified"){hasText("Guard: "+b.getString("guard_id"),true)}
