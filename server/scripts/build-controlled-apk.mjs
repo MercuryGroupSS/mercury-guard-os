@@ -2,7 +2,7 @@
 import {execFile} from 'node:child_process';import {promisify} from 'node:util';
 import {mkdtempSync,mkdirSync,writeFileSync,readFileSync,existsSync,lstatSync,chmodSync,symlinkSync,copyFileSync,rmSync,constants} from 'node:fs';
 import {tmpdir} from 'node:os';import {join,resolve} from 'node:path';import {fileURLToPath} from 'node:url';import {createHash,randomUUID} from 'node:crypto';
-import {loadControlledBuildInput,parseApkIdentity,assertPreviousApkCompatible} from '../controlled-apk-input.mjs';
+import {loadControlledBuildInput,parseApkIdentity,assertPreviousApkCompatible,assertControlledBuildOutputIsolation} from '../controlled-apk-input.mjs';
 
 process.umask(0o077);
 const execute=promisify(execFile),digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -32,6 +32,7 @@ const scriptPath=fileURLToPath(import.meta.url),helperPath=fileURLToPath(new URL
 const tooling={builder_sha256:digest(readFileSync(scriptPath)),input_validator_sha256:digest(readFileSync(helperPath)),gradle_init_sha256:digest(Buffer.from(init)),gradle:'8.10.2',build_tools:'35.0.0'};
 try{
  if(process.argv.length!==3)fail();const inputFile=resolve(process.argv[2]),{input,publicBytes}=loadControlledBuildInput(inputFile);
+ assertControlledBuildOutputIsolation(input.source_directory,input.output_directory);
  if(!lstatSync(input.source_directory).isDirectory()||existsSync(input.output_directory))fail();
  temporary=mkdtempSync(join(tmpdir(),'mercury-controlled-build-'));chmodSync(temporary,0o700);
  const logDir=join(temporary,'logs');mkdirSync(logDir,{mode:0o700});privateLog=logDir;

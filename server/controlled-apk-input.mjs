@@ -1,5 +1,5 @@
-import {openSync,closeSync,fstatSync,readFileSync,constants} from 'node:fs';
-import {isAbsolute,resolve,relative,sep} from 'node:path';
+import {openSync,closeSync,fstatSync,readFileSync,realpathSync,constants} from 'node:fs';
+import {isAbsolute,resolve,relative,sep,dirname,basename} from 'node:path';
 import {createPublicKey} from 'node:crypto';
 import {strictJson} from './verify-batch.mjs';
 const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).sort().join()===keys.slice().sort().join();
@@ -39,6 +39,13 @@ export function validateControlledBuildInput(value){
   const t=value.tools;if(!exact(t,['gradle','java_home','android_sdk','gradle_cache_directory'])||!['gradle','java_home','android_sdk'].every(k=>path(t[k]))||!(t.gradle_cache_directory===null||path(t.gradle_cache_directory)))throw Error();
   return structuredClone(value);
  }catch{throw Error('Exact reviewed controlled build input required');}
+}
+export function assertControlledBuildOutputIsolation(source,output){
+ try{
+  const actualSource=realpathSync(source),actualOutput=resolve(realpathSync(dirname(output)),basename(output));
+  const inside=relative(actualSource,actualOutput);
+  if(inside===''||(!(inside==='..'||inside.startsWith('..'+sep))&&!isAbsolute(inside)))throw Error();
+ }catch{throw Error('Existing resolved output parent outside source required');}
 }
 export function loadControlledBuildInput(filename){
  try{const input=validateControlledBuildInput(strictJson(readPrivateBuildFile(filename).toString('utf8'))),bytes=readPrivateBuildFile(input.public_config_path,16384);
