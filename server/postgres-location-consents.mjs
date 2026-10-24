@@ -11,6 +11,14 @@ export class PostgresLocationConsents{
  constructor({devices,audience='mercury-local',now=Date.now}){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function'||typeof now!=='function'||typeof audience!=='string'||!/^[A-Za-z0-9._:/-]{1,128}$/.test(audience))throw Error('Transactional location consent dependencies required');this.devices=devices;this.pool=devices.pool;this.now=now;this.audience=audience;}
  async requireSession(client,session){if(session?.active!==true||!locationUuid(session.subject)||!locationUuid(session.sessionId)||!Number.isSafeInteger(session.expiresAt)||session.expiresAt*1000<=this.now()||!await createPostgresAuthSessionReader(client)(session.subject,session.sessionId))throw new LocationAuthError('Current exact session required');}
  async consentLock(client,id,shared=false){await client.query(`SELECT pg_advisory_xact_lock${shared?'_shared':''}($1::bigint)`,[lock('mercury-location-consent:'+id)]);}
+ async scopeLock(client,row,shared=false){const scope=[row.subject,row.assignment_id,row.device_id,row.device_thumbprint,Number(row.revocation_version),row.policy_sha256];await client.query(`SELECT pg_advisory_xact_lock${shared?'_shared':''}($1::bigint)`,[lock('mercury-location-scope:'+JSON.stringify(scope))]);}
+ async withdrawalBarrier(client,row){
+  // Existing rows without a server ordinal remain historical evidence. Their
+  // past commit order is unknown, so a fresh explicit consent is required.
+  if(row.ordinal===null||row.ordinal===undefined)return true;
+  return (await client.query(`SELECT 1 FROM mercury_guard.location_consents c JOIN mercury_guard.location_consent_withdrawals w USING(consent_id)
+   WHERE c.subject=$1 AND c.assignment_id=$2 AND c.device_id=$3 AND c.device_thumbprint=$4 AND c.revocation_version=$5 AND c.policy_sha256=$6 AND c.ordinal>=$7 LIMIT 1`,[row.subject,row.assignment_id,row.device_id,row.device_thumbprint,row.revocation_version,row.policy_sha256,row.ordinal])).rowCount>0;
+ }
  async challenge(session,value){
   try{locationExact(value,['device_id','consent_id']);if(!locationStable(value.device_id)||value.consent_id!==null&&!locationUuid(value.consent_id))throw Error();}catch{throw new LocationInputError('Exact location challenge required');}
   return this.devices.transaction(async client=>{
@@ -45,7 +53,7 @@ export class PostgresLocationConsents{
   const hint=(await client.query('SELECT * FROM mercury_guard.location_consents WHERE consent_id=$1',[i.consent_id])).rows[0],d=await this.proof(client,session,i.action,prepared.hash,proof,i.action==='withdraw'?hint:null);
   // Every operation takes its proof/nonce lock before consent locks. Reversing
   // this order lets a concurrent status and withdrawal deadlock.
-  await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[lock('mercury-location-request:'+i.request_id)]);await this.consentLock(client,i.consent_id);
+  await client.query('SELECT pg_advisory_xact_lock($1::bigint)',[lock('mercury-location-request:'+i.request_id)]);await this.scopeLock(client,i.action==='withdraw'?hint:{subject:session.subject,...i});await this.consentLock(client,i.consent_id);
   const old=(await client.query('SELECT * FROM mercury_guard.location_consents WHERE consent_id=$1',[i.consent_id])).rows[0];
   let current;
   if(i.action==='consent'){current=await this.current(client,session,i.assignment_id,d);if(!current||!intentMatches(current,i))throw new LocationDeniedError('Approved current shift policy required');}
@@ -59,20 +67,23 @@ export class PostgresLocationConsents{
   const receipt={version:1,request_id:i.request_id,consent_id:i.consent_id,action:i.action,status:i.action==='consent'?'consent_recorded':'consent_withdrawn',recorded_at_ms:recordedAt,intent_sha256:prepared.hash};await client.query('INSERT INTO mercury_guard.location_consent_requests VALUES($1,$2,$3,$4,$5)',[i.request_id,session.subject,i.consent_id,prepared.hash,receipt]);await this.requireSession(client,session);return receipt;
  });}
  async status(session,id,proof){if(!locationUuid(id))throw new LocationInputError('Exact consent UUID required');return this.devices.transaction(async client=>{
-  await this.requireSession(client,session);const d=await this.proof(client,session,'status',locationDigest(JSON.stringify({consent_id:id})),proof);await this.consentLock(client,id,true);
+  await this.requireSession(client,session);const d=await this.proof(client,session,'status',locationDigest(JSON.stringify({consent_id:id})),proof);
   const row=(await client.query('SELECT * FROM mercury_guard.location_consents WHERE consent_id=$1 AND subject=$2 AND device_id=$3 AND device_thumbprint=$4 AND revocation_version=$5',[id,session.subject,d.device_id,d.thumbprint,d.revocation_version])).rows[0];if(!row)return null;
-  const w=(await client.query('SELECT withdrawn_at_ms FROM mercury_guard.location_consent_withdrawals WHERE consent_id=$1',[id])).rows[0],current=await this.current(client,session,row.assignment_id,d),active=!!current&&current.policy_sha256===row.policy_sha256;
+  await this.scopeLock(client,row,true);await this.consentLock(client,id,true);
+  const w=(await client.query('SELECT withdrawn_at_ms FROM mercury_guard.location_consent_withdrawals WHERE consent_id=$1',[id])).rows[0],current=await this.current(client,session,row.assignment_id,d),active=!!current&&current.policy_sha256===row.policy_sha256&&!await this.withdrawalBarrier(client,row);
   await this.requireSession(client,session);return {version:1,consent_id:id,state:w?'withdrawn':active?'active':'unavailable',recorded_at_ms:Number(row.recorded_at_ms),withdrawn_at_ms:w?Number(w.withdrawn_at_ms):null,policy_sha256:row.policy_sha256,scope:scopeOf(row)};
  });}
  async forGrant(client,context){const {session,assignment,device}=context;if(!assignment.locationPolicy||!session?.sessionId)return null;await this.requireSession(client,session);const snapshot=locationPolicySnapshot(assignment.locationPolicy);
-  const row=(await client.query(`SELECT c.* FROM mercury_guard.location_consents c WHERE subject=$1 AND assignment_id=$2 AND device_id=$3 AND device_thumbprint=$4 AND revocation_version=$5 AND policy_sha256=$6 AND NOT EXISTS(SELECT 1 FROM mercury_guard.location_consent_withdrawals w WHERE w.consent_id=c.consent_id) ORDER BY recorded_at_ms DESC,consent_id DESC LIMIT 1`,[session.subject,assignment.assignmentId,device.deviceId,device.thumbprint,device.revocationVersion,snapshot.policy_sha256])).rows[0];if(!row)return null;
-  await this.consentLock(client,row.consent_id,true);if((await client.query('SELECT 1 FROM mercury_guard.location_consent_withdrawals WHERE consent_id=$1',[row.consent_id])).rowCount)return null;
+  await this.scopeLock(client,{subject:session.subject,assignment_id:assignment.assignmentId,device_id:device.deviceId,device_thumbprint:device.thumbprint,revocation_version:device.revocationVersion,policy_sha256:snapshot.policy_sha256},true);
+  const row=(await client.query(`SELECT c.* FROM mercury_guard.location_consents c WHERE subject=$1 AND assignment_id=$2 AND device_id=$3 AND device_thumbprint=$4 AND revocation_version=$5 AND policy_sha256=$6 AND ordinal IS NOT NULL ORDER BY ordinal DESC LIMIT 1`,[session.subject,assignment.assignmentId,device.deviceId,device.thumbprint,device.revocationVersion,snapshot.policy_sha256])).rows[0];if(!row)return null;
+  await this.consentLock(client,row.consent_id,true);if(await this.withdrawalBarrier(client,row))return null;
   const current=await this.current(client,session,assignment.assignmentId,device);if(!current||current.policy_sha256!==row.policy_sha256||!scopeFields.every(k=>k==='revocation_version'?Number(row[k])===current[k]:row[k]===current[k]))return null;
   return {consent_id:row.consent_id,policy_sha256:row.policy_sha256,policy_payload:row.policy_payload};
  }
- async forIngest(client,context,authorization){const a=locationAuthorization(authorization);await this.requireSession(client,context.session);await this.consentLock(client,a.consent_id,true);
+ async forIngest(client,context,authorization){const a=locationAuthorization(authorization);await this.requireSession(client,context.session);
   const row=(await client.query('SELECT * FROM mercury_guard.location_consents WHERE consent_id=$1',[a.consent_id])).rows[0],expected={subject:context.subject,guard_id:context.guardId,vendor_id:context.vendorId,site_id:context.siteId,assignment_id:context.assignmentId,device_thumbprint:context.thumbprint,revocation_version:context.revocationVersion};
-  if(!row||Object.keys(expected).some(k=>k==='revocation_version'?Number(row[k])!==expected[k]:row[k]!==expected[k])||row.policy_sha256!==a.policy_sha256||row.policy_payload!==a.policy_payload||(await client.query('SELECT 1 FROM mercury_guard.location_consent_withdrawals WHERE consent_id=$1',[a.consent_id])).rowCount)throw new LocationDeniedError('Current original location consent required');
+  if(!row||Object.keys(expected).some(k=>k==='revocation_version'?Number(row[k])!==expected[k]:row[k]!==expected[k])||row.policy_sha256!==a.policy_sha256||row.policy_payload!==a.policy_payload)throw new LocationDeniedError('Current original location consent required');
+  await this.scopeLock(client,row,true);await this.consentLock(client,a.consent_id,true);if(await this.withdrawalBarrier(client,row))throw new LocationDeniedError('Location consent withdrawal barrier');
   const current=await this.current(client,context.session,context.assignmentId,{device_id:row.device_id},{confirmed:false,historical:true});if(!current||current.policy_sha256!==row.policy_sha256||Number(row.recorded_at_ms)>context.locationEventAt)throw new LocationDeniedError('Current original location policy required');
   await this.requireSession(client,context.session);return a;
  }

@@ -11,5 +11,6 @@ await admin.connect();try{
  // Replay the exported canonical migration in this uniquely created disposable DB.
  await fixture.query(readFileSync(new URL('../../supabase/migrations/20261023233208_guard_escalations.sql',import.meta.url),'utf8'));
  await fixture.query(readFileSync(new URL('../../supabase/migrations/20261024001402_guard_authorized_location.sql',import.meta.url),'utf8'));
+ await fixture.query(readFileSync(new URL('../../supabase/migrations/20261024002355_guard_location_consent_order.sql',import.meta.url),'utf8'));
  await verifyPostgresEscalations(url.toString(),fixture);
 }finally{await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated escalation verification database removed');}await admin.end();}
