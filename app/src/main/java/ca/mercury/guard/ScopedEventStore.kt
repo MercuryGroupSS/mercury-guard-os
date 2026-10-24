@@ -44,7 +44,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   createIncidentHistory(db)
   db.rawQuery("SELECT sequence,body FROM captured",null).use{c->while(c.moveToNext()){
    val seq=c.getLong(0);val record=decrypt(c.getString(1),"mercury-scoped-event:$seq");val event=record.getJSONObject("event")
-   if(event.getString("kind")=="check_in")indexCheckIn(db,binding(record.getJSONObject("scope")),event.getJSONObject("data"),seq)
+   if(event.getString("kind")=="check_in")indexCheckIn(db,binding(record.getJSONObject("scope")),event.getJSONObject("data"),seq,if(record.has("check_in_owner"))originalDispatchOwner(record.getJSONObject("check_in_owner"))else null)
   }}
  }
  private fun createCheckInIndex(db:SQLiteDatabase){db.execSQL("CREATE TABLE IF NOT EXISTS check_in_keys (lookup TEXT PRIMARY KEY, sequence INTEGER NOT NULL UNIQUE)")}
@@ -53,8 +53,14 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   val source=JSONArray(listOf(binding.guardId,binding.assignmentId,revision,slot)).toString()
   return java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
  }
- private fun indexCheckIn(db:SQLiteDatabase,binding:GrantBinding,data:JSONObject,sequence:Long){
-  val key=checkInKey(binding,data.getLong("policy_revision"),data.getLong("slot"))
+ private fun checkInKey(owner:ConnectedDispatchOwner,revision:Long,slot:Long):String {
+  require(revision in 1..9007199254740991L&&slot in 0..10000)
+  val source="mercury-connected-check-in-key-v1\n"+owner.json().toString()+"\n"+revision+"\n"+slot
+  return java.security.MessageDigest.getInstance("SHA-256").digest(source.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ }
+ private fun indexCheckIn(db:SQLiteDatabase,binding:GrantBinding,data:JSONObject,sequence:Long,connectedOwner:ConnectedDispatchOwner?=null){
+  check(connectedOwner==null||connectedOwner.scope.binding==binding){"Original check-in owner mismatch"}
+  val key=if(connectedOwner==null)checkInKey(binding,data.getLong("policy_revision"),data.getLong("slot"))else checkInKey(connectedOwner,data.getLong("policy_revision"),data.getLong("slot"))
   db.insertWithOnConflict("check_in_keys",null,ContentValues().apply{put("lookup",key);put("sequence",sequence)},SQLiteDatabase.CONFLICT_IGNORE)
   db.rawQuery("SELECT sequence FROM check_in_keys WHERE lookup=?",arrayOf(key)).use{check(it.moveToFirst()&&it.getLong(0)==sequence){"Duplicate check-in slot"}}
  }
@@ -108,7 +114,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   check(record.accepted&&record.id==approved.id&&record.policy.sha256==approved.policy.sha256&&record.policy.payload==approved.policy.payload)
   return captureInternal("location",sample.data(approved),record.scope.binding,grant,identity,sample.at,record.scope)
  }
- private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null,dispatchOwner:ConnectedDispatchOwner?=null):String {
+ private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null,dispatchOwner:ConnectedDispatchOwner?=null,checkOwner:ConnectedDispatchOwner?=null):String {
   require(observedAt in 0..9007199254740991L)
   check(grant.permits(requiredAction(kind),original,elapsedNow(),bootNow())) { "Capture not authorized" }
   check(identity.publicIdentity()?.thumbprint == original.deviceThumbprint) { "Capture device mismatch" }
@@ -120,6 +126,10 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   if(locationOwner!=null)record.put("location_owner",locationOwner.json())
   if(incidentOwner!=null){check(kind=="incident"&&ConnectedIncidentHistory.matches(incidentOwner,original));record.put("incident_owner",incidentOwner.json())}
   if(dispatchOwner!=null){check(kind=="dispatch_ack"&&dispatchOwner.scope.binding==original);record.put("dispatch_owner",dispatchOwner.json())}
+  if(checkOwner!=null){
+   check(kind in setOf("check_in","check_in_miss_reason","photo_evidence")&&checkOwner.scope.binding==original){"Original check-in capture owner mismatch"}
+   record.put(if(kind=="photo_evidence")"photo_owner"else "check_in_owner",checkOwner.json())
+  }
   require(record.toString().toByteArray(Charsets.UTF_8).size <= 240000)
   val db=writableDatabase;db.beginTransaction()
   try {
@@ -128,7 +138,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    event.put("sequence",seq)
    check(db.update("captured",ContentValues().apply {put("body",cipher.encrypt(record.toString().toByteArray(Charsets.UTF_8),"mercury-scoped-event:$seq"))},"sequence=?",arrayOf(seq.toString()))==1)
    if(incidentOwner!=null)db.insertOrThrow("incident_history",null,ContentValues().apply{put("sequence",seq);put("owner",incidentOwner.owner())})
-   if(kind=="check_in")indexCheckIn(db,original,event.getJSONObject("data"),seq)
+   if(kind=="check_in")indexCheckIn(db,original,event.getJSONObject("data"),seq,checkOwner)
    db.setTransactionSuccessful();return eventId
   } finally {db.endTransaction()}
  }
@@ -153,6 +163,40 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    val result=capture("check_in",data,original,grant,identity,observedAt)
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
+ }
+ /** Only an original full-owner check-in can complete a connected reminder slot. */
+ internal fun checkInRecorded(owner:ConnectedDispatchOwner,revision:Long,slot:Long):Boolean {
+  readableDatabase.rawQuery("SELECT k.sequence,c.body FROM check_in_keys k LEFT JOIN captured c ON c.sequence=k.sequence WHERE k.lookup=?",arrayOf(checkInKey(owner,revision,slot))).use{c->
+   if(!c.moveToFirst())return false
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val event=record.getJSONObject("event");val data=event.getJSONObject("data")
+   check(event.getString("kind")=="check_in"&&binding(record.getJSONObject("scope"))==owner.scope.binding){"Original connected check-in index mismatch"}
+   check(record.has("check_in_owner")&&originalDispatchOwner(record.getJSONObject("check_in_owner"))==owner){"Original connected check-in owner required"}
+   fun integer(key:String):Long{val n=data.get(key);check(n is Int||n is Long);return (n as Number).toLong()}
+   check(integer("policy_revision")==revision&&integer("slot")==slot){"Original connected check-in slot mismatch"}
+   return true
+  }
+ }
+ /** Photo and successful check-in share one immutable original owner and transaction. */
+ internal fun captureCheckIn(owner:ConnectedDispatchOwner,grant:VerifiedShiftGrant,identity:DeviceIdentity,evidence:AuthorizedCheckInEvidence,photo:JSONObject,observedAt:Long):String {
+  evidence.policy.validate(evidence.slot,evidence.biometricAt,evidence.location,observedAt,observedAt)
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(!checkInRecorded(owner,evidence.policy.revision,evidence.slot)){"Check-in already recorded"}
+   val metadata=JSONObject(photo.toString()).put("check_in_slot",evidence.slot).put("check_in_policy_revision",evidence.policy.revision)
+   val photoId=captureInternal("photo_evidence",metadata,owner.scope.binding,grant,identity,observedAt,null,checkOwner=owner)
+   val data=JSONObject().put("policy_revision",evidence.policy.revision).put("slot",evidence.slot)
+    .put("biometric",JSONObject().put("method","android_local_biometric").put("at",evidence.biometricAt))
+    .put("location",JSONObject(evidence.location.toString())).put("photo_event_id",photoId).put("evidence_id",metadata.getString("evidence_id"))
+   val result=captureInternal("check_in",data,owner.scope.binding,grant,identity,observedAt,null,checkOwner=owner)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
+ internal fun capturePhoto(owner:ConnectedDispatchOwner,grant:VerifiedShiftGrant,identity:DeviceIdentity,metadata:JSONObject,observedAt:Long):String =
+  captureInternal("photo_evidence",metadata,owner.scope.binding,grant,identity,observedAt,null,checkOwner=owner)
+ internal fun captureCheckInMissReason(owner:ConnectedDispatchOwner,grant:VerifiedShiftGrant,identity:DeviceIdentity,revision:Long,slot:Long,reason:String,observedAt:Long):String {
+  require(revision in 1..9007199254740991L&&slot in 0..10000&&reason.isNotBlank()&&reason.length<=2000)
+  val data=JSONObject().put("policy_revision",revision).put("slot",slot).put("reason",reason)
+  return captureInternal("check_in_miss_reason",data,owner.scope.binding,grant,identity,observedAt,null,checkOwner=owner)
  }
  fun dispatchAcknowledged(original:GrantBinding,messageId:String,version:Long):Boolean {
   readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){

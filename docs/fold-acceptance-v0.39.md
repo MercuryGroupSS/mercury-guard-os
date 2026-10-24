@@ -1,4 +1,4 @@
-# Mercury One v0.42 — attended Fold additions
+# Mercury One v0.43 — attended Fold additions
 
 All physical results start **OPEN**. Use the [complete baseline Fold procedure](fold-acceptance-v0.35.md) with these additions and the current immutable APK/source records. Earlier demo, emulator and typed-location results do not establish current hardware acceptance. Do not access the phone until the user resumes physical testing.
 
@@ -14,6 +14,7 @@ All physical results start **OPEN**. Use the [complete baseline Fold procedure](
 | Incident history | Save one incident as A and verify its original text and truthful local/service status. Confirm it survives authorized fold/reopen without becoming B's record. Unknown-owner legacy rows must not be relabelled. A service receipt alone is not a connected Ops display acknowledgement. |
 | Shift controls | Before scheduled end, find early exit inside the assignment's Escalate flow with a reason and separate confirmation. Leave the overview or an unfinished incident editor open across the trusted scheduled deadline: Clock out should appear while text remains intact. Time passing must not create attendance. Confirm clock-out explicitly and verify its receipt separately. |
 | Unresolved confirmation ownership | Under an approved disposable assignment, interrupt a start/end response after explicit confirmation. Return as the exact original owner and verify the same request ID/body resolves. A replacement account or configuration must not see the original private reason, inherit its confirmation or retry it. Preserve older requests for controlled review; never clear app data as a workaround. |
+| Optional connected attention | Use an explicitly approved test policy. Check calm stages, steady/reduced motion, short cues, exact-window swipe/silence, no catch-up burst after delay, original-owner isolation and completion only after actual required evidence. Test optional full-screen access both allowed and denied, locked and unlocked, without bypassing keyguard or sign-in. Record actual delivery delay under Doze; the 30-second logical limit is not a delivery guarantee. |
 | Delivery and withdrawal | Confirm original-scope GPS checkpoint retry and its service receipt, then consent withdrawal and denial of queued original location partitions. Independent incidents must remain deliverable. Verify Guard receipt, original photo-byte receipt, receiver receipt and actual approved Ops display separately. |
 
 Retain failures or blocks with the exact build hash, private test identities and receipt IDs. An unavailable SDK fix, delayed Android job, unread permission prompt or unperformed fold is not a pass. Finish with no active test shift, collection or signed-in account, preserving original queues and evidence.

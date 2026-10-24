@@ -90,6 +90,10 @@ export function buildPayload(action,values,now=Date.now(),locationNoticeSha256){
    const interval=integer(values.interval,1,1440,'Check-in interval')*60000,window=integer(values.window,1,86400,'Check-in window')*1000,age=integer(values.evidenceAge,1,300,'Evidence freshness')*1000,accuracy=Number(values.accuracy);
    if(window>interval||age>window||!Number.isFinite(accuracy)||accuracy<=0||accuracy>1000)throw Error('The check-in window must fit the interval, evidence freshness must fit the window, and GPS accuracy must be 1–1000 metres.');
    p.checkInPolicy={revision:integer(values.policyRevision,1,2147483647,'Policy revision'),interval_ms:interval,window_ms:window,max_evidence_age_ms:age,max_accuracy_m:accuracy};
+   if(values.attentionProfile!==undefined&&values.attentionProfile!==''){
+    if(values.attentionProfile!=='calm_progressive_v1')throw Error('Choose the existing single reminder or the calm progressive attention profile.');
+    p.checkInPolicy.attention={version:1,profile:'calm_progressive_v1'};
+   }
   }
   if(values.locationPolicyEnabled==='on')p.locationPolicy=locationPolicyPayload(values,locationNoticeSha256);
   if(p.patrolRoute?.gps_required===true&&!p.locationPolicy)throw Error('GPS-required checkpoints need the complete approved location policy and notice covering checkpoint fixes.');

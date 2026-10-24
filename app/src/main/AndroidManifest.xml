@@ -19,6 +19,7 @@
   </activity>
   <activity android:name=".MainActivity" android:exported="false" android:screenOrientation="unspecified" android:resizeableActivity="true" android:lockTaskMode="if_whitelisted"/>
   <activity android:name=".GuardAccountActivity" android:exported="false" android:resizeableActivity="true" android:lockTaskMode="if_whitelisted"/>
+  <activity android:name=".ConnectedCheckInAlertActivity" android:exported="false" android:excludeFromRecents="true" android:resizeableActivity="true"/>
   <activity android:name=".DutyAlertActivity" android:exported="false" android:excludeFromRecents="true"/>
   <receiver android:name=".AuthorizedReminderReceiver" android:exported="false"/>
   <receiver android:name=".DutyAlertReceiver" android:exported="false"/>

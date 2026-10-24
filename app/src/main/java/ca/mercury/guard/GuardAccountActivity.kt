@@ -35,7 +35,7 @@ class GuardAccountActivity : Activity() {
  private var stopped=false
  private var busy=false
  // One-shot capture authority survives the external camera; account credentials never do.
- private data class PendingPhoto(val file:File,val binding:GrantBinding,val grant:VerifiedShiftGrant,val anchor:ServerTimeAnchor,val checkIn:AuthorizedCheckInEvidence?=null)
+ private data class PendingPhoto(val file:File,val binding:GrantBinding,val grant:VerifiedShiftGrant,val anchor:ServerTimeAnchor,val checkIn:AuthorizedCheckInEvidence?,val owner:ConnectedDispatchOwner)
  private var pendingPhoto:PendingPhoto?=null
  private var locationPing:LocationPing?=null
  private var patrolPointLocation:PatrolPointLocation?=null
@@ -43,6 +43,9 @@ class GuardAccountActivity : Activity() {
  private var incidentDraftEditor:EditText?=null
  private var incidentHistoryView:ConnectedIncidentHistoryView?=null
  private var connectedPrivatePanel:ConnectedPrivatePanel?=null
+ private var connectedAttentionView:ConnectedCheckInAttentionView?=null
+ private var connectedAttentionRefresh:Runnable?=null
+ private val connectedAttentionHandler=Handler(Looper.getMainLooper())
  private var ownedDialog:AlertDialog?=null
  private var incidentDraftScope:ConnectedIncidentDraftScope?=null
  private var incidentDraftDirty=false
@@ -56,13 +59,28 @@ class GuardAccountActivity : Activity() {
  private fun dp(n:Int)=(n*resources.displayMetrics.density).toInt()
  override fun onCreate(state:Bundle?) {
   super.onCreate(state)
+  ConnectedAttentionAccountLock.register(this)
   window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-  // A recreated process has no verified capture authority. Discard abandoned temporary output.
-  File(cacheDir,"capture/account").listFiles()?.forEach{it.delete()}
+  // No authority is recovered, but a different live task can still own an authorized camera result.
+  ConnectedAttentionAccountLock.cleanupAbandonedCameraOutput(this)
   try { AuthorizedReminders(this).refresh();config=GuardServiceConfig.load(this);UploadCoordinator(this).request(); startScreen() }
   catch(_:Exception){ config=null; screen("CONNECTION UNAVAILABLE","The packaged service configuration is invalid. Contact your administrator."); button("Escalate"){unverifiedEscalation()};button("Return"){finish()} }
   if(intent.getBooleanExtra("open_escalation",false)){intent.removeExtra("open_escalation");unverifiedEscalation()}
  }
+ /** A notification returning to an existing instance never retains foreground account access. */
+ override fun onNewIntent(incoming:Intent){
+  super.onNewIntent(incoming);setIntent(incoming)
+  lockForConnectedAttentionEntry()
+ }
+ /** Also covers a fast system full-screen interruption and another still-resumed app window. */
+ internal fun lockForConnectedAttentionEntry(){
+  check(Looper.myLooper()==Looper.getMainLooper())
+  if(isDestroyed)return
+  clearSession();if(::root.isInitialized)scrubDepartedView(root)
+  stopped=!visibleForLocation
+  if(!isFinishing){startScreen();if(!visibleForLocation)loginParticles?.stopMotion()} // Passive controls only; never starts a biometric prompt.
+ }
+ internal fun retainsPendingCameraOutput(file:File):Boolean {check(Looper.myLooper()==Looper.getMainLooper());return pendingPhoto?.file?.absoluteFile==file.absoluteFile}
  /** Home may return before onStop. Fence user-chosen departure before the pause and scrub now. */
  override fun onUserLeaveHint(){
   super.onUserLeaveHint();visibleForLocation=false;stopped=true;clearSession()
@@ -72,7 +90,7 @@ class GuardAccountActivity : Activity() {
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();visibleForLocation=true;if(stopped){stopped=false;startScreen()}else shiftDeadlineRefresh?.run();loginParticles?.startMotion()}
  override fun onPause(){visibleForLocation=false;if(incidentHistoryView!=null||connectedPrivatePanel!=null){stopped=true;clearSession()};cancelPatrolPoint();cancelShiftDeadline(true);persistIncidentDraft();loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
- override fun onDestroy(){dismissOwnedDialog();closeIncidentHistory();closeConnectedPanel();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
+ override fun onDestroy(){ConnectedAttentionAccountLock.unregister(this);dismissOwnedDialog();closeIncidentHistory();closeConnectedPanel();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
  private fun clearSession(){dismissOwnedDialog();closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline();persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun showOwnedDialog(dialog:AlertDialog):AlertDialog {
   dismissOwnedDialog();ownedDialog=dialog
@@ -86,7 +104,7 @@ class GuardAccountActivity : Activity() {
   if(view is ViewGroup)for(i in 0 until view.childCount)scrubDepartedView(view.getChildAt(i))
  }
  private fun closeIncidentHistory(){incidentHistoryView?.close();incidentHistoryView=null}
- private fun closeConnectedPanel(){connectedPrivatePanel?.close();connectedPrivatePanel=null}
+ private fun closeConnectedPanel(){connectedAttentionRefresh?.let{connectedAttentionHandler.removeCallbacks(it)};connectedAttentionRefresh=null;connectedAttentionView?.close();connectedAttentionView=null;connectedPrivatePanel?.close();connectedPrivatePanel=null}
  private fun screen(title:String,detail:String){
   closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline()
   persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;incidentDraftDirty=false
@@ -244,8 +262,11 @@ class GuardAccountActivity : Activity() {
      accountIdentity=AccountIdentity(subject,guard,vendor);accountAnchor=ServerTimeAnchor(epoch,receivedElapsed,boot)
      UploadCoordinator(this).authorize(c,active,guard,vendor,subject)
      val observed=Math.addExact(epoch,Math.subtractExact(SystemClock.elapsedRealtime(),receivedElapsed))
-     val activeIds=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&it.optJSONObject("shift_state")?.optString("state")=="active"&&observed>=it.getLong("startsAt")&&observed<it.getLong("endsAt")}.map{it.getString("assignmentId")}.toSet()
-     AuthorizedReminders(this).retainForAssignments(guard,activeIds)
+     val activeRows=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&it.optJSONObject("shift_state")?.optString("state")=="active"&&observed>=it.getLong("startsAt")&&observed<it.getLong("endsAt")}
+     val activeIds=activeRows.map{it.getString("assignmentId")}.toSet()
+     val reminderRows=activeRows.filter{it.has("checkInPolicy")&&!it.isNull("checkInPolicy")}
+     val reminderPolicies=reminderRows.associate{row->val scope=shiftScope(row);check(scope.binding.guardId==guard&&scope.vendorId==vendor&&scope.binding.deviceThumbprint==DeviceIdentity(this).publicIdentity()?.thumbprint);val policy=JSONObject(row.getJSONObject("checkInPolicy").toString());AuthorizedCheckInPolicy.parse(policy);ConnectedDispatchOwner(c.uploadBinding(),c.deviceId,subject,scope) to policy}
+     check(reminderPolicies.size==reminderRows.size);AuthorizedReminders(this).retainForAssignments(reminderPolicies)
      ConnectedLocationRuntime.stopIfUnavailable(this,subject,activeIds)
      val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
@@ -318,7 +339,7 @@ class GuardAccountActivity : Activity() {
      val receipt=GuardAccountClient(c.endpoint).transition(active,c.deviceId,scope.binding.assignmentId,DeviceIdentity(this),c.audience,request)
      success=db.accept(owner,action,receipt);definitiveRejection=!success
     }
-    if(success&&action=="end")AuthorizedReminders(this).stopForAssignment(scope.binding)
+    if(success&&action=="end")AuthorizedReminders(this).stopForAssignment(owner)
    }catch(_:Exception){}
    val accepted=success;val declined=definitiveRejection
    runOnUiThread{
@@ -401,6 +422,7 @@ class GuardAccountActivity : Activity() {
   button("Capture authorized photo"){confirmPhoto()}
   button("Assignment messages"){loadDispatch(item,true)}
   if(item.has("checkInPolicy"))button("Check-in reminder settings"){reminderSettings(item)}
+  if(item.optJSONObject("checkInPolicy")?.has("attention")==true)button("Review check-in attention"){connectedAttention(item)}
   if(item.has("checkInStatus"))button("Review check-in delivery"){checkInStatusScreen(item)}
   if(item.has("checkInPolicy"))button("Complete scheduled check-in"){beginCheckIn(item)}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
@@ -415,6 +437,12 @@ class GuardAccountActivity : Activity() {
   }
  }
  private data class AssignmentReadContext(val config:GuardServiceConfig,val session:GuardAccountClient.Session,val account:AccountIdentity,val owner:ConnectedIncidentDraftScope,val scope:DispatchScope)
+ private fun connectedCaptureOwner():ConnectedDispatchOwner {
+  val c=config?:error("Trusted service required");val active=session?:error("Sign in again");val who=accountIdentity?:error("Individual account required");active.bearer()
+  val binding=captureBinding?:error("Refresh assignment authorization")
+  check(binding.guardId==who.guardId&&binding.deviceThumbprint==DeviceIdentity(this).publicIdentity()?.thumbprint)
+  return ConnectedDispatchOwner(c.uploadBinding(),c.deviceId,who.subject,DispatchScope(binding,who.vendorId))
+ }
  private class AssignmentReadDenied:IllegalStateException()
  private fun assignmentReadContext(item:JSONObject):AssignmentReadContext {
   val c=config?:error("Trusted service required");val active=session?:error("Sign in again");val who=accountIdentity?:error("Individual account required")
@@ -503,7 +531,8 @@ class GuardAccountActivity : Activity() {
     collecting=record?.let{ConnectedLocationRuntime.activeConsent(it.id)}
    }
   }catch(_:Exception){consent=ConnectedReadiness.Consent.UNAVAILABLE;collecting=null}
-  return ConnectedReadiness.Snapshot(access{device.preciseLocationGranted()},access{(getSystemService(LOCATION_SERVICE) as android.location.LocationManager).isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)},access{device.notificationPermissionGranted()&&(getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager).areNotificationsEnabled()},channel(AuthorizedReminders.CHANNEL),channel(ConnectedLocationService.CHANNEL),access{Build.VERSION.SDK_INT<31||(getSystemService(ALARM_SERVICE) as android.app.AlarmManager).canScheduleExactAlarms()},consent,collecting)
+  val reminderChannel=if(item?.optJSONObject("checkInPolicy")?.has("attention")==true)AuthorizedReminders.ATTENTION_CHANNEL else AuthorizedReminders.CHANNEL
+  return ConnectedReadiness.Snapshot(access{device.preciseLocationGranted()},access{(getSystemService(LOCATION_SERVICE) as android.location.LocationManager).isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)},access{device.notificationPermissionGranted()&&(getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager).areNotificationsEnabled()},channel(reminderChannel),channel(ConnectedLocationService.CHANNEL),access{Build.VERSION.SDK_INT<31||(getSystemService(ALARM_SERVICE) as android.app.AlarmManager).canScheduleExactAlarms()},consent,collecting)
  }
  private fun connectedReadiness(item:JSONObject){
   val (read,panel)=newAssignmentPanel(item,"CONNECTED DEVICE READINESS")?:return
@@ -610,44 +639,109 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){panel.render(ticket){text("This message changed or access expired. Refresh messages before opening it again.");action("Refresh messages"){fetchDispatch(read,panel,owner,item,true,offset)}}}
  }
  private fun reminderSettings(item:JSONObject){
-  val reminders=AuthorizedReminders(this)
-  reminders.refresh()
-  screen("CHECK-IN REMINDERS",reminders.status()+"\nReminders on this phone contain no guard or site name. They do not sign you in or complete a check. Android power settings can delay delivery; enable again after a phone restart.")
-  button("Enable for this assignment"){
-   if(!reminders.notificationsAvailable()){
-    if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),405)
-    else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,packageName))
-    status.text="Allow notifications, then return and enable reminders.";return@button
+  val (read,panel)=newAssignmentPanel(item,"CHECK-IN REMINDERS",true)?:return
+  val owner=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)
+  val policy=try{JSONObject(item.getJSONObject("checkInPolicy").toString()).also{AuthorizedCheckInPolicy.parse(it)}}catch(_:Exception){panel.text("Refresh authorization to verify this assignment's check-in schedule.");return}
+  val reminders=AuthorizedReminders(this);val displayedRoot=root;val stamp=generation
+  fun allowed()=assignmentReadAuthorized(read,displayedRoot,stamp)&&captureBinding==owner.scope.binding
+  panel.startWhenAttached{
+   val ticket=panel.begin("Loading reminder settings for this account and assignment…")?:return@startWhenAttached
+   panel.render(ticket){
+    val state=TextView(this@GuardAccountActivity).apply{text=reminders.status(owner,policy);textSize=16f;isSaveEnabled=false};addView(state)
+    text("Reminders contain no guard or site name. They do not sign you in or complete a check. Android can delay delivery; enable again after a phone restart.")
+    action("Enable for this assignment"){
+     try{reminders.enable(policy,owner,captureGrant?:error("Refresh authorization"),captureAnchor?:error("Refresh authorization"));state.text=reminders.status(owner,policy)}
+     catch(_:Exception){state.text="Reminders were not enabled. Refresh authorization and check notification settings."}
+    }
+    action("Notification settings"){
+     if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),405)
+     else startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,packageName))
+    }
+    if(Build.VERSION.SDK_INT>=31&&!reminders.exactAvailable())action("Allow precise reminder timing"){startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,android.net.Uri.parse("package:$packageName")))}
+    action("Stop reminders for this assignment"){reminders.stopForAssignment(owner);state.text="Reminders stopped for this assignment. Saved checks and original deadlines remain unchanged."}
+    if(AuthorizedCheckInPolicy.parse(policy).attention!=null){
+     text(reminders.fullScreenStatus())
+     action("Enable optional full-screen attention"){
+      AlertDialog.Builder(this@GuardAccountActivity).setTitle("Optional full-screen attention")
+       .setMessage("Allow a generic check-in reminder to use Android's full-screen notification option on this phone? It shows no guard or site details, never unlocks the phone, and does not complete a check. Android access and notification settings must also allow it; delivery is not guaranteed.")
+       .setNegativeButton("Keep off",null).setPositiveButton("Allow on this phone"){_,_->if(allowed()){reminders.setFullScreenConsent(true);state.text=reminders.fullScreenStatus()}}.showOwned()
+     }
+     action("Turn off full-screen attention"){reminders.setFullScreenConsent(false);state.text=reminders.fullScreenStatus()}
+     reminders.fullScreenSettingsIntent()?.let{settings->action("Review Android full-screen access"){startActivity(settings)}}
+     action("Review calm attention"){connectedAttention(item)}
+    }else text("This assignment uses one reminder per check-in window.")
    }
-   try{reminders.enable(item.getJSONObject("checkInPolicy"),captureBinding?:error("Sign in"),captureGrant?:error("Refresh authorization"),captureAnchor?:error("Refresh authorization"));status.text=reminders.status()}
-   catch(_:Exception){status.text="Reminders were not enabled. Refresh authorization and check notification settings."}
   }
-  if(Build.VERSION.SDK_INT>=31&&!reminders.exactAvailable())button("Allow precise reminder timing"){
-   startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,android.net.Uri.parse("package:$packageName")))
+ }
+ private fun connectedAttention(item:JSONObject){
+  val (read,panel)=newAssignmentPanel(item,"CHECK-IN ATTENTION",true)?:return
+  val owner=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)
+  val policy=try{JSONObject(item.getJSONObject("checkInPolicy").toString()).also{check(AuthorizedCheckInPolicy.parse(it).attention!=null)}}catch(_:Exception){panel.text("This assignment does not have calm attention enabled. Its existing check-in schedule is unchanged.");return}
+  val reminders=AuthorizedReminders(this);val displayedRoot=root;val stamp=generation;val originalAnchor=captureAnchor
+  panel.startWhenAttached{
+   val ticket=panel.begin("Loading this assignment's attention state…")?:return@startWhenAttached
+   panel.render(ticket){
+    val visual=ConnectedCheckInAttentionView(this@GuardAccountActivity);connectedAttentionView=visual;addView(visual)
+    val state=TextView(this@GuardAccountActivity).apply{textSize=16f;isSaveEnabled=false};addView(state)
+    text("Colors and cues do not record a check. Complete it with the required biometric, fresh location and consented photo. A service receipt confirms delivery separately.")
+    action("Enable reminders for this assignment"){
+     try{reminders.enable(policy,owner,captureGrant?:error("Refresh authorization"),captureAnchor?:error("Refresh authorization"));connectedAttentionRefresh?.run()}
+     catch(_:Exception){state.text="Reminders were not enabled. Refresh authorization and check notification settings."}
+    }
+    action("Complete scheduled check-in"){captureScreen(item);beginCheckIn(item)}
+    action("Silence this check"){
+     state.text=if(reminders.silenceCurrent(owner,policy))"Silenced on this phone. No check was completed."else "This reminder changed or ended. No check was completed."
+     connectedAttentionRefresh?.run()
+    }
+    action("Use steady colors"){
+     check(getSharedPreferences("mercury_connected_attention_ui",MODE_PRIVATE).edit().putBoolean("steady_colors",true).commit());visual.stopMotion();connectedAttentionRefresh?.run()
+    }
+    action("Allow calm color pulses"){
+     check(getSharedPreferences("mercury_connected_attention_ui",MODE_PRIVATE).edit().putBoolean("steady_colors",false).commit());connectedAttentionRefresh?.run()
+    }
+    action("Reminder and full-screen settings"){reminderSettings(item)}
+    if(item.has("checkInStatus"))action("Review delivery and missed-window reasons"){checkInStatusScreen(item)}else action("Refresh delivery status"){verifyAssignment(item)}
+    val refresh=object:Runnable{override fun run(){
+     connectedAttentionHandler.removeCallbacks(this)
+     if(connectedAttentionRefresh!==this)return
+     if(!assignmentReadAuthorized(read,displayedRoot,stamp)||captureBinding!=owner.scope.binding||captureAnchor!==originalAnchor){closeConnectedPanel();if(root===displayedRoot)startScreen();return}
+     val snapshot=reminders.attentionSnapshot(owner,policy)
+     if(snapshot==null)visual.unavailable()else visual.present(snapshot.stage,snapshot.token,snapshot.pulse,snapshot.silenced,snapshot.budgetExhausted,getSharedPreferences("mercury_connected_attention_ui",MODE_PRIVATE).getBoolean("steady_colors",false))
+     state.text=reminders.status(owner,policy)
+     connectedAttentionHandler.postDelayed(this,(snapshot?.nextRefreshInMillis?:1000).coerceIn(50,1000))
+    }}
+    connectedAttentionRefresh=refresh;refresh.run()
+   }
   }
-  button("Stop this phone's reminders"){reminders.stop();status.text="Reminders stopped. Saved checks and service deadlines remain unchanged."}
-  button("Back to assignment"){captureScreen(item)}
  }
  private fun checkInStatusScreen(item:JSONObject){
-  screen("CHECK-IN DELIVERY","Service receipt is separate from local capture. A missed delivery deadline does not prove that an offline guard missed the check. Dispatch delivery is not connected.")
-  try{
-   val report=item.getJSONObject("checkInStatus");check(report.getString("assignment_id")==item.getString("assignmentId"))
-   val slots=report.getJSONArray("slots")
-   root.addView(TextView(this).apply{text="Service snapshot: ${java.util.Date(report.getLong("server_time_ms"))}\n${report.getInt("total_deadlines_missed")} delivery deadline(s) missed. Refresh authorization for current status.";textSize=16f;setPadding(0,dp(12),0,dp(12))})
-   for(i in maxOf(0,slots.length()-10) until slots.length()){
-    val slot=slots.getJSONObject(i)
-    val label=when(slot.getString("status")){"due"->"Due · not received";"delivery_missing"->"Delivery missing";"photo_delivery_pending"->"Photo delivery pending";"evidence_received"->"Evidence received by pilot service";"evidence_received_after_deadline"->"Evidence received after deadline";else->"Status unavailable"}
-    root.addView(TextView(this).apply{text="Check ${slot.getLong("slot")+1} · $label\nDue ${java.util.Date(slot.getLong("due_at"))}"+(if(slot.getBoolean("delivery_deadline_missed"))"\nOriginal missed deadline retained." else "");textSize=16f;setPadding(0,dp(12),0,dp(12))})
-    if(slot.getBoolean("delivery_deadline_missed"))button("Add reason for check ${slot.getLong("slot")+1}"){missReason(item,report.getLong("policy_revision"),slot.getLong("slot"))}
-    if(slot.optInt("reason_count")>0)root.addView(TextView(this).apply{text="${slot.getInt("reason_count")} reason note(s) received. Original deadline retained."})
+  val (read,panel)=newAssignmentPanel(item,"CHECK-IN DELIVERY",true)?:return
+  val owner=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)
+  panel.startWhenAttached{
+   val ticket=panel.begin("Opening the received delivery status…")?:return@startWhenAttached
+   panel.render(ticket){
+    text("Service receipt is separate from local capture. A missed delivery deadline does not prove that an offline guard missed the check. Dispatch delivery is not connected.")
+    try{
+     val report=item.getJSONObject("checkInStatus");check(report.getString("assignment_id")==owner.scope.binding.assignmentId)
+     check(report.getLong("policy_revision")==AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy")).revision)
+     val slots=report.getJSONArray("slots")
+     text("Service snapshot: ${java.util.Date(report.getLong("server_time_ms"))}\n${report.getInt("total_deadlines_missed")} delivery deadline(s) missed. Refresh authorization for current status.")
+     for(i in maxOf(0,slots.length()-10) until slots.length()){
+      val slot=slots.getJSONObject(i)
+      val label=when(slot.getString("status")){"due"->"Due · not received";"delivery_missing"->"Delivery missing";"photo_delivery_pending"->"Photo delivery pending";"evidence_received"->"Evidence received by pilot service";"evidence_received_after_deadline"->"Evidence received after deadline";else->"Status unavailable"}
+      text("Check ${slot.getLong("slot")+1} · $label\nDue ${java.util.Date(slot.getLong("due_at"))}"+(if(slot.getBoolean("delivery_deadline_missed"))"\nOriginal missed deadline retained." else ""))
+      if(slot.getBoolean("delivery_deadline_missed"))action("Add reason for check ${slot.getLong("slot")+1}"){missReason(item,report.getLong("policy_revision"),slot.getLong("slot"),owner)}
+      if(slot.optInt("reason_count")>0)text("${slot.getInt("reason_count")} reason note(s) received. Original deadline retained.")
+     }
+     if(slots.length()>10||report.optInt("earlier_slots_omitted")>0)text("Showing the latest 10 due checks. The service retains earlier deadlines.")
+    }catch(_:Exception){text("Check-in delivery status could not be verified. Refresh authorization to retrieve it again.")}
+    action("Refresh authorization"){verifyAssignment(item)}
+    action("Send my queued records"){sendScoped(owner.scope.binding.guardId)}
    }
-   if(slots.length()>10||report.optInt("earlier_slots_omitted")>0)root.addView(TextView(this).apply{text="Showing the latest 10 due checks. The service retains earlier deadlines."})
-  }catch(_:Exception){status.text="Check-in delivery status could not be verified. Refresh authorization to retrieve it again."}
-  button("Refresh authorization"){verifyAssignment(item)}
-  button("Send my queued records"){captureBinding?.let{sendScoped(it.guardId)}}
-  button("Back to assignment"){captureScreen(item)}
+  }
  }
- private fun missReason(item:JSONObject,revision:Long,slot:Long){
+ private fun missReason(item:JSONObject,revision:Long,slot:Long,owner:ConnectedDispatchOwner){
+  try{check(connectedCaptureOwner()==owner&&owner.scope==shiftScope(item))}catch(_:Exception){status.text="Sign in and refresh this assignment before adding a reason.";return}
   val stamp=generation;val displayedRoot=root
   val input=EditText(this).apply{hint="Explain the missed delivery";minLines=3;inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;filters=arrayOf(android.text.InputFilter.LengthFilter(2000));isSaveEnabled=false}
   val dialog=AlertDialog.Builder(this).setTitle("Reason for check ${slot+1}").setMessage("This adds a note and keeps the original missed deadline. Dispatch has not been notified.").setView(input).setNegativeButton("Cancel",null).setPositiveButton("Save locally",null).create()
@@ -655,42 +749,46 @@ class GuardAccountActivity : Activity() {
    if(stamp!=generation||root!==displayedRoot||!visibleForLocation||stopped){dialog.dismiss();return@setOnClickListener}
    try{
     val reason=input.text.toString().trim();require(reason.isNotEmpty())
-    val binding=captureBinding?:error("Sign in again");val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
+    check(connectedCaptureOwner()==owner);val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
     val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
     val policy=AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy"));check(policy.revision==revision)
     val due=Math.addExact(policy.startsAt,Math.multiplyExact(slot,policy.interval));check(slot>=0&&due<policy.endsAt&&observed>=minOf(due+policy.window,policy.endsAt))
-    val db=ScopedEventStore(this);try{db.capture("check_in_miss_reason",JSONObject().put("policy_revision",revision).put("slot",slot).put("reason",reason),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
+    val db=ScopedEventStore(this);try{db.captureCheckInMissReason(owner,grant,DeviceIdentity(this),revision,slot,reason,observed)}finally{db.close()}
     UploadCoordinator(this).request();dialog.dismiss();status.text="Reason saved locally. Automatic delivery is requested; the original missed deadline remains recorded."
    }catch(_:Exception){input.error="Enter a reason and refresh authorization if it has expired."}
   }};showOwnedDialog(dialog)
  }
  private fun beginCheckIn(item:JSONObject){
   val anchor=captureAnchor?:return;val binding=captureBinding?:return;val grant=captureGrant?:return
+  val read=try{assignmentReadContext(item)}catch(_:Exception){status.text="Sign in and refresh this assignment before completing a check.";return}
+  val owner=ConnectedDispatchOwner(read.owner.configuration,read.owner.deviceId,read.owner.subject,read.scope)
+  val stamp=generation;val displayedRoot=root
+  fun permitted()=assignmentReadAuthorized(read,displayedRoot,stamp,true)&&captureBinding==owner.scope.binding&&captureBinding==binding&&captureGrant===grant&&captureAnchor===anchor
   fun observed()=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
   val policy:AuthorizedCheckInPolicy;val slot:Long
   try{
    policy=AuthorizedCheckInPolicy.parse(item.getJSONObject("checkInPolicy"));slot=policy.slotAt(observed())
    val due=Math.addExact(policy.startsAt,Math.multiplyExact(slot,policy.interval))
    check(observed()<minOf(due+policy.window,policy.endsAt))
-   val db=ScopedEventStore(this);try{check(!db.checkInRecorded(binding,policy.revision,slot))}finally{db.close()}
+   val db=ScopedEventStore(this);try{check(!db.checkInRecorded(owner,policy.revision,slot))}finally{db.close()}
    check(grant.permits("check_in",binding,SystemClock.elapsedRealtime(),anchor.bootCount))
   }catch(_:Exception){status.text="No open check-in window, this check-in is already saved, or authorization needs refreshing.";return}
   if(checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED){
    requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION),404)
    status.text="Allow precise location, then tap Complete scheduled check-in again.";return
   }
-  val stamp=generation;busy=true
+  busy=true
   try{
    val cancellation=CancellationSignal();signal=cancellation
-   val builder=BiometricPrompt.Builder(this).setTitle("Verify check-in").setNegativeButton("Cancel",mainExecutor){_,_->if(stamp==generation){busy=false;signal=null}}
+   val builder=BiometricPrompt.Builder(this).setTitle("Verify check-in").setNegativeButton("Cancel",mainExecutor){_,_->if(permitted()){busy=false;signal=null}}
    if(Build.VERSION.SDK_INT>=30)builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
    builder.build().authenticate(cancellation,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
-    override fun onAuthenticationError(code:Int,message:CharSequence){if(stamp==generation){busy=false;signal=null;status.text="Check-in verification cancelled or unavailable."}}
+    override fun onAuthenticationError(code:Int,message:CharSequence){if(permitted()){busy=false;signal=null;status.text="Check-in verification cancelled or unavailable."}}
     override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){
-     if(stamp!=generation)return
+     if(!permitted())return
      signal=null;val biometricAt=observed();status.text="Getting a fresh GPS fix…"
      locationPing=LocationPing(this@GuardAccountActivity).also{ping->ping.request{fix->
-      if(stamp==generation){
+      if(permitted()){
        busy=false;locationPing=null
        try{
         check(fix!=null)
@@ -700,7 +798,7 @@ class GuardAccountActivity : Activity() {
         val evidence=AuthorizedCheckInEvidence(policy,slot,biometricAt,location)
         AlertDialog.Builder(this@GuardAccountActivity).setTitle("Check-in photo")
          .setMessage("Take a consented test photo to complete this pilot check-in. It will be encrypted locally and queued for automatic delivery while the verified upload session is valid. Opening the camera locks this screen.")
-         .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation)openAuthorizedCamera(evidence)}.showOwned()
+         .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(permitted()&&visibleForLocation)openAuthorizedCamera(evidence,owner)}.showOwned()
        }catch(_:Exception){status.text="Check-in is incomplete. A fresh, non-mock GPS fix within the site's accuracy limit is required. Try again outdoors."}
       }
      }}
@@ -709,20 +807,22 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){busy=false;signal=null;status.text="Biometric check unavailable. No check-in was saved."}
  }
  private fun confirmPhoto(){
+  val owner=try{connectedCaptureOwner()}catch(_:Exception){status.text="Sign in and refresh this assignment before taking a photo.";return}
   val stamp=generation;val displayedRoot=root
   AlertDialog.Builder(this).setTitle("Capture photo evidence")
    .setMessage("Use a test subject for this pilot. The photo will be encrypted on this phone and linked to your guard and assignment. Automatic delivery requests upload to the configured pilot service while the verified upload session is valid. Camera use locks this screen; a service receipt confirms acceptance.")
-   .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)openAuthorizedCamera()}.showOwned()
+   .setNegativeButton("Cancel",null).setPositiveButton("Open camera"){_,_->if(stamp==generation&&root===displayedRoot&&visibleForLocation&&!stopped)openAuthorizedCamera(null,owner)}.showOwned()
  }
- private fun openAuthorizedCamera(checkIn:AuthorizedCheckInEvidence?=null){
+ private fun openAuthorizedCamera(checkIn:AuthorizedCheckInEvidence?,owner:ConnectedDispatchOwner){
   if(pendingPhoto!=null)return
   val binding=captureBinding?:return;val grant=captureGrant?:return;val anchor=captureAnchor?:return
+  try{check(connectedCaptureOwner()==owner&&owner.scope.binding==binding)}catch(_:Exception){status.text="The photo belongs to another account or assignment. Sign in and refresh before trying again.";return}
   val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1)
   if(!grant.permits("photo",binding,SystemClock.elapsedRealtime(),boot)){status.text="Refresh assignment authorization before taking a photo.";return}
   val dir=File(cacheDir,"capture/account").apply{mkdirs()};val file=File(dir,"${UUID.randomUUID()}.jpg")
   val uri=FileProvider.getUriForFile(this,"$packageName.files",file)
   try{
-   pendingPhoto=PendingPhoto(file,binding,grant,anchor,checkIn)
+   pendingPhoto=PendingPhoto(file,binding,grant,anchor,checkIn,owner)
    clearSession() // Also clear credentials when a camera opens in multi-window without onStop.
    startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply{
     putExtra(MediaStore.EXTRA_OUTPUT,uri);clipData=ClipData.newRawUri("Camera output",uri)
@@ -742,7 +842,7 @@ class GuardAccountActivity : Activity() {
     val metadata=EvidenceStore(this).savePhoto(pending.file);retained=metadata.getString("evidence_id")
     val observed=Math.addExact(pending.anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),pending.anchor.elapsedMillis))
     val db=ScopedEventStore(this)
-    try{if(pending.checkIn==null)db.capture("photo_evidence",metadata,pending.binding,pending.grant,DeviceIdentity(this),observed) else db.captureCheckIn(pending.binding,pending.grant,DeviceIdentity(this),pending.checkIn,metadata,observed)}finally{db.close()}
+    try{check(pending.owner.scope.binding==pending.binding);if(pending.checkIn==null)db.capturePhoto(pending.owner,pending.grant,DeviceIdentity(this),metadata,observed) else db.captureCheckIn(pending.owner,pending.grant,DeviceIdentity(this),pending.checkIn,metadata,observed)}finally{db.close()}
     committed=true;AuthorizedReminders(this).refresh();UploadCoordinator(this).request();message=if(pending.checkIn==null) "Photo saved encrypted. Automatic delivery is requested; service acceptance is pending." else "Check-in and photo saved locally. Automatic delivery is requested; service acceptance is pending."
    }
   }catch(_:Exception){message="Photo not saved. Authorization may have expired or the camera output was invalid. Sign in and try again."}

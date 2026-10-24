@@ -50,8 +50,9 @@ function renderFields(values={}){
  if(schema.policy){const p=values.checkInPolicy??{};optionalGroup($('fields'),'policyEnabled','Timed check-ins',[
   {key:'policyRevision',label:'Policy revision',type:'number',min:1,max:2147483647,value:1},{key:'interval',label:'Interval (minutes)',type:'number',min:1,max:1440,value:60},
   {key:'window',label:'Response window (seconds)',type:'number',min:1,max:86400,value:120},{key:'evidenceAge',label:'Evidence freshness (seconds)',type:'number',min:1,max:300,value:30},
-  {key:'accuracy',label:'Maximum GPS uncertainty (metres)',type:'number',min:1,max:1000,value:50}
- ],{policyRevision:p.revision,interval:p.interval_ms?p.interval_ms/60000:undefined,window:p.window_ms?p.window_ms/1000:undefined,evidenceAge:p.max_evidence_age_ms?p.max_evidence_age_ms/1000:undefined,accuracy:p.max_accuracy_m},!!values.checkInPolicy);}
+  {key:'accuracy',label:'Maximum GPS uncertainty (metres)',type:'number',min:1,max:1000,value:50},
+  {key:'attentionProfile',label:'Check-in reminders',type:'select',optional:true,options:[['','Single reminder (existing behavior)'],['calm_progressive_v1','Calm progressive reminders']],hint:'Explicit approval only. Calm green, yellow and red attention; up to one cue every 30 seconds (20 maximum) for up to 10 minutes while the response window is open. Android may delay background cues. This does not extend the window or complete a check-in. Advance policy and approval revisions when changing this choice.'}
+ ],{policyRevision:p.revision,interval:p.interval_ms?p.interval_ms/60000:undefined,window:p.window_ms?p.window_ms/1000:undefined,evidenceAge:p.max_evidence_age_ms?p.max_evidence_age_ms/1000:undefined,accuracy:p.max_accuracy_m,attentionProfile:p.attention?.profile??''},!!values.checkInPolicy);}
  if(schema.locationPolicy){const p=values.locationPolicy??{},f=p.geofence??{},location=optionalGroup($('fields'),'locationPolicyEnabled','Authorized location policy',[
   {key:'locationRevision',label:'Location policy revision',type:'number',min:1,max:Number.MAX_SAFE_INTEGER},
   {key:'locationNoticeRevision',label:'Location notice revision',type:'number',min:1,max:Number.MAX_SAFE_INTEGER},

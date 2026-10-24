@@ -112,7 +112,8 @@ class GuardAccountDepartureTest {
   ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->scenario.onActivity{a->
    val old=present(a,f);val file=File(context.cacheDir,"departure-output-${UUID.randomUUID()}.jpg");val bytes=byteArrayOf(1,2,3,4);file.writeBytes(bytes)
    val type=GuardAccountActivity::class.java.declaredClasses.single{it.simpleName=="PendingPhoto"}
-   val pending=type.getDeclaredConstructor(File::class.java,GrantBinding::class.java,VerifiedShiftGrant::class.java,ServerTimeAnchor::class.java,AuthorizedCheckInEvidence::class.java).apply{isAccessible=true}.newInstance(file,f.binding,value(a,"captureGrant"),value(a,"captureAnchor"),null)
+   val originalOwner=ConnectedDispatchOwner(f.config.uploadBinding(),f.config.deviceId,f.owner.subject,f.scope)
+   val pending=type.getDeclaredConstructor(File::class.java,GrantBinding::class.java,VerifiedShiftGrant::class.java,ServerTimeAnchor::class.java,AuthorizedCheckInEvidence::class.java,ConnectedDispatchOwner::class.java).apply{isAccessible=true}.newInstance(file,f.binding,value(a,"captureGrant"),value(a,"captureAnchor"),null,originalOwner)
    try{
     field(a,"pendingPhoto",pending);instrumentation.callActivityOnUserLeaving(a)
     assertLocked(a,old);assertSame(pending,value(a,"pendingPhoto"));assertArrayEquals(bytes,file.readBytes())

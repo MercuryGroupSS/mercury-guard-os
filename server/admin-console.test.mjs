@@ -31,6 +31,18 @@ test('assignment policy forms reject ambiguous checkpoint IDs and inconsistent e
  assert.throws(()=>buildPayload('ops_binding.approve',{...v,evidenceAge:'121'}),/freshness/);assert.throws(()=>buildPayload('ops_binding.approve',{...v,interval:'1'}),/window/);
  assert.equal(valuesForRow('ops_bindings',{body:p,revision:3}).revision,4);
 });
+test('check-in attention is explicitly selected, leaves approved cadence unchanged and survives exact reviewed retry',async()=>{
+ const values={opsShiftId:'synthetic-ops',guardId:'synthetic-guard',vendorId:'synthetic-company',siteId:'synthetic-site',authSubject:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',revision:'3',active:'true',policyEnabled:'on',policyRevision:'4',interval:'15',window:'120',evidenceAge:'30',accuracy:'50'};
+ const legacy=await buildReviewedPayload('ops_binding.approve',values);assert.equal(JSON.stringify(legacy.checkInPolicy),'{"revision":4,"interval_ms":900000,"window_ms":120000,"max_evidence_age_ms":30000,"max_accuracy_m":50}');
+ assert.deepEqual((await buildReviewedPayload('ops_binding.approve',{...values,attentionProfile:''})).checkInPolicy,legacy.checkInPolicy);
+ const payload=await buildReviewedPayload('ops_binding.approve',{...values,attentionProfile:'calm_progressive_v1'}),profile={version:1,profile:'calm_progressive_v1'};
+ assert.deepEqual(payload.checkInPolicy,{...legacy.checkInPolicy,attention:profile});
+ const pending=new PendingChange({owner:'operator',action:'ops_binding.approve',payload,reason:'Explicitly approved calm progressive reminders within this response window',requestId:'attention-request'}),original=pending.body;
+ payload.checkInPolicy.attention.profile='mutated';assert.equal(pending.body,original);assert.deepEqual(pending.request('operator').payload.checkInPolicy.attention,profile);assert.throws(()=>pending.request('another-operator'));
+ const restored=valuesForRow('ops_bindings',{body:pending.request('operator').payload,revision:3});assert.equal(restored.revision,4);assert.deepEqual(restored.checkInPolicy.attention,profile);
+ for(const attentionProfile of ['unknown','true','CALM_PROGRESSIVE_V1',null])await assert.rejects(buildReviewedPayload('ops_binding.approve',{...values,attentionProfile}),/reminder|attention/);
+ const disabled=await buildReviewedPayload('ops_binding.approve',{...values,policyEnabled:undefined,attentionProfile:'calm_progressive_v1'});assert.equal(Object.hasOwn(disabled,'checkInPolicy'),false);
+});
 test('optional patrol rounds preserve legacy omission, reject ambiguous authority and stay immutable through audited review',()=>{
  const values={opsShiftId:'ops-1',guardId:'guard-1',vendorId:'company-1',siteId:'site-1',authSubject:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',revision:'3',active:'true',routeEnabled:'on',routeId:'route-1',routeRevision:'2',checkpoints:'entrance | Main entrance\nperimeter | Perimeter'};
  assert.equal('rounds' in buildPayload('ops_binding.approve',values).patrolRoute,false);assert.equal('rounds' in buildPayload('ops_binding.approve',{...values,rounds:' \n '}).patrolRoute,false);

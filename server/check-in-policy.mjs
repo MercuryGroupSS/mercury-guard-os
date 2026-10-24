@@ -1,12 +1,19 @@
 import {photoMetadata} from './photo-metadata.mjs';
 const integer=(v,min,max)=>Number.isSafeInteger(v)&&v>=min&&v<=max;
+// An explicitly approved presentation profile; it grants no evidence or deadline authority.
+export function checkInAttention(value){
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join()!=='profile,version'||value.version!==1||value.profile!=='calm_progressive_v1')throw Error('Invalid check-in attention profile');
+ return {version:1,profile:'calm_progressive_v1'};
+}
 // Cadence is an explicit administrator assignment policy, never a handset default.
 export function checkInPolicy(value,startsAt,endsAt){
  if(!value||!integer(startsAt,1,Number.MAX_SAFE_INTEGER)||!integer(endsAt,startsAt+1,Number.MAX_SAFE_INTEGER)||
   !integer(value.revision,1,Number.MAX_SAFE_INTEGER)||!integer(value.interval_ms,60000,86400000)||
   !integer(value.window_ms,1000,value.interval_ms)||!integer(value.max_evidence_age_ms,1000,Math.min(300000,value.window_ms))||
   !Number.isFinite(value.max_accuracy_m)||value.max_accuracy_m<=0||value.max_accuracy_m>1000||Math.ceil((endsAt-startsAt)/value.interval_ms)>10000)throw Error('Invalid check-in policy');
- return {revision:value.revision,starts_at:startsAt,ends_at:endsAt,interval_ms:value.interval_ms,window_ms:value.window_ms,max_evidence_age_ms:value.max_evidence_age_ms,max_accuracy_m:value.max_accuracy_m};
+ const policy={revision:value.revision,starts_at:startsAt,ends_at:endsAt,interval_ms:value.interval_ms,window_ms:value.window_ms,max_evidence_age_ms:value.max_evidence_age_ms,max_accuracy_m:value.max_accuracy_m};
+ if(Object.hasOwn(value,'attention'))policy.attention=checkInAttention(value.attention);
+ return policy;
 }
 export function validateCheckIn(policy,event,photo,scope){
  if(!policy)throw Error('Check-in schedule unavailable');

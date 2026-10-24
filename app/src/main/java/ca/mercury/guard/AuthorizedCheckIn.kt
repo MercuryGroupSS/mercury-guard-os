@@ -3,7 +3,10 @@ package ca.mercury.guard
 import org.json.JSONObject
 
 /** Trusted service schedule; local observations are not biometric or location attestation. */
-data class AuthorizedCheckInPolicy private constructor(val revision:Long,val startsAt:Long,val endsAt:Long,val interval:Long,val window:Long,val maxAge:Long,val maxAccuracy:Double){
+data class AuthorizedCheckInPolicy private constructor(val revision:Long,val startsAt:Long,val endsAt:Long,val interval:Long,val window:Long,val maxAge:Long,val maxAccuracy:Double,val attention:CheckInAttentionPolicy?=null){
+ /** Stable local snapshot; the original schedule and optional preset remain unchanged. */
+ internal fun json()=JSONObject().put("revision",revision).put("starts_at",startsAt).put("ends_at",endsAt).put("interval_ms",interval)
+  .put("window_ms",window).put("max_evidence_age_ms",maxAge).put("max_accuracy_m",maxAccuracy).also{j->attention?.let{j.put("attention",it.json())}}
  fun slotAt(at:Long):Long {require(at>=startsAt && at<endsAt);return (at-startsAt)/interval}
  fun validate(slot:Long,biometricAt:Long,location:JSONObject,photoAt:Long,at:Long){
   require(slot>=0)
@@ -16,7 +19,8 @@ data class AuthorizedCheckInPolicy private constructor(val revision:Long,val sta
  companion object {
   private fun integer(j:JSONObject,k:String):Long {val v=j.get(k);require(v is Int || v is Long);return (v as Number).toLong()}
   fun parse(j:JSONObject):AuthorizedCheckInPolicy {
-   val p=AuthorizedCheckInPolicy(integer(j,"revision"),integer(j,"starts_at"),integer(j,"ends_at"),integer(j,"interval_ms"),integer(j,"window_ms"),integer(j,"max_evidence_age_ms"),j.getDouble("max_accuracy_m"))
+   val attention=if(j.has("attention"))CheckInAttentionPolicy.parse(j.get("attention") as? JSONObject?:error("Approved attention object required"))else null
+   val p=AuthorizedCheckInPolicy(integer(j,"revision"),integer(j,"starts_at"),integer(j,"ends_at"),integer(j,"interval_ms"),integer(j,"window_ms"),integer(j,"max_evidence_age_ms"),j.getDouble("max_accuracy_m"),attention)
    require(p.revision>0 && p.startsAt>0 && p.endsAt>p.startsAt && p.interval in 60000..86400000 && p.window in 1000..p.interval && p.maxAge in 1000..minOf(300000,p.window) && p.maxAccuracy>0 && p.maxAccuracy<=1000)
    return p
   }
