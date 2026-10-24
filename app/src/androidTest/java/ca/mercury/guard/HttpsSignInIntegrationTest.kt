@@ -93,8 +93,13 @@ class HttpsSignInIntegrationTest {
    fixture(metadata,"/test/enroll",JSONObject().put("public_key_spki",public.publicKeySpki));click("Continue to sign-in");waitFor("Guard sign-in screen absent"){hasText("GUARD SIGN-IN")};assertFalse(hasCredentials())
    stage="biometric_button";click("Verify with biometrics");stage="biometric_prompt_initial";waitFor("Platform biometric prompt absent"){systemPrompt()}
    stage="biometric_cancel_control"
-   val cancel=instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText("Cancel")?.firstOrNull{it.packageName?.toString()=="com.android.systemui"&&it.isClickable}?:error("System cancel control absent")
-   check(cancel.performAction(AccessibilityNodeInfo.ACTION_CLICK));stage="biometric_cancel_result";waitFor("Cancel did not dismiss platform gate"){!systemPrompt()};assertFalse("Cancel revealed credentials",hasCredentials());assertTrue(hasText("GUARD SIGN-IN"))
+   // The prompt title can be accessible before its real negative button is
+   // laid out. Wait for that SystemUI control and its accepted click together.
+   waitFor("Visible clickable system cancel control absent"){
+    val cancel=instrumentation.uiAutomation.rootInActiveWindow?.findAccessibilityNodeInfosByText("Cancel")?.firstOrNull{it.packageName?.toString()=="com.android.systemui"&&it.text?.toString()=="Cancel"&&it.isVisibleToUser&&it.isEnabled&&it.isClickable}
+    cancel?.performAction(AccessibilityNodeInfo.ACTION_CLICK)==true
+   }
+   stage="biometric_cancel_result";waitFor("Cancel did not dismiss platform gate"){!systemPrompt()};assertFalse("Cancel revealed credentials",hasCredentials());assertTrue(hasText("GUARD SIGN-IN"))
    stage="unknown_fingerprint";click("Verify with biometrics");waitFor("Platform biometric retry absent"){systemPrompt()};hostAction("unknown_finger");SystemClock.sleep(400);assertTrue("Unknown finger dismissed the gate",systemPrompt());assertFalse("Unknown finger revealed credentials",hasCredentials())
    stage="strong_fingerprint_a";hostAction("valid_finger_a");waitFor("Enrolled fingerprint did not unlock form"){hasText("YOUR GUARD ACCOUNT")};assertTrue(hasCredentials())
    stage="company_vendor_denied";login(metadata.getString("vendor_id"),metadata.getString("password"));waitFor("Actual company vendor login did not fail"){hasText("Sign-in failed or is temporarily unavailable.",true)};assertNull(UploadAuthorityStore(context).load(config,public.thumbprint));assertEquals(1,fixture(metadata,"/test/stats").getInt("vendor_login_denied"))
