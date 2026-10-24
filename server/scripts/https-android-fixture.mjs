@@ -56,7 +56,9 @@ const tls=httpsServer({key:readFileSync(key),cert:readFileSync(cert)},async(req,
   }
   if(req.url==='/test/receipts'){res.setHeader('content-type','application/json');res.end(JSON.stringify({count:store.count(),media_count:store.db.prepare('SELECT count(*) AS n FROM media').get().n}));return;}
   const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>(req.url.startsWith('/v1/evidence/')?20*1024*1024:360000))throw Error('large');chunks.push(chunk);}
-  const response=await fetch(origin+req.url,{method:req.method,headers:{'content-type':req.headers['content-type']??'application/json',authorization:req.headers.authorization??''},...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})});
+  const headers={'content-type':req.headers['content-type']??'application/json',authorization:req.headers.authorization??''};
+  for(const name of ['x-mercury-chunk-sha256','x-mercury-chunk-signature'])if(typeof req.headers[name]==='string')headers[name]=req.headers[name];
+  const response=await fetch(origin+req.url,{method:req.method,headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})});
   res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()));
  }catch{res.writeHead(400);res.end('{}');}
 });
