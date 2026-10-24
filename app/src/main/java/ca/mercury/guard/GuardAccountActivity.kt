@@ -524,14 +524,8 @@ class GuardAccountActivity : Activity() {
   val now=SystemClock.elapsedRealtime();check(now>=anchor.elapsedMillis&&anchor.bootCount==Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1))
   return Math.addExact(anchor.epochMillis,now-anchor.elapsedMillis)
  }
- private fun recentEscalationLocation(at:Long):EscalationLocation? {
-  if(!DeviceReadiness(this).preciseLocationGranted())return null
-  return try{
-   val manager=getSystemService(LOCATION_SERVICE) as android.location.LocationManager
-   val fix=manager.getLastKnownLocation(android.location.LocationManager.GPS_PROVIDER)?:return null
-   EscalationLocationCapture.fromLocation(fix,at,SystemClock.elapsedRealtimeNanos())
-  }catch(_:Exception){null}
- }
+ private fun recentEscalationLocation(at:Long):EscalationLocation? = EscalationLocationCapture.latest(this,at)
+
  private fun escalationScreen(item:JSONObject?=null){
   val scope=try{escalationScope()}catch(_:Exception){unverifiedEscalation();return}
   val assignment=try{if(item==null)null else{check(item.getString("guardId")==scope.guardId&&item.getString("vendorId")==scope.vendorId);item.getString("assignmentId")}}catch(_:Exception){status.text="Assignment context could not be verified. Refresh assignments before opening escalation.";return}

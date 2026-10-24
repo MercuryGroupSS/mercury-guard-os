@@ -1,4 +1,6 @@
-# Mercury One Preview v0.32
+# Mercury One Preview v0.32 — clean CI failed
+
+This immutable checkpoint was not accepted. GitHub Android run 40042408909 failed fresh default lint with MissingPermission at the optional last-known-GPS read. Prior shared-directory local lint did not establish a clean acceptance result. The runtime path already caught provider exceptions, but its indirect permission helper was not visible to lint. The explicit permission/revocation correction and new clean default/preview checks are recorded in [v0.33](build-v0.33.md). The v0.32 APK and exact source archive remain preserved; the verification below describes its local evidence only.
 
 This build adds explicit trusted patrol-round selection and a separate authenticated operational escalation path. Checkpoints remain selectable in any order within each approved round. Escalation intent is saved encrypted before transmission, retains exact original bytes and individual Auth subject/configuration/device scope, and can exist without an assignment. Uncertain delivery is reconciled through original-device status. Local save, service receipt and explicit operator acknowledgement are separate states. Before sign-in, the route is unverified and cannot submit or import demo records; the generic dialer uses ACTION_DIAL with no supplied number or automatic call.
 
