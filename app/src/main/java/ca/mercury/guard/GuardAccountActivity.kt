@@ -98,8 +98,10 @@ class GuardAccountActivity : Activity() {
   root.addView(text("MERCURY ONE",14f).apply{setTextColor(cyan)})
   root.addView(text(title,26f).apply{isAccessibilityHeading=true})
   status=text(detail,16f).apply{accessibilityLiveRegion=View.ACCESSIBILITY_LIVE_REGION_POLITE};root.addView(status)
-  scroll.addView(root);setContentView(scroll)
-  scroll.setOnApplyWindowInsetsListener{v,i->v.setPadding(i.systemWindowInsetLeft,i.systemWindowInsetTop,i.systemWindowInsetRight,i.systemWindowInsetBottom);i};scroll.requestApplyInsets()
+  // Insets must reduce the measured viewport, not clip its nominal scrolling area.
+  val viewport=FrameLayout(this).apply{setBackgroundColor(Color.rgb(244,248,250));addView(scroll,FrameLayout.LayoutParams(-1,-1))}
+  scroll.addView(root);setContentView(viewport)
+  viewport.setOnApplyWindowInsetsListener{v,i->v.setPadding(i.systemWindowInsetLeft,i.systemWindowInsetTop,i.systemWindowInsetRight,i.systemWindowInsetBottom);i};viewport.requestApplyInsets()
  }
  private fun button(title:String,allowWhileBusy:Boolean=false,action:()->Unit):Button=Button(this).apply{text=title;isAllCaps=false;textSize=16f;minHeight=dp(56);setOnClickListener{if(allowWhileBusy||!busy){persistIncidentDraft();if(!incidentDraftDirty||allowWhileBusy)action()}}}.also{root.addView(it,LinearLayout.LayoutParams(-1,-2))}
  private fun cancelPatrolPoint(){val current=patrolPointLocation;patrolPointLocation=null;current?.cancel();if(current!=null)busy=false}
