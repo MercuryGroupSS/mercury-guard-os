@@ -26,6 +26,7 @@
    <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/shared_paths"/>
   </provider>
   <service android:name=".PatrolService" android:exported="false" android:foregroundServiceType="location"/>
+  <service android:name=".ConnectedLocationService" android:exported="false" android:foregroundServiceType="location"/>
   <service android:name=".UploadJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="false"/>
   <receiver android:name=".MercuryDeviceAdmin" android:permission="android.permission.BIND_DEVICE_ADMIN" android:exported="true">
    <meta-data android:name="android.app.device_admin" android:resource="@xml/device_admin"/>

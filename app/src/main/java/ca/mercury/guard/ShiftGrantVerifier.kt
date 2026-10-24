@@ -13,10 +13,11 @@ data class ServerTimeAnchor(val epochMillis: Long, val elapsedMillis: Long, val 
 
 class VerifiedShiftGrant internal constructor(
  val grantId: String, private val binding: GrantBinding, private val actions: Set<String>,
- private val acceptedElapsed: Long, private val expiresElapsed: Long, private val bootCount: Int
+ private val acceptedElapsed: Long, internal val expiresElapsed: Long, private val bootCount: Int,
+ val location:AuthorizedLocationConsent?=null, internal val notBeforeEpoch:Long=0,internal val expiresEpoch:Long=0
 ) {
  fun permits(action: String, currentBinding: GrantBinding, elapsedMillis: Long, currentBoot: Int): Boolean =
-  currentBinding == binding && action in actions && currentBoot >= 0 && currentBoot == bootCount &&
+  currentBinding == binding && action in actions && (action!="location"||location!=null) && currentBoot >= 0 && currentBoot == bootCount &&
    elapsedMillis >= acceptedElapsed && elapsedMillis < expiresElapsed
 }
 
@@ -52,7 +53,7 @@ class ShiftGrantVerifier(private val issuer: String, private val audience: Strin
   require(raw.toByteArray(Charsets.UTF_8).contentEquals(bytes))
   val claims = JSONObject(raw)
   // Fixed compact encoding also rejects duplicate claims, ignored trailing text and coercions.
-  require(claims.toString() == raw && claims.keys().asSequence().toSet() == fields)
+  require(claims.toString() == raw && claims.keys().asSequence().toSet() in setOf(fields,fields+"location"))
   fun text(name: String): String = (claims.get(name) as? String ?: error("String required")).also { require(it.isNotBlank() && it.length <= 256) }
   fun number(name: String): Long {
    val value = claims.get(name)
@@ -71,6 +72,9 @@ class ShiftGrantVerifier(private val issuer: String, private val audience: Strin
   require(actions.length() in 1..supportedActions.size)
   val allowed = (0 until actions.length()).map { actions.get(it) as? String ?: error("Action required") }.toSet()
   require(allowed.size == actions.length() && supportedActions.containsAll(allowed))
-  return VerifiedShiftGrant(text("grant_id"), binding, allowed, elapsedMillis, Math.addExact(elapsedMillis, Math.subtractExact(expiry, now)), bootCount)
+  val location=if(claims.has("location"))AuthorizedLocationConsent.parse(claims.getJSONObject("location"))else null
+  require((location!=null)==("location" in allowed)||location==null)
+  if(location!=null)require(expiry-issued<=location.policy.maxLease)
+  return VerifiedShiftGrant(text("grant_id"), binding, allowed, elapsedMillis, Math.addExact(elapsedMillis, Math.subtractExact(expiry, now)), bootCount,location,start,expiry)
  }
 }

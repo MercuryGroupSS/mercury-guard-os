@@ -39,6 +39,11 @@ class GuardAccountActivity : Activity() {
  private var pendingPhoto:PendingPhoto?=null
  private var locationPing:LocationPing?=null
  private var password: EditText?=null
+ private var incidentDraftEditor:EditText?=null
+ private var incidentDraftScope:ConnectedIncidentDraftScope?=null
+ private var incidentDraftDirty=false
+ private var incidentDraftSuppress=false
+ private var visibleForLocation=false
  private lateinit var root: LinearLayout
  private lateinit var status: TextView
  private val cyan=Color.rgb(0,104,125)
@@ -53,11 +58,12 @@ class GuardAccountActivity : Activity() {
   if(intent.getBooleanExtra("open_escalation",false)){intent.removeExtra("open_escalation");unverifiedEscalation()}
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
- override fun onResume(){super.onResume();if(stopped){stopped=false;startScreen()};loginParticles?.startMotion()}
- override fun onPause(){loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
+ override fun onResume(){super.onResume();visibleForLocation=true;if(stopped){stopped=false;startScreen()};loginParticles?.startMotion()}
+ override fun onPause(){visibleForLocation=false;persistIncidentDraft();loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
  override fun onDestroy(){loginParticles?.stopMotion();super.onDestroy()}
- private fun clearSession(){accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ private fun clearSession(){persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun screen(title:String,detail:String){
+  persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;incidentDraftDirty=false
   loginParticles?.stopMotion();loginParticles=null
   password=null
   val scroll=ScrollView(this).apply{isFillViewport=true;setBackgroundColor(Color.rgb(244,248,250))}
@@ -69,7 +75,7 @@ class GuardAccountActivity : Activity() {
   scroll.addView(root);setContentView(scroll)
   scroll.setOnApplyWindowInsetsListener{v,i->v.setPadding(i.systemWindowInsetLeft,i.systemWindowInsetTop,i.systemWindowInsetRight,i.systemWindowInsetBottom);i};scroll.requestApplyInsets()
  }
- private fun button(title:String,allowWhileBusy:Boolean=false,action:()->Unit){root.addView(Button(this).apply{text=title;isAllCaps=false;textSize=16f;minHeight=dp(56);setOnClickListener{if(allowWhileBusy||!busy)action()}},LinearLayout.LayoutParams(-1,-2))}
+ private fun button(title:String,allowWhileBusy:Boolean=false,action:()->Unit){root.addView(Button(this).apply{text=title;isAllCaps=false;textSize=16f;minHeight=dp(56);setOnClickListener{if(allowWhileBusy||!busy){persistIncidentDraft();if(!incidentDraftDirty||allowWhileBusy)action()}}},LinearLayout.LayoutParams(-1,-2))}
  private fun startScreen(){
   clearSession()
   val c=config
@@ -164,9 +170,11 @@ class GuardAccountActivity : Activity() {
      val epoch=a.getLong("server_time_ms");val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1);check(epoch>0&&receivedElapsed>0&&boot>=0)
      accountIdentity=AccountIdentity(subject,guard,vendor);accountAnchor=ServerTimeAnchor(epoch,receivedElapsed,boot)
      UploadCoordinator(this).authorize(c,active,guard,vendor,subject)
+     val activeIds=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&it.optJSONObject("shift_state")?.optString("state")=="active"}.map{it.getString("assignmentId")}.toSet()
+     ConnectedLocationRuntime.stopIfUnavailable(this,subject,activeIds)
      val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
-     button("Escalate"){escalationScreen()};button("My escalation requests"){escalationList()};button("Send my queued records"){sendScoped(guard)}
+     button("Escalate"){escalationScreen()};button("My escalation requests"){escalationList()};button("My location consents"){locationHistory()};button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
       val item=rows.getJSONObject(i);check(item.getString("guardId")==guard&&item.getString("vendorId")==vendor)
       if(a.has("server_time_ms")){item.put("status_server_time_ms",a.getLong("server_time_ms"));item.put("status_elapsed_ms",SystemClock.elapsedRealtime())}
@@ -210,13 +218,14 @@ class GuardAccountActivity : Activity() {
    }
   }catch(_:Exception){status.text="Shift status could not be opened. Refresh assignments; saved confirmation requests remain preserved."}
   button("Escalate"){escalationScreen(if(item.optBoolean("assignmentActive",true))item else null)}
-  button("My escalation requests"){escalationList()}
+  button("My escalation requests"){escalationList()};button("Shift location and consent"){locationScreen(item)}
   button("Send my queued records"){sendScoped(scope.binding.guardId)}
   button("Refresh assignments"){loadAssignments()};button("Sign out",true){signOut()}
  }
  private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
   if(busy)return
   val c=config?:return;val active=session?:return;val stamp=generation
+  if(action=="end")ConnectedLocationRuntime.stop(this,"Shift end requested")
   busy=true;captureGrant=null;captureBinding=null;captureAnchor=null
   status.text="Confirming shift $action with the service…"
   Thread{
@@ -270,9 +279,26 @@ class GuardAccountActivity : Activity() {
  }
  private fun captureScreen(item:JSONObject){
   screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nAuthorized capture · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
-  button("Escalate"){escalationScreen(item)};button("My escalation requests"){escalationList()}
+  button("Escalate"){escalationScreen(item)};button("My escalation requests"){escalationList()};button("Shift location and consent"){locationScreen(item)}
+  val draftScope=try{connectedDraftScope(item)}catch(_:Exception){status.text="Sign in and refresh this assignment before recovering its incident draft.";return}
+  val retainedDraft=try{ConnectedIncidentDraftStore(this).use{it.read(draftScope)}}catch(_:Exception){status.text="Encrypted incident draft unavailable. Existing text is preserved; do not clear app data.";return}
   val note=EditText(this).apply{hint="Describe the incident";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;minLines=3;isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(8000))}
+  note.setText(retainedDraft?:"");incidentDraftEditor=note;incidentDraftScope=draftScope;incidentDraftDirty=false
+  note.addTextChangedListener(object:android.text.TextWatcher {
+   override fun beforeTextChanged(s:CharSequence?,start:Int,count:Int,after:Int){}
+   override fun onTextChanged(s:CharSequence?,start:Int,before:Int,count:Int){}
+   override fun afterTextChanged(s:android.text.Editable?){if(!incidentDraftSuppress){incidentDraftDirty=true;persistIncidentDraft()}}
+  })
   root.addView(note)
+  if(!retainedDraft.isNullOrEmpty())root.addView(TextView(this).apply{text="Recovered encrypted unfinished incident for this account and assignment. It has not been submitted."})
+  button("Discard unfinished incident"){
+   AlertDialog.Builder(this).setTitle("Discard unfinished incident?").setMessage("Discard only the unfinished text shown here. Recorded incidents remain unchanged.").setNegativeButton("Keep draft",null).setPositiveButton("Discard"){_,_->
+    try{
+     val cleared=ConnectedIncidentDraftStore(this).use{it.clear(draftScope,note.text.toString())}
+     if(cleared){incidentDraftSuppress=true;note.text.clear();incidentDraftSuppress=false;incidentDraftDirty=false;status.text="Unfinished incident discarded."}else status.text="A newer unfinished draft is retained. Reopen this assignment to recover it."
+    }catch(_:Exception){status.text="Draft could not be discarded; encrypted text remains preserved."}
+   }.show()
+  }
   button("Save authorized incident"){
    try{
     check(note.text.toString().isNotBlank())
@@ -280,14 +306,16 @@ class GuardAccountActivity : Activity() {
     val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
     val db=ScopedEventStore(this)
     try{db.capture("incident",JSONObject().put("description",note.text.toString()),binding,grant,DeviceIdentity(this),observed)}finally{db.close()}
-    note.text.clear();UploadCoordinator(this).request();status.text="Incident saved encrypted on this phone. Automatic delivery is requested; a service receipt is still required."
+    val cleared=try{ConnectedIncidentDraftStore(this).use{it.clear(draftScope,note.text.toString())}}catch(_:Exception){false}
+    incidentDraftSuppress=true;note.text.clear();incidentDraftSuppress=false;incidentDraftDirty=false
+    UploadCoordinator(this).request();status.text=(if(!cleared)"Unfinished text remains preserved separately; review before submitting again. "else"")+"Incident saved encrypted on this phone. Automatic delivery is requested; a service receipt is still required."
    }catch(_:Exception){status.text="Incident not saved. Enter a description and refresh authorization if it has expired. Your text remains here."}
   }
-  button("Capture authorized photo"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening the camera." else confirmPhoto()}
-  button("Assignment messages"){if(note.text.toString().isNotBlank())status.text="Save your incident description before opening messages." else loadDispatch(item,true)}
+  button("Capture authorized photo"){confirmPhoto()}
+  button("Assignment messages"){loadDispatch(item,true)}
   if(item.has("checkInPolicy"))button("Check-in reminder settings"){reminderSettings(item)}
   if(item.has("checkInStatus"))button("Review check-in delivery"){checkInStatusScreen(item)}
-  if(item.has("checkInPolicy"))button("Complete scheduled check-in"){if(note.text.toString().isNotBlank())status.text="Save your incident description before starting a check-in." else beginCheckIn(item)}
+  if(item.has("checkInPolicy"))button("Complete scheduled check-in"){beginCheckIn(item)}
   if(item.has("patrolRoute"))button("Open assigned patrol"){patrolScreen(item)}
   button("Send queued records"){captureBinding?.let{sendScoped(it.guardId)}}
   button("Refresh authorization"){verifyAssignment(item)}
@@ -503,6 +531,112 @@ class GuardAccountActivity : Activity() {
    revokeUriPermission(uri,Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION);pending.file.delete()
   }
   startScreen();Toast.makeText(this,message,Toast.LENGTH_LONG).show()
+ }
+ private fun locationScope(item:JSONObject):LocationConsentScope {
+  val account=escalationScope()
+  check(item.getString("guardId")==account.guardId&&item.getString("vendorId")==account.vendorId&&item.getString("deviceThumbprint")==account.thumbprint)
+  return LocationConsentScope(account,GrantBinding(account.guardId,item.getString("siteId"),item.getString("assignmentId"),account.thumbprint,item.getLong("revocationVersion")))
+ }
+ private fun locationHistory(){
+  val account=try{escalationScope()}catch(_:Exception){startScreen();return}
+  screen("MY LOCATION CONSENTS","Collection starts only from a visible app action with current shift authority. Withdrawal stops collection and blocks further queued upload for this and earlier matching account, assignment and policy consents; existing encrypted records remain preserved. A later explicit consent can authorize a new collection.")
+  try{
+   val rows=LocationConsentStore(this).use{it.list(account)}
+   if(rows.isEmpty())root.addView(TextView(this).apply{text="No retained location consents for this individual account and phone configuration."})
+   for(record in rows)showConsentControls(record)
+  }catch(_:Exception){status.text="Encrypted consent history unavailable. Collection cannot be started; do not clear app data."}
+  root.addView(TextView(this).apply{text=ConnectedLocationRuntime.description})
+  button("Refresh local status"){locationHistory()};button("Back to assignments"){loadAssignments()};button("Sign out",true){signOut()}
+ }
+ private fun showConsentControls(record:LocationConsentRecord){
+  root.addView(TextView(this).apply{text="Assignment ${record.scope.binding.assignmentId} · policy ${record.policy.revision} · "+when{record.withdrawalReceipt!=null->"withdrawal confirmed by service";record.withdrawn->"withdrawn on this phone; service confirmation pending";record.receipt!=null->"consent recorded; collection requires an explicit visible start";else->"consent request retained; service receipt pending"};textSize=15f})
+  button(if(record.withdrawn)"Retry original withdrawal"else"Withdraw consent and stop sharing",true){withdrawLocation(record)}
+ }
+ private fun locationScreen(item:JSONObject){
+  val scope=try{locationScope(item)}catch(_:Exception){status.text="Refresh the individually verified assignment before reviewing location consent.";return}
+  val policy=try{AuthorizedLocationPolicy.parse(item.getString("locationPolicyPayload"),item.getString("locationPolicySha256"))}catch(_:Exception){null}
+  screen("SHIFT LOCATION AND CONSENT",if(policy==null)"No approved location policy is available. Connected collection is disabled; no sampling cadence or notice is assumed."else"Approved policy ${policy.revision} · notice ${policy.noticeRevision}. Precise device-reported fixes do not prove physical presence. Android can delay or stop collection and delivery.")
+  root.addView(TextView(this).apply{text=ConnectedLocationRuntime.description;textSize=15f})
+  if(policy!=null){
+   root.addView(TextView(this).apply{text=policy.notice;textSize=17f;setTextIsSelectable(true)})
+   root.addView(TextView(this).apply{text="Approved sample interval: ${policy.interval} ms · minimum movement: ${policy.minDistance} m\nMaximum fix age: ${policy.maxAge} ms · maximum accuracy radius: ${policy.maxAccuracy} m\nMaximum capture lease: ${policy.maxLease} ms\n"+(if(policy.geofence==null)"No approved geofence geometry."else"Approved circle ${policy.geofence.getString("id")} · revision ${policy.geofence.getLong("revision")}. No automatic geofence alert is generated.")})
+   val agree=CheckBox(this).apply{text="I have reviewed this exact notice and consent to this policy for this shift.";isChecked=false};root.addView(agree)
+   button("Consent and start visible shift location"){
+    if(!agree.isChecked){status.text="Review the approved notice and explicitly choose consent before starting.";return@button}
+    if(!visibleForLocation){status.text="Return to the visible app before starting location.";return@button}
+    val ready=DeviceReadiness(this)
+    val nm=getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+    if(!ready.preciseLocationGranted()||!ready.gpsEnabled()||!ready.notificationPermissionGranted()||!nm.areNotificationsEnabled()||nm.getNotificationChannel(ConnectedLocationService.CHANNEL)?.importance==android.app.NotificationManager.IMPORTANCE_NONE){status.text="Enable precise location, device GPS and visible notifications, then review the notice and start again.";return@button}
+    try{val record=LocationConsentStore(this).use{it.prepare(scope,policy)};sendLocationConsent(record,item)}catch(_:Exception){status.text="Consent could not be retained. No collection was started; encrypted originals remain preserved."}
+   }
+   button("Request precise location permission"){
+    if(checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION,android.Manifest.permission.ACCESS_COARSE_LOCATION),406)
+    else status.text="Precise permission is granted; it does not itself start collection or establish a fresh fix."
+   }
+   button("Request visible notifications"){
+    if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)!=android.content.pm.PackageManager.PERMISSION_GRANTED)requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),407)
+    else status.text="Notification permission is granted. Check Android notification settings if the location channel is blocked."
+   }
+  }
+  try{for(record in LocationConsentStore(this).use{it.list(scope.account)}.filter{it.scope.binding.assignmentId==scope.binding.assignmentId})showConsentControls(record)}catch(_:Exception){status.text="Consent history unavailable; no collection started."}
+  button("Refresh consent and policy"){loadAssignments()};button("My location consents"){locationHistory()};button("Back to assignments"){loadAssignments()};button("Sign out",true){signOut()}
+ }
+ private fun withdrawLocation(record:LocationConsentRecord){
+  try{
+   check(escalationScope()==record.scope.account)
+   generation++;busy=false;EscalationForeground.cancel()
+   if(ConnectedLocationRuntime.activeConsent(record.id))ConnectedLocationRuntime.stop(this,"Consent withdrawn locally")
+   LocationConsentStore(this).use{it.withdraw(record.id,record.scope)}
+   UploadRuntime.cancel();UploadCoordinator(this).request();locationHistory()
+   status.text="Consent withdrawn on this phone. Collection is stopped for this consent and further queued upload for this and earlier matching account, assignment and policy consents is blocked; an earlier in-flight request may already have been accepted. Service withdrawal confirmation may remain pending while offline."
+  }catch(_:Exception){ConnectedLocationRuntime.stop(this,"Withdrawal storage unavailable");UploadCoordinator(this).stop(session,config);status.text="Collection and automatic delivery stopped. Withdrawal could not be retained; sign in again to retry. Original encrypted records remain preserved."}
+ }
+ private fun sendLocationConsent(record:LocationConsentRecord,item:JSONObject){
+  val c=config?:return;val stamp=generation
+  val authority=try{
+   check(escalationScope()==record.scope.account)
+   UploadAuthorityStore(this).load(c,record.scope.account.thumbprint)?.also{check(it.subject==record.scope.account.subject&&it.guardId==record.scope.account.guardId&&it.vendorId==record.scope.account.vendorId)}?:error("Sign in again")
+  }catch(_:Exception){status.text="Consent remains retained. Sign in again before authorizing collection.";return}
+  val cancellation=UploadCancellation();EscalationForeground.add(cancellation);busy=true;status.text="Recording exact notice consent and requesting a fresh signed shift lease. Location is not started yet."
+  val timer=Handler(Looper.getMainLooper());val limit=Runnable{cancellation.cancel()};timer.postDelayed(limit,45000)
+  Thread{
+   var verified:VerifiedShiftGrant?=null;var anchor:ServerTimeAnchor?=null
+   try{
+    LocationConsentDelivery(applicationContext,c,authority,null,cancellation).use{it.one(record,"consent")}
+    val client=GuardAccountClient(c.endpoint,null,cancellation);val started=SystemClock.elapsedRealtime();val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1)
+    val response=client.grant(authority.session(),c.deviceId,record.scope.binding.assignmentId,DeviceIdentity(this),c.audience)
+    val received=SystemClock.elapsedRealtime()
+    val time=ServerTimeAnchor(response.getLong("server_time_ms"),started,boot)
+    val grant=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),record.scope.binding,time,SystemClock.elapsedRealtime(),boot)?:error("Signed location lease unavailable")
+    check(grant.location?.id==record.id&&grant.location?.policy?.sha256==record.policy.sha256&&grant.location?.policy?.payload==record.policy.payload)
+    verified=grant;anchor=time.copy(elapsedMillis=received)
+   }catch(_:Exception){}finally{timer.removeCallbacks(limit);EscalationForeground.remove(cancellation)}
+   val lease=verified;val time=anchor
+   runOnUiThread{
+    if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
+    busy=false
+    if(lease==null||time==null){locationScreen(item);status.text="Consent or fresh capture authority is unconfirmed. Nothing was started. Retry after refreshing the same approved policy; the exact request remains retained.";return@runOnUiThread}
+    try{
+     check(visibleForLocation&&escalationScope()==record.scope.account)
+     val original=LocationConsentStore(this).use{it.get(record.id,record.scope)}?:error("Original consent missing")
+     check(original.accepted)
+     val token=ConnectedLocationRuntime.prepare(this,c,original,authority,lease,time)
+     startForegroundService(Intent(this,ConnectedLocationService::class.java).putExtra(ConnectedLocationService.TOKEN,token))
+     locationScreen(item);status.text="Visible location start requested under the exact consent and signed lease. Check the ongoing notification and refresh local status; no physical presence is established."
+    }catch(_:Exception){ConnectedLocationRuntime.stop(this,"Visible start unavailable");locationScreen(item);status.text="Consent is retained but collection did not start. Return to the visible app and check precise permission, GPS and notifications."}
+   }
+  }.start()
+ }
+ private fun connectedDraftScope(item:JSONObject):ConnectedIncidentDraftScope {
+  session?.bearer()?:error("Verified session required")
+  val c=config?:error("Trusted service required");val who=accountIdentity?:error("Individual account required");val b=captureBinding?:error("Verified assignment required")
+  check(who.guardId==b.guardId&&item.getString("guardId")==who.guardId&&item.getString("vendorId")==who.vendorId&&item.getString("siteId")==b.siteId&&item.getString("assignmentId")==b.assignmentId)
+  return ConnectedIncidentDraftScope(c.uploadBinding(),c.deviceId,b.deviceThumbprint,who.subject,who.guardId,who.vendorId,b.siteId,b.assignmentId)
+ }
+ private fun persistIncidentDraft(){
+  if(!incidentDraftDirty||incidentDraftSuppress)return
+  val scope=incidentDraftScope?:return;val editor=incidentDraftEditor?:return
+  try{ConnectedIncidentDraftStore(this).use{it.write(scope,editor.text.toString())};incidentDraftDirty=false}catch(_:Exception){editor.error="Encrypted draft save unavailable. Keep this screen open; previously saved text is preserved."}
  }
  private fun openDialer(){
   try{startActivity(Intent(Intent.ACTION_DIAL,Uri.parse("tel:")))}catch(_:Exception){Toast.makeText(this,"No phone dialer is available on this device. Use your established emergency or dispatch channel.",Toast.LENGTH_LONG).show()}

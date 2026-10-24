@@ -56,8 +56,8 @@ class MercuryOneFlowTest {
   }
  }
  @Test fun scheduledEndDoesNotAutomaticallyStopShift() {
-  val boot = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT,-1)
-  context.getSharedPreferences("mercury_demo",0).edit().putLong("started_elapsed",0).putInt("boot",boot).commit()
+  // Keep readiness prompts independent of emulator uptime; only the scheduled end is past.
+  DemoSession(context).start()
   context.getSharedPreferences("mercury_demo_assignment",0).edit().putLong("end_elapsed",0).commit()
   ActivityScenario.launch(MainActivity::class.java).use { scenario ->
    assertTrue(DemoSession(context).active())

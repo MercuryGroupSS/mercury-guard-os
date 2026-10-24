@@ -35,7 +35,7 @@ class UploadCoordinator(private val context:Context){
   clearLocal();store.authorize(config,session,guard,vendor,subject,identity.thumbprint);request()
   if(previous!=null)logoutInBackground(config,previous)
  }
- private fun clearLocal(){UploadAuthorityStore(context).clear();UploadRuntime.cancel();EscalationForeground.cancel();scheduler.cancel(JOB_ID)}
+ private fun clearLocal(){ConnectedLocationRuntime.stop(context,"Signed out or guard changed");UploadAuthorityStore(context).clear();UploadRuntime.cancel();EscalationForeground.cancel();scheduler.cancel(JOB_ID)}
  fun stop(foreground:GuardAccountClient.Session?=null,trusted:GuardServiceConfig?=null){
   // Copy only an unexpired bearer bound to this exact packaged origin/trust. Local cancellation is immediate.
   var previous:GuardAccountClient.Session?=null
@@ -83,9 +83,10 @@ class UploadJobService:JobService(){
   Thread({
    var retry=false
    try{if(network==null)retry=true else{
+    val consentRetry=LocationConsentDelivery(applicationContext,config,authority,network,task.cancellation).use{it.run()}
     val escalationRetry=EscalationDelivery(applicationContext,config,authority,network,task.cancellation).use{it.run()}
     val ordinaryRetry=NativeUploadPort(applicationContext,config,authority,network,task.cancellation).use{UploadDrain(it){SystemClock.elapsedRealtime()}.run()}
-    retry=escalationRetry||ordinaryRetry
+    retry=consentRetry||escalationRetry||ordinaryRetry
    }}
    catch(_:Exception){retry=store.current(authority,config)&&!task.cancellation.cancelled()}
    main.post{
@@ -130,6 +131,14 @@ internal class NativeUploadPort(private val context:Context,private val config:G
  override fun sendBatch(batch:JSONObject){
   val payload=JSONObject(String(java.util.Base64.getUrlDecoder().decode(batch.getString("payload")),Charsets.UTF_8))
   check(payload.getJSONObject("scope").getString("guard_id")==authority.guardId)
+  try{
+   val original=db.locationUploadScope(authority.guardId,payload.getString("batch_id"))
+   if(original!=null){
+    val (scope,id,hash)=original
+    check(scope.account==EscalationScope(config.uploadBinding(),config.deviceId,authority.thumbprint,authority.subject,authority.guardId,authority.vendorId))
+    check(LocationConsentStore(context).use{it.canUpload(id,scope,hash)}){"Location withdrawal barrier"}
+   }
+  }catch(_:Exception){throw UploadRequestFailure(403)}
   val rows=payload.getJSONArray("events");val ids=(0 until rows.length()).map{rows.getJSONObject(it).getString("event_id")}.toSet()
   val receipt=try{transport.sendPilotBatch(session().bearer(),batch,payload.getString("batch_id"),ids)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}
   db.recordUploadReceipt(authority.guardId,JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))

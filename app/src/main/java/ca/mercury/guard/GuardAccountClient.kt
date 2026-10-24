@@ -65,6 +65,21 @@ class GuardAccountClient(endpoint: String,private val network:android.net.Networ
   val hash=EscalationProtocol.hash(EscalationProtocol.statusPayload(id))
   request("/v1/escalations/status",JSONObject().put("escalation_id",id).put("proof",escalationProof(session,deviceId,identity,expectedAudience,"status",hash)),session)
  }
+ internal fun locationConsent(session:Session,deviceId:String,identity:DeviceIdentity,audience:String,raw:String):JSONObject=possession{
+  require(raw.toByteArray(Charsets.UTF_8).size<=4096);val intent=JSONObject(raw);val operation=intent.getString("action");require(operation in setOf("consent","withdraw"))
+  val id=if(operation=="withdraw")intent.getString("consent_id")else null
+  val proof=locationConsentProof(session,deviceId,identity,audience,operation,EscalationProtocol.hash(raw),id)
+  request("/v1/location-consents",JSONObject().put("intent",EscalationProtocol.encode(raw)).put("proof",proof),session,maxRequestBytes=8192)
+ }
+ internal fun locationConsentStatus(session:Session,deviceId:String,identity:DeviceIdentity,audience:String,id:String):JSONObject=possession{
+  require(EscalationRules.uuid(id));val raw=JSONObject().put("consent_id",id).toString()
+  request("/v1/location-consents/status",JSONObject().put("consent_id",id).put("proof",locationConsentProof(session,deviceId,identity,audience,"status",EscalationProtocol.hash(raw),id)),session)
+ }
+ private fun locationConsentProof(session:Session,deviceId:String,identity:DeviceIdentity,audience:String,operation:String,hash:String,id:String?):JSONObject{
+  val response=request("/v1/location-consents/challenge",JSONObject().put("device_id",deviceId).put("consent_id",id?:JSONObject.NULL),session)
+  require(response.get("audience")==audience)
+  return identity.signLocationConsentChallenge(audience,operation,response.getString("request_id"),response.getString("challenge"),hash)
+ }
  private fun <T> possession(action:()->T):T {
   // The backend keeps one outstanding nonce per account/device. Keep its request paired
   // with its proof while allowing a stopped job to leave a contended lock promptly.

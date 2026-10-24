@@ -75,6 +75,17 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
   JSONObject().put("version",1).put("algorithm","SHA256withECDSA").put("audience",audience).put("request_id",requestId).put("challenge",challenge)
    .put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki).put("signature_der",encoded(signature))
  }
+ /** Consent domain binds one exact approved-policy intent or original-consent status query. */
+ fun signLocationConsentChallenge(audience:String,operation:String,requestId:String,challenge:String,payloadHash:String):JSONObject=synchronized(lock){
+  require(audience.matches(Regex("[A-Za-z0-9._:/-]{1,128}"))&&operation in setOf("consent","withdraw","status")&&EscalationRules.uuid(requestId))
+  require(challenge.matches(Regex("[A-Za-z0-9_-]{43}"))&&payloadHash.matches(Regex("[a-f0-9]{64}")))
+  val nonce=Base64.getUrlDecoder().decode(challenge);require(nonce.size==32&&encoded(nonce)==challenge)
+  val ks=store();val identity=checked(ks)?:error("Installation signing key not initialized")
+  val message="mercury-location-consent-proof-v1\n$audience\n$operation\n$requestId\n$challenge\n${identity.thumbprint}\n$payloadHash"
+  val signature=Signature.getInstance("SHA256withECDSA").run{initSign(ks.getKey(alias,null) as PrivateKey);update(message.toByteArray(Charsets.UTF_8));sign()}
+  JSONObject().put("version",1).put("algorithm","SHA256withECDSA").put("audience",audience).put("request_id",requestId).put("challenge",challenge)
+   .put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki).put("signature_der",encoded(signature))
+ }
  /** Signs an immutable snapshot of a validated local outbox batch; does not send or acknowledge it. */
  fun signEventBatch(audience: String, batch: JSONObject): JSONObject = signBatch(audience, batch, null)
  /** Caller must supply the original capture binding, never the current assignment of an unscoped queue.

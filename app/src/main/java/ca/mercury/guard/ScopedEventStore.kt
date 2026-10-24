@@ -88,6 +88,15 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   else -> error("Unsupported authorized event kind")
  }
  fun capture(kind: String,data: JSONObject,original: GrantBinding,grant: VerifiedShiftGrant,identity: DeviceIdentity,observedAt: Long): String {
+  require(kind!="location"){"Typed policy-bound location capture required"}
+  return captureInternal(kind,data,original,grant,identity,observedAt,null)
+ }
+ internal fun captureLocation(record:LocationConsentRecord,grant:VerifiedShiftGrant,identity:DeviceIdentity,sample:ConnectedLocationSample):String {
+  val approved=grant.location?:error("Approved location grant required")
+  check(record.accepted&&record.id==approved.id&&record.policy.sha256==approved.policy.sha256&&record.policy.payload==approved.policy.payload)
+  return captureInternal("location",sample.data(approved),record.scope.binding,grant,identity,sample.at,record.scope)
+ }
+ private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?):String {
   require(observedAt in 0..9007199254740991L)
   check(grant.permits(requiredAction(kind),original,elapsedNow(),bootNow())) { "Capture not authorized" }
   check(identity.publicIdentity()?.thumbprint == original.deviceThumbprint) { "Capture device mismatch" }
@@ -96,6 +105,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   val event=JSONObject().put("event_id",eventId).put("at",observedAt).put("kind",kind)
    .put("data",JSONObject(data.toString()).put("capture_grant_id",grant.grantId))
   val record=JSONObject().put("scope",binding(original)).put("event",event)
+  if(locationOwner!=null)record.put("location_owner",locationOwner.json())
   require(record.toString().toByteArray(Charsets.UTF_8).size <= 240000)
   val db=writableDatabase;db.beginTransaction()
   try {
@@ -183,20 +193,21 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   try {
    var snapshot: JSONObject?=readSnapshot(db,guardId)
    if(snapshot==null) {
-    val events=JSONArray();var first: GrantBinding?=null;var size=0
+    val events=JSONArray();var first: GrantBinding?=null;var firstPartition:JSONObject?=null;var size=0
     db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0 ORDER BY sequence",null).use {c->
      while(c.moveToNext()) {
       val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
       if(guardId!=null && scope.guardId!=guardId)continue
-      if(events.length()>=100 || (first!=null && first!=scope))break
+      val partition=uploadPartition(record)
+      if(events.length()>=100 || (first!=null && (first!=scope||firstPartition.toString()!=partition.toString())))break
       val event=record.getJSONObject("event");check(event.getLong("sequence")==c.getLong(0))
       val bytes=event.toString().toByteArray(Charsets.UTF_8).size
       if(size+bytes>250000)break
-      first=scope;size+=bytes;events.put(event)
+      first=scope;firstPartition=partition;size+=bytes;events.put(event)
      }
     }
     if(events.length()==0){db.setTransactionSuccessful();return null}
-    snapshot=JSONObject().put("scope",binding(first!!)).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events))
+    snapshot=JSONObject().put("scope",binding(first!!)).put("partition",firstPartition).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events))
     writeSnapshot(db,guardId,snapshot)
    }
    val proof=identity.signScopedEventBatch(audience,snapshot.getJSONObject("batch"),binding(snapshot.getJSONObject("scope")))
@@ -256,9 +267,15 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  }
 
  /** Original-scope snapshots allow one denied assignment to be retained without blocking another. */
- private fun uploadOwner(scope:JSONObject)=java.security.MessageDigest.getInstance("SHA-256").digest(scope.toString().toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+ private fun uploadPartition(record:JSONObject):JSONObject {
+  val event=record.getJSONObject("event")
+  if(event.getString("kind")!="location")return JSONObject().put("kind","ordinary")
+  val data=event.getJSONObject("data")
+  return JSONObject().put("kind","location").put("owner",record.optJSONObject("location_owner")?:JSONObject.NULL).put("consent_id",data.opt("consent_id")?:JSONObject.NULL).put("policy_sha256",data.opt("policy_sha256")?:JSONObject.NULL)
+ }
+ private fun uploadOwner(scope:JSONObject,partition:JSONObject?=null)=EscalationProtocol.hash(if(partition==null)scope.toString()else JSONArray().put(scope).put(partition).toString())
  private fun saveUpload(db:SQLiteDatabase,snapshot:JSONObject){
-  val id=uploadOwner(snapshot.getJSONObject("scope"));val events=snapshot.getJSONObject("batch").getJSONArray("events");require(events.length()>0)
+  val id=uploadOwner(snapshot.getJSONObject("scope"),snapshot.optJSONObject("partition"));val events=snapshot.getJSONObject("batch").getJSONArray("events");require(events.length()>0)
   val old=db.rawQuery("SELECT body FROM upload_snapshots WHERE owner=?",arrayOf(id)).use{if(it.moveToFirst())decrypt(it.getString(0),"mercury-upload-snapshot:$id") else null}
   if(old!=null){check(old.toString()==snapshot.toString()){ "Conflicting original upload snapshot" };return}
   db.insertOrThrow("upload_snapshots",null,ContentValues().apply{put("owner",id);put("first_sequence",events.getJSONObject(0).getLong("sequence"));put("body",cipher.encrypt(snapshot.toString().toByteArray(Charsets.UTF_8),"mercury-upload-snapshot:$id"))})
@@ -272,25 +289,27 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   val db=writableDatabase;db.beginTransaction()
   try{
    migrateUpload(db,guardId)
-   var selected:JSONObject?=null;val occupied=mutableSetOf<String>()
+   var selected:JSONObject?=null;val occupied=mutableSetOf<String>();val reserved=mutableSetOf<String>()
    db.rawQuery("SELECT owner,body,review FROM upload_snapshots ORDER BY first_sequence",null).use{c->while(c.moveToNext()){
     val id=c.getString(0);val snapshot=decrypt(c.getString(1),"mercury-upload-snapshot:$id")
     if(binding(snapshot.getJSONObject("scope")).guardId!=guardId)continue
     occupied.add(id)
+    val pending=snapshot.getJSONObject("batch").getJSONArray("events");for(i in 0 until pending.length())reserved.add(pending.getJSONObject(i).getString("event_id"))
     val held=!c.isNull(2)&&decrypt(c.getString(2),"mercury-upload-review:$id").getString("generation")==generation
     if(selected==null&&!held)selected=snapshot
    }}
    if(selected==null){
-    val events=JSONArray();var first:GrantBinding?=null;var size=0
+    val events=JSONArray();var first:GrantBinding?=null;var firstPartition:JSONObject?=null;var size=0
     db.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=0 ORDER BY sequence",null).use{c->while(c.moveToNext()){
      val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
-     if(scope.guardId!=guardId||uploadOwner(record.getJSONObject("scope")) in occupied)continue
-     if(first!=null&&first!=scope)continue
-     val event=record.getJSONObject("event");check(event.getLong("sequence")==c.getLong(0));val bytes=event.toString().toByteArray(Charsets.UTF_8).size
+     val partition=uploadPartition(record);val event=record.getJSONObject("event")
+     if(scope.guardId!=guardId||event.getString("event_id") in reserved||uploadOwner(record.getJSONObject("scope"),partition) in occupied)continue
+     if(first!=null&&(first!=scope||firstPartition.toString()!=partition.toString()))continue
+     check(event.getLong("sequence")==c.getLong(0));val bytes=event.toString().toByteArray(Charsets.UTF_8).size
      if(events.length()>=100||size+bytes>250000)break
-     first=scope;events.put(event);size+=bytes
+     first=scope;firstPartition=partition;events.put(event);size+=bytes
     }}
-    if(events.length()>0){selected=JSONObject().put("scope",binding(first!!)).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events));saveUpload(db,selected!!)}
+    if(events.length()>0){selected=JSONObject().put("scope",binding(first!!)).put("partition",firstPartition).put("batch",JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",events));saveUpload(db,selected!!)}
    }
    val snapshot=selected?:run{db.setTransactionSuccessful();return null}
    val proof=identity.signScopedEventBatch(audience,snapshot.getJSONObject("batch"),binding(snapshot.getJSONObject("scope")))
@@ -330,6 +349,16 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.insertOrThrow("upload_receipts",null,ContentValues().apply{put("batch_id",batchId);put("body",cipher.encrypt(record.toString().toByteArray(Charsets.UTF_8),"mercury-upload-receipt:$batchId"))})
    check(db.delete("upload_snapshots","owner=?",arrayOf(id))==1);db.setTransactionSuccessful()
   }finally{db.endTransaction()}
+ }
+ internal fun locationUploadScope(guardId:String,batchId:String):Triple<LocationConsentScope,String,String>? {
+  val snapshot=findUpload(readableDatabase,guardId,batchId)?.second?:error("Original snapshot required")
+  val events=snapshot.getJSONObject("batch").getJSONArray("events");val locations=(0 until events.length()).map{events.getJSONObject(it)}.filter{it.getString("kind")=="location"}
+  if(locations.isEmpty())return null
+  require(locations.size==events.length()){ "Mixed legacy location batch needs review" }
+  val partition=snapshot.getJSONObject("partition");require(partition.getString("kind")=="location")
+  val original=LocationConsentScope.parse(partition.getJSONObject("owner"));val id=partition.getString("consent_id");val hash=partition.getString("policy_sha256")
+  for(e in locations){val d=e.getJSONObject("data");check(d.getString("consent_id")==id&&d.getString("policy_sha256")==hash)}
+  return Triple(original,id,hash)
  }
  internal fun pendingUploadPhotos(guardId:String,generation:String,limit:Int=3):List<JSONObject>{
   require(limit in 1..100);val result=mutableListOf<JSONObject>()
