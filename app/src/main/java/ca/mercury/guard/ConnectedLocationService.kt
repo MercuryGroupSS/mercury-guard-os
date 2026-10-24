@@ -32,6 +32,20 @@ internal object ConnectedLocationRuntime {
   if(task.record.scope.account.subject!=subject||task.record.scope.binding.assignmentId !in activeAssignments)stop(context,"Service reported shift ended or unavailable")
  }
  fun activeConsent(id:String)=synchronized(lock){active?.record?.id==id}
+ /** Closing one historical assignment must not interrupt another current assignment. */
+ fun stopForAssignment(context:Context,scope:DispatchScope,reason:String):Boolean {
+  fun matches(task:Run)=task.record.scope.binding==scope.binding&&task.record.scope.account.vendorId==scope.vendorId
+  var running:Run?=null;var waiting:Run?=null
+  synchronized(lock){
+   running=active?.takeIf(::matches);waiting=pending?.first?.takeIf(::matches)
+   if(running==null&&waiting==null)return false
+   if(waiting!=null)pending=null
+   if(running!=null){active=null;description="Connected location: stopped · $reason"}
+  }
+  running?.cancellation?.cancel();waiting?.cancellation?.cancel()
+  if(running!=null)context.stopService(Intent(context,ConnectedLocationService::class.java))
+  return true
+ }
  fun observe(run:Run,text:String){synchronized(lock){if(active===run)description=text}}
  fun <T> whileCurrent(run:Run,action:()->T):T=synchronized(lock){check(active===run&&!run.cancellation.cancelled());action()}
  fun stop(context:Context,reason:String){val old=synchronized(lock){pending=null;active.also{active=null;description="Connected location: stopped · $reason"}};old?.cancellation?.cancel();context.stopService(Intent(context,ConnectedLocationService::class.java))}

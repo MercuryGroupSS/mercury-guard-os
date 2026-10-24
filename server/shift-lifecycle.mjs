@@ -7,10 +7,17 @@ export class ShiftTransitionRejected extends Error { constructor(receipt){super(
 export class ShiftLifecycle {
  constructor(path){this.db=new DatabaseSync(path);this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS shift_sessions(assignment TEXT PRIMARY KEY,guard TEXT NOT NULL,vendor TEXT NOT NULL,site TEXT NOT NULL,device TEXT NOT NULL,starts_at INTEGER NOT NULL,ends_at INTEGER NOT NULL,clocked_in INTEGER NOT NULL,clocked_out INTEGER,reason TEXT);
- CREATE UNIQUE INDEX IF NOT EXISTS one_active_guard ON shift_sessions(guard) WHERE clocked_out IS NULL;
- CREATE UNIQUE INDEX IF NOT EXISTS one_active_phone ON shift_sessions(device) WHERE clocked_out IS NULL;
  CREATE TABLE IF NOT EXISTS shift_transitions(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);
- CREATE TABLE IF NOT EXISTS shift_rejections(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);`);}
+ CREATE TABLE IF NOT EXISTS shift_rejections(request TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);`);
+  // The old partial UNIQUE indexes reserved every unclosed historical row.
+  // BEGIN IMMEDIATE also serializes starts; replace only the lookup indexes,
+  // preserving all existing attendance and original receipts during upgrade.
+  try{this.db.exec(`BEGIN IMMEDIATE;
+   DROP INDEX IF EXISTS one_active_guard;DROP INDEX IF EXISTS one_active_phone;
+   CREATE INDEX IF NOT EXISTS unclosed_guard_window ON shift_sessions(guard,ends_at) WHERE clocked_out IS NULL;
+   CREATE INDEX IF NOT EXISTS unclosed_phone_window ON shift_sessions(device,ends_at) WHERE clocked_out IS NULL;
+   COMMIT;`);}catch(error){try{this.db.exec('ROLLBACK');}catch{/* A failed BEGIN has no transaction. */}this.db.close();throw error;}
+ }
  transition({identity,assignment,deviceThumbprint,request,now,allowStart=true}){
   const {scope,digest}=prepareShiftTransition({identity,assignment,deviceThumbprint,request,now,allowStart});
   let committed=false;this.db.exec('BEGIN IMMEDIATE');try{
@@ -26,7 +33,7 @@ export class ShiftLifecycle {
    const old=this.db.prepare('SELECT * FROM shift_sessions WHERE assignment=?').get(assignment.assignmentId);
    if(request.action==='start'){
     if(old||request.reason!==''||now<assignment.startsAt||now>=assignment.endsAt)reject('shift_cannot_start');
-    if(this.db.prepare('SELECT 1 FROM shift_sessions WHERE clocked_out IS NULL AND (guard=? OR device=?)').get(identity.guardId,deviceThumbprint))reject('active_shift_conflict');
+    if(this.db.prepare('SELECT 1 FROM shift_sessions WHERE clocked_out IS NULL AND ends_at>? AND (guard=? OR device=?)').get(now,identity.guardId,deviceThumbprint))reject('active_shift_conflict');
     this.db.prepare('INSERT INTO shift_sessions VALUES(?,?,?,?,?,?,?,?,NULL,NULL)').run(assignment.assignmentId,identity.guardId,identity.vendorId,assignment.siteId,deviceThumbprint,assignment.startsAt,assignment.endsAt,now);
    }else{
     if(!old||old.clocked_out!==null||old.guard!==identity.guardId||old.vendor!==identity.vendorId||old.site!==assignment.siteId||old.device!==deviceThumbprint||old.starts_at!==assignment.startsAt||old.ends_at!==assignment.endsAt||now<old.clocked_in||now>old.ends_at+86400000)reject('shift_cannot_end');

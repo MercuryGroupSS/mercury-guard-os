@@ -165,12 +165,14 @@ class GuardAccountActivity : Activity() {
     busy=false
     try{
      check(p!=null&&a!=null)
-     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments");AuthorizedReminders(this).retainForAssignments(guard,(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&(!it.has("shift_state")||it.getJSONObject("shift_state").getString("state")=="active")}.map{it.getString("assignmentId")}.toSet())
+     val guard=p.getString("guard_id");val vendor=p.getString("vendor_id");val rows=a.getJSONArray("assignments")
      val subject=p.getString("auth_subject");check(EscalationRules.uuid(subject))
      val epoch=a.getLong("server_time_ms");val boot=Settings.Global.getInt(contentResolver,Settings.Global.BOOT_COUNT,-1);check(epoch>0&&receivedElapsed>0&&boot>=0)
      accountIdentity=AccountIdentity(subject,guard,vendor);accountAnchor=ServerTimeAnchor(epoch,receivedElapsed,boot)
      UploadCoordinator(this).authorize(c,active,guard,vendor,subject)
-     val activeIds=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&it.optJSONObject("shift_state")?.optString("state")=="active"}.map{it.getString("assignmentId")}.toSet()
+     val observed=Math.addExact(epoch,Math.subtractExact(SystemClock.elapsedRealtime(),receivedElapsed))
+     val activeIds=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{it.optBoolean("assignmentActive",true)&&it.optJSONObject("shift_state")?.optString("state")=="active"&&observed>=it.getLong("startsAt")&&observed<it.getLong("endsAt")}.map{it.getString("assignmentId")}.toSet()
+     AuthorizedReminders(this).retainForAssignments(guard,activeIds)
      ConnectedLocationRuntime.stopIfUnavailable(this,subject,activeIds)
      val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
@@ -190,7 +192,9 @@ class GuardAccountActivity : Activity() {
   if(!item.has("shift_state")){verifyAssignment(item);return}
   val scope=DispatchScope(GrantBinding(item.getString("guardId"),item.getString("siteId"),item.getString("assignmentId"),item.getString("deviceThumbprint"),item.getLong("revocationVersion")),item.getString("vendorId"))
   val state=item.getJSONObject("shift_state").getString("state")
-  screen("SHIFT · ${item.getString("siteId")}","Service status: ${state.replace('_',' ')}. Attendance records remain local to the pilot service; payroll is not connected.")
+  val observed=Math.addExact(item.getLong("status_server_time_ms"),Math.subtractExact(SystemClock.elapsedRealtime(),item.getLong("status_elapsed_ms")))
+  val windowElapsed=state=="active"&&observed>=item.getLong("endsAt")
+  screen("SHIFT · ${item.getString("siteId")}",if(windowElapsed)"Scheduled window elapsed · clock-out unconfirmed. New capture is unavailable. Confirm the actual clock-out separately; no end time has been recorded automatically.\nAttendance records remain local to the pilot service; payroll is not connected." else "Service status: ${state.replace('_',' ')}. Attendance records remain local to the pilot service; payroll is not connected.")
   try{
    val pending=ShiftTransitionStore(this).use{db->listOf("start","end").mapNotNull{action->db.saved(scope,action)?.takeIf{!it.has("receipt")&&!it.has("rejection")}}}
    for(saved in pending){val request=saved.getJSONObject("request");button("Resolve pending ${request.getString("action")}"){submitShift(item,scope,request.getString("action"),request.getString("reason"))}}
@@ -200,7 +204,7 @@ class GuardAccountActivity : Activity() {
       AlertDialog.Builder(this).setTitle("Confirm clock-in").setMessage("Record the start of your shift at this site?").setNegativeButton("Cancel",null).setPositiveButton("Confirm clock-in"){_,_->submitShift(item,scope,"start","")}.show()
      }else status.text="This assignment is outside its clock-in window. Refresh assignments when it begins."
      "active"->{
-      val now=Math.addExact(item.getLong("status_server_time_ms"),Math.subtractExact(SystemClock.elapsedRealtime(),item.getLong("status_elapsed_ms")))
+      val now=observed
       if(now<item.getLong("endsAt")){
        if(item.optBoolean("assignmentActive",true))button("Continue shift"){verifyAssignment(item)} else status.text="Assignment cancelled. Capture is unavailable; confirm your shift end below."
        button("End shift early"){
@@ -225,7 +229,7 @@ class GuardAccountActivity : Activity() {
  private fun submitShift(item:JSONObject,scope:DispatchScope,action:String,reason:String){
   if(busy)return
   val c=config?:return;val active=session?:return;val stamp=generation
-  if(action=="end")ConnectedLocationRuntime.stop(this,"Shift end requested")
+  if(action=="end")ConnectedLocationRuntime.stopForAssignment(this,scope,"End requested for assignment ${scope.binding.assignmentId}")
   busy=true;captureGrant=null;captureBinding=null;captureAnchor=null
   status.text="Confirming shift $action with the service…"
   Thread{
@@ -237,13 +241,13 @@ class GuardAccountActivity : Activity() {
      val receipt=GuardAccountClient(c.endpoint).transition(active,c.deviceId,scope.binding.assignmentId,DeviceIdentity(this),c.audience,request)
      success=db.accept(scope,action,receipt);definitiveRejection=!success
     }
-    if(success&&action=="end")AuthorizedReminders(this).stop()
+    if(success&&action=="end")AuthorizedReminders(this).stopForAssignment(scope.binding)
    }catch(_:Exception){}
    val accepted=success;val declined=definitiveRejection
    runOnUiThread{
     if(stamp!=generation||isFinishing||isDestroyed)return@runOnUiThread
     busy=false
-    if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed by the pilot service. This screen is locked. Queued records remain preserved and automatic delivery may continue until your upload session expires; Sign out stops it."}
+    if(accepted&&action=="end"){startScreen();status.text="Clock-out confirmed for assignment ${scope.binding.assignmentId}. This screen is locked. Other current assignment resources and queued records remain preserved; automatic delivery may continue until your upload session expires. Sign out stops it."}
     else if(accepted)loadAssignments()
     else if(declined){assignmentOverview(item);status.text="The service declined this request. No clock time was recorded. Refresh assignments before confirming a corrected request."}
     else{assignmentOverview(item);status.text="Confirmation is unresolved. Use Resolve pending to retry the same request; no new clock time will be substituted."}

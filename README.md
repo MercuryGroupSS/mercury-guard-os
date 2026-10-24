@@ -4,7 +4,7 @@ Mercury One is a native Android guard application with a white/cyan interface an
 
 The connected implementation supports approved assignments and confirmed shifts, encrypted incidents/drafts/photos, any-order checkpoints and explicit patrol rounds, timed check-ins, dispatch acknowledgements, signed scoped grants/batches, durable queued delivery and separate receipt states. Escalate works without an active assignment and distinguishes service receipt from explicit operator acknowledgement. Optional shift location requires an approved exact notice/policy, separate individual consent and a short signed lease; withdrawal stops collection and blocks original location retries without blocking independent incidents.
 
-The current [v0.34 Preview](docs/build-v0.34.md) is unconfigured and debug-signed. Its source passed all GitHub build, API 28/API 35, HTTPS and typed-location jobs. This is a tested local build, not a live deployment or current Fold acceptance. See the [current project brief](docs/project-brief.md) and [attended Fold checklist](docs/fold-acceptance-v0.34.md).
+The current [v0.35 Preview](docs/build-v0.35.md) is unconfigured and debug-signed. It fixes missed clock-out reservation and exact assignment resource cleanup while preserving explicit attendance. The immutable package record records its exact build, emulator and GitHub results. See the [current project brief](docs/project-brief.md) and [attended Fold checklist](docs/fold-acceptance-v0.35.md). Live deployment and current Fold acceptance remain open.
 
 ## Data and integration boundaries
 
@@ -20,7 +20,7 @@ Android controls scheduling, Doze and battery restrictions. Actual SDK GNSS, cov
 
 Requires Android SDK 35, Java 17, Gradle 8.10.2 and Android Gradle Plugin 8.7.3. Run `gradle :app:assembleDebug`; APK output is `app/build/outputs/apk/debug/app-debug.apk`. GitHub Actions builds, tests, lints and verifies the APK, runs API 28/35 suites and separate HTTPS checks, and replays canonical PostgreSQL migrations/contracts. The location job explicitly uses synthetic typed observations and leaves SDK GNSS unverified.
 
-For a separate review app, build with `-PlocalPreview=true -PlocalDebugKeystore=/absolute/path/to/your/debug.keystore`. The application ID becomes `ca.mercury.guard.preview`, labelled Mercury One Preview. Keep signing material private and stable for updates; never commit it. These are debug APKs, not production release signing.
+For a separate review app, build with `-PlocalPreview=true -PlocalDebugKeystore=/absolute/path/to/your/debug.keystore`. The application ID becomes `ca.mercury.guard.preview`, labelled Mercury One Preview. Keep signing material private and stable for updates; never commit it. These are debug APKs. The separate [controlled release builder](docs/controlled-apk.md) verifies a supplied signing identity, exact clean source and public service configuration in an isolated release build. It neither generates production keys nor installs on a phone.
 
 Preserve the original installed application if signing certificates differ. Uninstalling it destroys access to its Keystore-protected local data. Preview data/permissions are separate; no automatic migration is performed. No root, reset, flashing or device enrollment is needed for APK testing.
 

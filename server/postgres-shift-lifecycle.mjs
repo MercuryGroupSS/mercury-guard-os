@@ -31,7 +31,9 @@ export class PostgresShiftLifecycle{
    const old=row((await client.query('SELECT * FROM mercury_guard.shift_sessions WHERE assignment=$1',[assignment.assignmentId])).rows[0]);
    if(request.action==='start'){
     if(old||request.reason!==''||now<assignment.startsAt||now>=assignment.endsAt)return reject('shift_cannot_start');
-    if((await client.query('SELECT 1 FROM mercury_guard.shift_sessions WHERE clocked_out IS NULL AND (guard=$1 OR device=$2)',[identity.guardId,deviceThumbprint])).rowCount)return reject('active_shift_conflict');
+    // Unconfirmed attendance remains historical after its scheduled capture
+    // window ends. It must not reserve this guard/phone forever or invent an end.
+    if((await client.query('SELECT 1 FROM mercury_guard.shift_sessions WHERE clocked_out IS NULL AND ends_at>$3 AND (guard=$1 OR device=$2)',[identity.guardId,deviceThumbprint,now])).rowCount)return reject('active_shift_conflict');
     await client.query('INSERT INTO mercury_guard.shift_sessions VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL,NULL)',[assignment.assignmentId,identity.guardId,identity.vendorId,assignment.siteId,deviceThumbprint,assignment.startsAt,assignment.endsAt,now]);
    }else{
     if(!old||old.clocked_out!==null||old.guard!==identity.guardId||old.vendor!==identity.vendorId||old.site!==assignment.siteId||old.device!==deviceThumbprint||old.starts_at!==assignment.startsAt||old.ends_at!==assignment.endsAt||now<old.clocked_in||now>old.ends_at+86400000)return reject('shift_cannot_end');

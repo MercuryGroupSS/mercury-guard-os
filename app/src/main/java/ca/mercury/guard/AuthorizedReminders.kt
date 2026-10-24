@@ -21,6 +21,14 @@ class AuthorizedReminders internal constructor(private val context:Context,priva
  private fun read():JSONObject?=prefs.getString("schedule",null)?.let{JSONObject(String(cipher.decrypt(it,PURPOSE),Charsets.UTF_8))}
  private fun write(value:JSONObject){check(prefs.edit().putString("schedule",cipher.encrypt(value.toString().toByteArray(Charsets.UTF_8),PURPOSE)).commit())}
  fun stop()=synchronized(lock){alarm.cancel(intent());notes.cancel(NOTE);check(prefs.edit().remove("schedule").commit())}
+ /** A clock-out applies only to the original assignment's reminder schedule. */
+ fun stopForAssignment(binding:GrantBinding):Boolean=synchronized(lock){
+  try{
+   val s=read()?:return@synchronized false
+   if(s.getString("guard")!=binding.guardId||s.getString("site")!=binding.siteId||s.getString("assignment")!=binding.assignmentId||s.getString("thumbprint")!=binding.deviceThumbprint||s.getLong("revocation")!=binding.revocationVersion)return@synchronized false
+   stop();true
+  }catch(_:Exception){stop();true}
+ }
  fun exactAvailable()=Build.VERSION.SDK_INT<31||alarm.canScheduleExactAlarms()
  private fun ensureChannel(){if(notes.getNotificationChannel(CHANNEL)==null)notes.createNotificationChannel(NotificationChannel(CHANNEL,"Authorized check-in reminders",NotificationManager.IMPORTANCE_HIGH).apply{description="One reminder per assigned check-in window";enableVibration(true);lockscreenVisibility=Notification.VISIBILITY_PRIVATE})}
  fun notificationsAvailable():Boolean {ensureChannel();return notificationAccess?.invoke()?: (DeviceReadiness(context).notificationPermissionGranted()&&notes.areNotificationsEnabled()&&notes.getNotificationChannel(CHANNEL)?.importance!=NotificationManager.IMPORTANCE_NONE)}

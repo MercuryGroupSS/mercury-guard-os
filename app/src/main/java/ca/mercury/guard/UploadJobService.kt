@@ -35,7 +35,7 @@ class UploadCoordinator(private val context:Context){
   clearLocal();store.authorize(config,session,guard,vendor,subject,identity.thumbprint);request()
   if(previous!=null)logoutInBackground(config,previous)
  }
- private fun clearLocal(){ConnectedLocationRuntime.stop(context,"Signed out or guard changed");UploadAuthorityStore(context).clear();UploadRuntime.cancel();EscalationForeground.cancel();scheduler.cancel(JOB_ID)}
+ private fun clearLocal(){ConnectedLocationRuntime.stop(context,"Signed out or guard changed");UploadAuthorityStore(context).clear();UploadRuntime.cancel();EscalationForeground.cancel();scheduler.cancel(JOB_ID);AuthorizedReminders(context).stop()}
  fun stop(foreground:GuardAccountClient.Session?=null,trusted:GuardServiceConfig?=null){
   // Copy only an unexpired bearer bound to this exact packaged origin/trust. Local cancellation is immediate.
   var previous:GuardAccountClient.Session?=null
