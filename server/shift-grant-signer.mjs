@@ -1,5 +1,5 @@
 import {checkInPolicy} from './check-in-policy.mjs';
-import {patrolRoute} from './patrol-route.mjs';
+import {patrolRoutePolicy} from './patrol-route.mjs';
 import {locationAuthorization,locationPolicySnapshot} from './location-policy.mjs';
 import {createPrivateKey,createPublicKey,randomUUID,sign} from 'node:crypto';
 const actions=new Set(['patrol','incident','photo','check_in','location','dispatch_ack']);
@@ -30,7 +30,7 @@ export class ShiftGrantSigner{
   const payload=Buffer.from(JSON.stringify(claims)).toString('base64url');
   if(payload.length>16384)throw Error('Signed grant too large');
   const signature=sign('sha256',Buffer.from(`mercury-shift-grant-v1.${this.keyId}.${payload}`),this.key).toString('base64url');
-  const policy=assignment.patrolRoute?{patrolRoute:patrolRoute(assignment.patrolRoute)}:{};
+  const policy=assignment.patrolRoute?{patrolRoute:patrolRoutePolicy(assignment.patrolRoute,assignment.locationPolicy)}:{};
   if(assignment.checkInPolicy)policy.checkInPolicy=checkInPolicy(assignment.checkInPolicy,assignment.startsAt,assignment.endsAt);
   if(authorization)policy.location=claims.location;
   return {claims,policy,payload,response:{key_id:this.keyId,payload,signature,server_time_ms:now,patrol_route:policy.patrolRoute??null,check_in_policy:policy.checkInPolicy??null}};

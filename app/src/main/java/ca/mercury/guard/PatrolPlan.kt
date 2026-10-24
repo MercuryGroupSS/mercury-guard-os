@@ -8,7 +8,7 @@ data class PatrolChoice(val routeId:String,val revision:Long,val checkpointId:St
 data class PatrolCheckpointKey(val roundId:String?,val checkpointId:String)
 
 /** Trusted assignment snapshot. A declared round must be selected explicitly; no local reset invents a round. */
-class PatrolPlan(val routeId:String,val revision:Long,checkpoints:List<PatrolCheckpoint>,rounds:List<PatrolRound>?=null){
+class PatrolPlan(val routeId:String,val revision:Long,checkpoints:List<PatrolCheckpoint>,rounds:List<PatrolRound>?=null,val gpsRequired:Boolean=false){
  val checkpoints=checkpoints.toList()
  val rounds=rounds?.map{PatrolRound(it.id,it.label.trim())}
  companion object {

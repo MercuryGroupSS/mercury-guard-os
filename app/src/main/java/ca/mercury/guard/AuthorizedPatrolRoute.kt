@@ -6,7 +6,8 @@ import org.json.JSONObject
 object AuthorizedPatrolRoute {
  private fun text(j:JSONObject,key:String)=j.get(key) as? String?:error("Patrol text required")
  fun parse(j:JSONObject):PatrolPlan {
-  require(j.keys().asSequence().toSet()==setOf("routeId","revision","checkpoints")+(if(j.has("rounds"))setOf("rounds") else emptySet()))
+  require(j.keys().asSequence().toSet()==setOf("routeId","revision","checkpoints")+(if(j.has("rounds"))setOf("rounds") else emptySet())+(if(j.has("gps_required"))setOf("gps_required")else emptySet()))
+  val gpsRequired=j.has("gps_required");if(gpsRequired)require(j.get("gps_required")==true)
   val revision=j.get("revision");require(revision is Int||revision is Long)
   val rawPoints=j.getJSONArray("checkpoints");require(rawPoints.length() in 1..100)
   val points=(0 until rawPoints.length()).map{index->val p=rawPoints.getJSONObject(index);require(p.keys().asSequence().toSet()==setOf("id","label"));PatrolCheckpoint(text(p,"id"),text(p,"label"))}
@@ -14,6 +15,6 @@ object AuthorizedPatrolRoute {
    val values=j.getJSONArray("rounds");require(values.length() in 1..100)
    (0 until values.length()).map{index->val r=values.getJSONObject(index);require(r.keys().asSequence().toSet()==setOf("id","label"));PatrolRound(text(r,"id"),text(r,"label"))}
   }else null
-  return PatrolPlan(text(j,"routeId"),(revision as Number).toLong(),points,rounds)
+  return PatrolPlan(text(j,"routeId"),(revision as Number).toLong(),points,rounds,gpsRequired)
  }
 }

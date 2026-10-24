@@ -3,6 +3,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {strictJson} from './verify-batch.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
 import {projectLocationObservation} from './location-policy.mjs';
+import {projectPatrolLocation} from './patrol-location.mjs';
 const stable=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 const hash=x=>createHash('sha256').update(x).digest('hex');
 const requiredText=(x,max)=>{if(typeof x!=='string'||!x.trim()||x.length>max)throw Error('Required observation text');return x;};
@@ -24,7 +25,12 @@ export function projectDashboardObservation(record,mapping){
    data={clocked_in_at_ms:d.clocked_in_at_ms,clocked_out_at_ms:d.clocked_out_at_ms,early_exit:d.early_exit,reason:d.reason};break;
   case 'incident':data={description:requiredText(d.description,8000)};break;
   case 'location':data=projectLocationObservation(record);break;
-  case 'patrol_checkpoint':if(!stable(d.route_id)||!stable(d.checkpoint_id)||!Number.isSafeInteger(d.route_revision)||d.route_revision<1||Object.hasOwn(d,'round_id')&&!stable(d.round_id))throw Error('Invalid checkpoint');data={route_id:d.route_id,route_revision:d.route_revision,checkpoint_id:d.checkpoint_id,...(Object.hasOwn(d,'round_id')?{round_id:d.round_id}:{})};break;
+  case 'patrol_checkpoint':
+   if(!stable(d.route_id)||!stable(d.checkpoint_id)||!Number.isSafeInteger(d.route_revision)||d.route_revision<1||Object.hasOwn(d,'round_id')&&!stable(d.round_id))throw Error('Invalid checkpoint');
+   data={route_id:d.route_id,route_revision:d.route_revision,checkpoint_id:d.checkpoint_id,...(Object.hasOwn(d,'round_id')?{round_id:d.round_id}:{})};
+   if(Object.hasOwn(d,'location'))data.location=projectPatrolLocation(record);
+   else if(Object.hasOwn(record,'checkpoint_location_validation'))throw Error('Checkpoint validation without original location');
+   break;
   case 'photo_evidence':data={...photoMetadata(d),media_delivery:'not_transferred'};break;
   case 'check_in':
    if(!Number.isSafeInteger(d.policy_revision)||d.policy_revision<1||!Number.isSafeInteger(d.slot)||d.slot<0||typeof d.photo_event_id!=='string'||typeof d.evidence_id!=='string'||d.biometric?.method!=='android_local_biometric'||!Number.isSafeInteger(d.biometric.at)||!Number.isSafeInteger(d.location?.at)||d.location.mock!==false||!Number.isFinite(d.location.latitude)||!Number.isFinite(d.location.longitude)||!Number.isFinite(d.location.accuracy_m)||d.location.latitude< -90||d.location.latitude>90||d.location.longitude< -180||d.location.longitude>180||d.location.accuracy_m<=0||d.location.accuracy_m>1000||d.biometric.at>d.location.at||d.location.at>event.at)throw Error('Invalid check-in');
@@ -40,9 +46,12 @@ export function validateProjectedDashboardObservation(value,mapping){
  if(!value||typeof value!=='object')throw Error('Observation required');
  // The public projection deliberately omits the local capture marker. Restore
  // that fixed input discriminator when validating projected photo metadata.
- let data=value.observation?.kind==='photo_evidence'?{...value.observation.data,capture:'camera_intent'}:value.observation?.data,locationValidation;
+ let data=value.observation?.kind==='photo_evidence'?{...value.observation.data,capture:'camera_intent'}:value.observation?.data,locationValidation,checkpointLocationValidation;
  if(value.observation?.kind==='location'){const {server_validation,...sample}=data??{};data=sample;locationValidation=server_validation;}
- const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data},...(locationValidation?{location_validation:locationValidation}:{})},mapping);
+ // Checkpoint projections also omit the source-only capture grant marker.
+ // Restore a fixed discriminator for structural validation, never as reported evidence.
+ if(value.observation?.kind==='patrol_checkpoint'&&Object.hasOwn(data??{},'location')){const {server_validation,...location}=data.location??{};data={...data,capture_grant_id:'00000000-0000-0000-0000-000000000000',location};checkpointLocationValidation=server_validation;}
+ const expected=projectDashboardObservation({vendor_id:value.vendor_id,scope:{guard_id:value.guard_id,site_id:value.site_id,assignment_id:value.assignment_id,device_thumbprint:value.observation?.device_thumbprint},event:{event_id:value.observation?.event_id,kind:value.observation?.kind,at:value.observation?.occurred_at_ms,data},...(locationValidation?{location_validation:locationValidation}:{}),...(checkpointLocationValidation?{checkpoint_location_validation:checkpointLocationValidation}:{})},mapping);
  if(JSON.stringify(expected)!==JSON.stringify(value))throw Error('Observation projection or mapping changed');
  return value;
 }

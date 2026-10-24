@@ -4,10 +4,10 @@ export function prepareOpsBinding(binding,{operator,reason,now=Date.now()}={}){
   const required=['opsShiftId','guardId','vendorId','siteId','authSubject','revision','active'],optional=['patrolRoute','checkInPolicy','locationPolicy'];
   if(!binding||required.some(k=>!Object.hasOwn(binding,k))||Object.keys(binding).some(k=>![...required,...optional].includes(k))||required.slice(0,5).some(k=>!stable(binding[k]))||!Number.isSafeInteger(binding.revision)||binding.revision<1||typeof binding.active!=='boolean')throw Error('Explicit complete binding required');
   if([operator,reason].some(x=>typeof x!=='string'||!x.trim()||x.length>500||/[\u0000-\u001f]/.test(x))||!Number.isSafeInteger(now)||now<=0)throw Error('Approval context required');
-  if(binding.patrolRoute!==undefined&&binding.patrolRoute!==null)patrolRoute(binding.patrolRoute);
+  if(binding.patrolRoute!==undefined&&binding.patrolRoute!==null)patrolRoutePolicy(binding.patrolRoute,binding.locationPolicy);
   if(binding.locationPolicy!==undefined&&binding.locationPolicy!==null)locationPolicy(binding.locationPolicy);
   const body=JSON.stringify(canonical(binding));if(Buffer.byteLength(body)>32768)throw Error('Binding too large');
  return {body,operator:operator.trim(),reason:reason.trim(),now};
 }
-import {patrolRoute} from './patrol-route.mjs';
+import {patrolRoutePolicy} from './patrol-route.mjs';
 import {locationPolicy} from './location-policy.mjs';

@@ -1,3 +1,4 @@
+import {locationPolicy} from './location-policy.mjs';
 const id=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 export function patrolRoute(value){
  if(!value||!id(value.routeId)||!Number.isSafeInteger(value.revision)||value.revision<1||!Array.isArray(value.checkpoints)||value.checkpoints.length<1||value.checkpoints.length>100)throw Error('Invalid route');
@@ -6,6 +7,7 @@ export function patrolRoute(value){
   seen.add(p.id);return {id:p.id,label:p.label};
  });
  const route={routeId:value.routeId,revision:value.revision,checkpoints};
+ if(Object.hasOwn(value,'gps_required')){if(value.gps_required!==true)throw Error('Explicit GPS-required route or legacy omission required');route.gps_required=true;}
  if(Object.hasOwn(value,'rounds')){
   if(!Array.isArray(value.rounds)||!value.rounds.length||value.rounds.length>100)throw Error('Explicit bounded patrol rounds required');
   const ids=new Set(),labels=new Set();route.rounds=value.rounds.map(round=>{
@@ -15,6 +17,9 @@ export function patrolRoute(value){
  }
  return route;
 }
+// The reasoned owner approval of this exact pair attests that the notice covers
+// user-triggered checkpoint fixes. Purpose is never inferred from notice words.
+export function patrolRoutePolicy(value,approvedLocationPolicy){const route=patrolRoute(value);if(route.gps_required===true)locationPolicy(approvedLocationPolicy);return route;}
 export function permitsCheckpoint(route,data){
  return !!route&&!!data&&data.route_id===route.routeId&&data.route_revision===route.revision&&route.checkpoints.some(p=>p.id===data.checkpoint_id)&&(route.rounds?route.rounds.some(round=>round.id===data.round_id):!Object.hasOwn(data,'round_id'));
 }

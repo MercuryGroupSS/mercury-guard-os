@@ -43,9 +43,10 @@ function renderFields(values={}){
  for(const field of schema.fields)textField(field,$('fields'),values);
  if(schema.route){const r=values.patrolRoute??{};optionalGroup($('fields'),'routeEnabled','Patrol route',[
   {key:'routeId',label:'Route ID',type:'text',max:200},{key:'routeRevision',label:'Route revision',type:'number',min:1,max:2147483647,value:1},
+  {key:'routeGpsRequired',label:'Checkpoint capture policy',type:'select',options:[['','Legacy manual checkpoints'],['true','Require a fresh, consented GPS fix']],hint:'GPS approval attests that the exact reviewed location notice covers user-triggered checkpoint fixes. Expand the purpose only with new route/policy/notice revisions and new guard consent. A failed GPS fix cannot fall back to manual.'},
   {key:'checkpoints',label:'Checkpoints',type:'textarea',max:26000,hint:'One per line: entrance | Main entrance. Use unique IDs. Guards may choose any order.'},
   {key:'rounds',label:'Patrol rounds (optional)',type:'textarea',optional:true,max:26000,hint:'Leave empty for one pass. To repeat checkpoints, approve one round per line: opening | Opening patrol. Use unique IDs and labels. Guards select an approved round; rounds never reset automatically.'}
- ],{routeId:r.routeId,routeRevision:r.revision,checkpoints:r.checkpoints?.map(c=>c.id+' | '+c.label).join('\n'),rounds:r.rounds?.map(round=>round.id+' | '+round.label).join('\n')},!!values.patrolRoute);}
+ ],{routeId:r.routeId,routeRevision:r.revision,routeGpsRequired:r.gps_required===true?'true':'',checkpoints:r.checkpoints?.map(c=>c.id+' | '+c.label).join('\n'),rounds:r.rounds?.map(round=>round.id+' | '+round.label).join('\n')},!!values.patrolRoute);}
  if(schema.policy){const p=values.checkInPolicy??{};optionalGroup($('fields'),'policyEnabled','Timed check-ins',[
   {key:'policyRevision',label:'Policy revision',type:'number',min:1,max:2147483647,value:1},{key:'interval',label:'Interval (minutes)',type:'number',min:1,max:1440,value:60},
   {key:'window',label:'Response window (seconds)',type:'number',min:1,max:86400,value:120},{key:'evidenceAge',label:'Evidence freshness (seconds)',type:'number',min:1,max:300,value:30},

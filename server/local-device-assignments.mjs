@@ -1,6 +1,6 @@
 import {locationPolicySnapshot} from './location-policy.mjs';
 import {checkInPolicy} from './check-in-policy.mjs';
-import {patrolRoute} from './patrol-route.mjs';
+import {patrolRoutePolicy} from './patrol-route.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes,randomUUID,verify} from 'node:crypto';
 import {parseEnrollmentKey as key,decodeEnrollmentValue as decode} from './enrollment-key.mjs';
@@ -31,7 +31,7 @@ export class LocalDeviceAssignments {
   if(['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
   const row=Object.fromEntries(['assignmentId','guardId','vendorId','siteId','startsAt','endsAt','active'].map(k=>[k,a[k]]));
   if(a.locationPolicy)row.locationPolicy=locationPolicySnapshot(a.locationPolicy).policy;
-  if(a.patrolRoute)row.patrolRoute=patrolRoute(a.patrolRoute);
+  if(a.patrolRoute)row.patrolRoute=patrolRoutePolicy(a.patrolRoute,a.locationPolicy);
   if(a.checkInPolicy)row.checkInPolicy=checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt);
   this.db.prepare('INSERT INTO assignments VALUES(?,?,?)').run(a.assignmentId,a.guardId,JSON.stringify(row));
  }

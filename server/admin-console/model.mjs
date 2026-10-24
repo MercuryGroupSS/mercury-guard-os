@@ -77,6 +77,8 @@ export function buildPayload(action,values,now=Date.now(),locationNoticeSha256){
    const routeId=String(values.routeId??'').trim(),checkpoints=String(values.checkpoints??'').trim().split('\n').map(line=>{const split=line.indexOf('|');if(split<1)throw Error('Use one “ID | Label” checkpoint per line.');return {id:line.slice(0,split).trim(),label:line.slice(split+1).trim()};});
    if(!stable(routeId)||!checkpoints.length||checkpoints.length>100||checkpoints.some(c=>!stable(c.id)||!c.label||c.label.length>200)||new Set(checkpoints.map(c=>c.id)).size!==checkpoints.length)throw Error('Use a route ID and unique checkpoints, one “ID | Label” per line.');
    p.patrolRoute={routeId,revision:integer(values.routeRevision,1,2147483647,'Route revision'),checkpoints};
+   if(values.routeGpsRequired==='true')p.patrolRoute.gps_required=true;
+   else if(values.routeGpsRequired!==undefined&&values.routeGpsRequired!=='')throw Error('Choose legacy manual patrol or require an approved GPS fix.');
    const roundText=String(values.rounds??'').trim();
    if(roundText){
     const rounds=roundText.split('\n').map(line=>{const split=line.indexOf('|');if(split<1)throw Error('Use one “ID | Label” patrol round per line.');return {id:line.slice(0,split).trim(),label:line.slice(split+1).trim()};});
@@ -90,6 +92,7 @@ export function buildPayload(action,values,now=Date.now(),locationNoticeSha256){
    p.checkInPolicy={revision:integer(values.policyRevision,1,2147483647,'Policy revision'),interval_ms:interval,window_ms:window,max_evidence_age_ms:age,max_accuracy_m:accuracy};
   }
   if(values.locationPolicyEnabled==='on')p.locationPolicy=locationPolicyPayload(values,locationNoticeSha256);
+  if(p.patrolRoute?.gps_required===true&&!p.locationPolicy)throw Error('GPS-required checkpoints need the complete approved location policy and notice covering checkpoint fixes.');
  }
  if(action==='dispatch.publish'){
   const {assignmentId,guardId,vendorId,siteId,messageId,version,state,title='',body='',due}=p;
@@ -245,7 +248,14 @@ export function reportPresentation(report){
  switch(observation.kind){
   case 'location':{const view=locationReportPresentation(data);summary=view.summary;rows.push(...view.rows);break;}
   case 'incident':summary=String(data.description??'');rows.push(['Description',summary]);break;
-  case 'patrol_checkpoint':summary='Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'')+(data.round_id?' · Round '+String(data.round_id):'');rows.push(['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision],['Patrol round',data.round_id??'Single pass (no declared round)']);break;
+  case 'patrol_checkpoint':{
+   const location=data.location,view=location?locationReportPresentation({...location,capture_grant_id:'00000000-0000-0000-0000-000000000000'}):null;
+   const validated=!!(view?.validated&&positiveSafe(location.requested_at_ms)&&location.requested_at_ms<=location.fix_at_ms&&positiveSafe(location.notice_revision)&&location.server_validation?.notice_revision===location.notice_revision&&location.notice_sha256===location.server_validation?.notice_sha256);
+   const method=location?(validated?'GPS device observation':'GPS validation unavailable'):'Manual checkpoint';
+   summary=method+' · Checkpoint '+String(data.checkpoint_id??'')+' · Route '+String(data.route_id??'')+(data.round_id?' · Round '+String(data.round_id):'');rows.push(['Checkpoint method',method],['Checkpoint',data.checkpoint_id],['Route',data.route_id],['Route revision',data.route_revision],['Patrol round',data.round_id??'Single pass (no declared round)']);
+   if(view){const detail=validated?view:locationReportPresentation({...location,capture_grant_id:'00000000-0000-0000-0000-000000000000',server_validation:undefined});rows.push(['Fix requested',positiveSafe(location.requested_at_ms)?reportDate(location.requested_at_ms):'Unavailable'],['Original notice revision',validated?location.notice_revision:'Unavailable'],...detail.rows.filter(([title])=>title!=='Original capture grant'));}
+   break;
+  }
   case 'check_in':summary='Slot '+String(data.slot??'')+' · GPS and local biometric recorded';rows.push(['Check-in slot',data.slot],['Policy revision',data.policy_revision],['Local biometric','Recorded on this device; individual identity comes from the signed-in guard account.'],['Biometric recorded',reportDate(data.biometric?.at)],['GPS recorded',reportDate(data.location?.at)],['Latitude',data.location?.latitude],['Longitude',data.location?.longitude],['GPS uncertainty',String(data.location?.accuracy_m??'—')+' metres'],['Evidence ID',data.evidence_id]);break;
   case 'shift_start':summary='Clocked in '+reportDate(data.clocked_in_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)]);break;
   case 'shift_end':summary=(data.early_exit?'Early clock-out':'Clocked out')+' · '+reportDate(data.clocked_out_at_ms);rows.push(['Clocked in',reportDate(data.clocked_in_at_ms)],['Clocked out',reportDate(data.clocked_out_at_ms)],['Early exit',data.early_exit?'Yes':'No'],['Reason',data.reason||'No reason recorded']);break;

@@ -39,6 +39,12 @@ test('optional patrol rounds preserve legacy omission, reject ambiguous authorit
  const noRoute=buildPayload('ops_binding.approve',{...values,routeEnabled:undefined,rounds:'unapproved | Must not attach'});assert.equal('patrolRoute' in noRoute,false);
 });
 const locationApproval={opsShiftId:'synthetic-ops',guardId:'synthetic-guard',vendorId:'synthetic-company',siteId:'synthetic-site',authSubject:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',revision:'4',active:'true',locationPolicyEnabled:'on',locationRevision:'3',locationNoticeRevision:'2',locationNotice:'  Synthetic review only — café.\nCollection stops when this authorized shift or lease ends.  ',locationInterval:'12000',locationDistance:'0',locationFreshness:'20000',locationAccuracy:'25.5',locationLease:'60000'};
+test('GPS checkpoint approval requires explicit exact location notice and is retained in reasoned immutable review',async()=>{
+ const values={...locationApproval,routeEnabled:'on',routeId:'synthetic-route',routeRevision:'5',checkpoints:'entrance | Entrance',routeGpsRequired:'true'};
+ await assert.rejects(buildReviewedPayload('ops_binding.approve',{...values,locationPolicyEnabled:undefined}),/complete approved location policy/);
+ const payload=await buildReviewedPayload('ops_binding.approve',values);assert.equal(payload.patrolRoute.gps_required,true);const change=new PendingChange({owner:'operator',action:'ops_binding.approve',payload,reason:'This exact notice covers user-triggered checkpoint fixes',requestId:'gps-request'});delete payload.patrolRoute.gps_required;assert.equal(change.request('operator').payload.patrolRoute.gps_required,true);
+ const legacy=await buildReviewedPayload('ops_binding.approve',{...values,routeGpsRequired:''});assert.equal(Object.hasOwn(legacy.patrolRoute,'gps_required'),false);await assert.rejects(buildReviewedPayload('ops_binding.approve',{...values,routeGpsRequired:'false'}));
+});
 test('location approval is absent by default and hashes the exact reviewed notice before immutable audited retry',async()=>{
  const omitted=await buildReviewedPayload('ops_binding.approve',{...locationApproval,locationPolicyEnabled:undefined});assert.equal('locationPolicy'in omitted,false);
  await assert.rejects(buildReviewedPayload('ops_binding.approve',{...locationApproval,locationInterval:''}),/interval/);assert.throws(()=>buildPayload('ops_binding.approve',locationApproval),/fingerprint/);
@@ -176,6 +182,12 @@ test('received patrol details preserve the recorded round ID and explicitly labe
  delete report.observation.data.round_id;const legacy=reportPresentation(report);assert.doesNotMatch(legacy.summary,/Round/);assert.ok(legacy.rows.some(([title,value])=>title==='Patrol round'&&value==='Single pass (no declared round)'));
 });
 const locationSample={capture_grant_id:'33333333-3333-4333-8333-333333333333',consent_id:'11111111-1111-4111-8111-111111111111',policy_revision:3,policy_sha256:'a'.repeat(64),fix_at_ms:1730000000000,latitude:0,longitude:0,accuracy_m:12,mock:false,server_validation:{version:1,status:'validated_device_observation',policy_revision:3,policy_sha256:'a'.repeat(64),consent_id:'11111111-1111-4111-8111-111111111111',notice_sha256:'b'.repeat(64),geofence:{state:'inside',fence_id:'synthetic-circle',fence_revision:2,distance_m:15}}};
+test('received checkpoints distinguish legacy manual history from validated GPS and never imply physical presence',()=>{
+ const data={route_id:'route',route_revision:5,checkpoint_id:'entrance',round_id:'closing'},manual=reportPresentation({observation:{kind:'patrol_checkpoint',data}});assert.match(manual.summary,/Manual checkpoint/);assert.equal(Object.fromEntries(manual.rows)['Checkpoint method'],'Manual checkpoint');
+ const {capture_grant_id,...location}=structuredClone(locationSample);location.requested_at_ms=location.fix_at_ms-1000;location.notice_revision=2;location.notice_sha256=location.server_validation.notice_sha256;location.server_validation.notice_revision=2;
+ const gps=reportPresentation({observation:{kind:'patrol_checkpoint',data:{...data,location}}}),rows=Object.fromEntries(gps.rows);assert.match(gps.summary,/GPS device observation/);assert.equal(rows['Original notice revision'],2);assert.equal(rows['Original notice fingerprint'],'b'.repeat(64));assert.match(rows.Meaning,/does not prove physical presence/);assert.equal('Original capture grant'in rows,false);
+ location.notice_revision=3;const invalid=reportPresentation({observation:{kind:'patrol_checkpoint',data:{...data,location}}}),bad=Object.fromEntries(invalid.rows);assert.match(invalid.summary,/GPS validation unavailable/);assert.equal(bad['Server assessment'],'Validation unavailable');assert.equal('Configured geofence ID'in bad,false);
+});
 test('typed received location preserves original consent, policy and sample attribution and labels only the server assessment',()=>{
  const names={inside:'Inside configured circle',outside:'Outside configured circle',uncertain:'Uncertain relative to configured circle',not_configured:'Geofence not configured'};
  for(const [state,name]of Object.entries(names)){

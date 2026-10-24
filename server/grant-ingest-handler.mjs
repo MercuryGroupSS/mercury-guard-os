@@ -2,7 +2,7 @@ import {validateLocationSample} from './location-policy.mjs';
 import {reconcileCheckIns} from './check-in-status.mjs';
 import {validateCheckIn,validateMissReason} from './check-in-policy.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
-import {permitsCheckpoint} from './patrol-route.mjs';
+import {validatePatrolCheckpoint} from './patrol-location.mjs';
 import {strictJson,verifyScopedBatch} from './verify-batch.mjs';
 import {createGuardResolver} from './guard-directory.mjs';
 const required={dispatch_ack:'dispatch_ack',incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location'};
@@ -43,7 +43,7 @@ export function createGrantIngestHandler({verifySession,directory,devices,grantI
     if(event.kind==='dispatch_ack'){if(!dispatch)throw Error('Dispatch unavailable');await dispatch.validateAcknowledgement({guardId:c.guard_id,vendorId:first.vendorId,siteId:c.site_id,assignmentId:c.assignment_id},event);}
     if(event.kind==='photo_evidence')photoMetadata(event.data);
     if(event.kind==='location')validateLocationSample(g.location,event,g,at);
-    if(event.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy.patrolRoute,event.data))throw Error('Checkpoint not authorized');
+    if(event.kind==='patrol_checkpoint')validatePatrolCheckpoint(saved.policy.patrolRoute,event,g,at);
    }
    // Resolve photo links only after every supplied event has passed its capture grant.
    for(const event of batch.events)if(event.kind==='check_in'){

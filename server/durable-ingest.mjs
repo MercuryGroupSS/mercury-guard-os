@@ -34,7 +34,7 @@ export class DurableIngest {
     // Revalidate even retries: a stored receipt cannot bypass revocation/expiry.
     const verified = verifyScopedBatch(raw,trustedContext,now);
     const batch=verified.batch;
-    if(batch.events.some(event=>event.kind==='location'))throw Error('Location requires transactional current PostgreSQL consent');
+    if(batch.events.some(event=>event.kind==='location'||event.kind==='patrol_checkpoint'&&Object.hasOwn(event.data,'location')))throw Error('Location requires transactional current PostgreSQL consent');
     const payloadHash=trustedContext.vendorId?digest({hash:verified.payloadHash,vendorId:trustedContext.vendorId}):verified.payloadHash;
     const device = trustedContext.thumbprint;
     this.db.exec('BEGIN IMMEDIATE');

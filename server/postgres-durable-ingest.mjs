@@ -6,7 +6,8 @@ import {createHash} from 'node:crypto';
 import {verifyScopedBatch} from './verify-batch.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
 import {PHOTO_CHUNK_BYTES,PHOTO_CHUNK_TTL_MS,photoChunkReceipt,validatePhotoChunk,assemblePhotoChunks,validateWholePhoto} from './photo-chunks.mjs';
-import {permitsCheckpoint,patrolRoundKey} from './patrol-route.mjs';
+import {patrolRoundKey} from './patrol-route.mjs';
+import {validatePatrolCheckpoint} from './patrol-location.mjs';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const actions={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location',dispatch_ack:'dispatch_ack'};
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
@@ -35,11 +36,18 @@ export class PostgresDurableIngest{
   const validations=new Map();
   for(const e of batch.events){const saved=lookup.get(e.data.capture_grant_id),g=saved?JSON.parse(Buffer.from(saved.payload,'base64url').toString('utf8')):null;
    if(!g||saved.subject!==c.subject||saved.vendor_id!==c.vendorId||g.guard_id!==c.guardId||g.site_id!==c.siteId||g.assignment_id!==c.assignmentId||g.device_thumbprint!==c.thumbprint||g.revocation_version!==c.revocationVersion||g.audience!==c.audience||!g.actions.includes(actions[e.kind])||e.at<g.not_before_ms||e.at>=g.expires_at_ms)throw Error('Capture grant unavailable');
-   if(e.kind==='patrol_checkpoint'&&!permitsCheckpoint(saved.policy?.patrolRoute,e.data))throw Error('Checkpoint round not authorized');
+   if(e.kind==='patrol_checkpoint'){
+    const validation=validatePatrolCheckpoint(saved.policy?.patrolRoute,e,g,c.receivedAtMs);
+    if(validation){
+     if(!this.locationConsents||JSON.stringify(saved.policy?.location)!==JSON.stringify(g.location))throw Error('Current original checkpoint consent unavailable');
+     await this.locationConsents.forIngest(client,{...c,locationEventAt:e.at},g.location);
+     validations.set(e.event_id,{checkpoint_location_validation:validation});
+    }
+   }
    if(e.kind==='location'){
     if(!this.locationConsents||JSON.stringify(saved.policy?.location)!==JSON.stringify(g.location))throw Error('Current original location consent unavailable');
     await this.locationConsents.forIngest(client,{...c,locationEventAt:e.at},g.location);
-    validations.set(e.event_id,validateLocationSample(g.location,e,g,c.receivedAtMs));
+    validations.set(e.event_id,{location_validation:validateLocationSample(g.location,e,g,c.receivedAtMs)});
    }
   }
   return validations;
@@ -55,7 +63,7 @@ export class PostgresDurableIngest{
    if(old){if(old.digest!==hash)throw Error('Batch ID content conflict');if(validations.size)await this.locationConsents.requireSession(client,c.session);return old.body;}
    let last=Number((await client.query('SELECT COALESCE(MAX(sequence),0) n FROM mercury_guard.ingested_events WHERE device=$1',[c.thumbprint])).rows[0].n);
    for(const e of batch.events){
-    const record={scope:batch.scope,event:e,vendor_id:c.vendorId,...(validations.has(e.event_id)?{location_validation:validations.get(e.event_id)}:{})},eventHash=digest(record);
+    const record={scope:batch.scope,event:e,vendor_id:c.vendorId,...(validations.get(e.event_id)??{})},eventHash=digest(record);
     const prior=(await client.query('SELECT digest FROM mercury_guard.ingested_events WHERE device=$1 AND id=$2',[c.thumbprint,e.event_id])).rows[0];
     if(prior){if(prior.digest!==eventHash)throw Error('Event ID content or scope conflict');continue;}
     if(e.sequence<=last&&c.allowHistoricalSequence!==true)throw Error('Device sequence rollback');

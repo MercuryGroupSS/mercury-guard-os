@@ -2,7 +2,7 @@ import {locationPolicySnapshot} from './location-policy.mjs';
 import {randomBytes,randomUUID,verify} from 'node:crypto';
 import {parseEnrollmentKey,decodeEnrollmentValue} from './enrollment-key.mjs';
 import {assignmentForGuard} from './guard-directory.mjs';
-import {patrolRoute} from './patrol-route.mjs';
+import {patrolRoutePolicy} from './patrol-route.mjs';
 import {checkInPolicy} from './check-in-policy.mjs';
 const id=x=>typeof x==='string'&&/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(x);
 const deviceRow=r=>r?{deviceId:r.device_id,mode:r.mode,siteId:r.site_id,guardId:r.guard_id,thumbprint:r.thumbprint,publicKeySpki:r.public_key_spki,active:r.active&&(r.mode!=='site'||r.site_active===true),revoked:r.revoked,revocationVersion:Number(r.revocation_version)}:null;
@@ -21,7 +21,7 @@ export class PostgresDeviceAssignments{
  async revoke(deviceId,client=this.pool){if((await client.query('UPDATE mercury_guard.devices SET revoked=true,revocation_version=revocation_version+1 WHERE device_id=$1',[deviceId])).rowCount!==1)throw Error('Unknown device');}
  async assign(a,client=this.pool){
   if(!a||['assignmentId','guardId','vendorId','siteId'].some(k=>!id(a[k]))||a.active!==true||!Number.isSafeInteger(a.startsAt)||!Number.isSafeInteger(a.endsAt)||a.startsAt<=0||a.startsAt>=a.endsAt)throw Error('Invalid assignment');
-  const route=a.patrolRoute?patrolRoute(a.patrolRoute):null,policy=a.checkInPolicy?checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt):null;
+  const route=a.patrolRoute?patrolRoutePolicy(a.patrolRoute,a.locationPolicy):null,policy=a.checkInPolicy?checkInPolicy(a.checkInPolicy,a.startsAt,a.endsAt):null;
   await client.query('INSERT INTO mercury_guard.assignments(assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy,location_policy) VALUES($1,$2,$3,$4,$5,$6,true,$7,$8,$9)',[a.assignmentId,a.guardId,a.vendorId,a.siteId,a.startsAt,a.endsAt,route,policy,a.locationPolicy?locationPolicySnapshot(a.locationPolicy).policy:null]);
  }
  async cancel(assignmentId,client=this.pool){if((await client.query('UPDATE mercury_guard.assignments SET active=false WHERE assignment_id=$1',[assignmentId])).rowCount!==1)throw Error('Unknown assignment');}
