@@ -1,6 +1,6 @@
-# Optional connected check-in attention — v0.43 candidate
+# Optional connected check-in attention — v0.44 candidate
 
-This candidate brings the previously recorded calm alert design into the individually signed-in workflow. Its acceptance requires the exact-source CI and immutable configured package records. The accepted baseline is v0.42; physical Fold testing remains deferred.
+This candidate brings the previously recorded calm alert design into the individually signed-in workflow. Its acceptance requires the exact-source CI and immutable configured package records. The accepted baseline is v0.42; physical Fold testing remains deferred. The v0.43 runtime suites exposed three test-fixture failures: launch-filter tracking during two ActivityScenario teardowns, and a photo hash identical to a configuration sentinel. v0.44 corrects these fixtures without changing the production attention implementation or its original assertions. The failed v0.43 results remain preserved.
 
 An administrator may explicitly select the calm progressive preset while reviewing an Ops assignment binding. The existing policy revision and approval history retain the complete choice. The optional extension is exactly `attention: {version: 1, profile: "calm_progressive_v1"}`. A malformed present extension is rejected. Omission preserves the existing normalized policy and one-cue behavior. No post is enabled automatically, and no universal check-in cadence is introduced. Enable this profile only after the compatible client is accepted and installed.
 

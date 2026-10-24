@@ -1,4 +1,4 @@
-# Mercury One v0.43 — attended Fold additions
+# Mercury One v0.44 — attended Fold additions
 
 All physical results start **OPEN**. Use the [complete baseline Fold procedure](fold-acceptance-v0.35.md) with these additions and the current immutable APK/source records. Earlier demo, emulator and typed-location results do not establish current hardware acceptance. Do not access the phone until the user resumes physical testing.
 

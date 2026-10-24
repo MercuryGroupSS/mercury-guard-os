@@ -73,7 +73,7 @@ class ConnectedAttentionEntryTest {
    val cancellation=CancellationSignal();field(a,"signal",cancellation);field(a,"busy",true)
    val password=EditText(a).apply{setText("synthetic-private-input")};field(a,"password",password);oldRoot.addView(password)
    var obsoleteClicks=0;val obsolete=Button(a).apply{text="Synthetic obsolete action";setOnClickListener{obsoleteClicks++}};oldRoot.addView(obsolete)
-   instrumentation.callActivityOnNewIntent(a,Intent(a,GuardAccountActivity::class.java).putExtra("open_attention",true))
+   instrumentation.callActivityOnNewIntent(a,Intent(a.intent).putExtra("open_attention",true))
    assertLocked(a,old,oldRoot,cancellation,generation);assertEquals(false,value(a,"stopped"));assertEquals("",password.text.toString());assertFalse(obsolete.performClick());assertEquals(0,obsoleteClicks)
    // No pause/stop or biometric callback was needed to establish this fence.
    instrumentation.callActivityOnResume(a);assertTrue(texts(a.window.decorView).contains("GUARD SIGN-IN"));assertNull(value(a,"signal"))
@@ -124,7 +124,7 @@ class ConnectedAttentionEntryTest {
     .apply{isAccessible=true}.newInstance(file,f.binding,value(a,"captureGrant"),value(a,"captureAnchor"),null,f.owner)
    val cancellation=CancellationSignal();field(a,"signal",cancellation)
    try{
-    field(a,"pendingPhoto",pending);instrumentation.callActivityOnNewIntent(a,Intent(a,GuardAccountActivity::class.java))
+    field(a,"pendingPhoto",pending);instrumentation.callActivityOnNewIntent(a,Intent(a.intent))
     assertLocked(a,old,oldRoot,cancellation,generation);assertSame(pending,value(a,"pendingPhoto"));assertArrayEquals(bytes,file.readBytes())
     assertEquals(f.owner,type.getDeclaredField("owner").apply{isAccessible=true}.get(pending));assertEquals("",editor.text.toString())
     ConnectedIncidentDraftStore(context).use{db->assertEquals(draft,db.read(f.draftOwner));db.readableDatabase.rawQuery("SELECT body FROM drafts WHERE owner=?",arrayOf(f.draftOwner.owner())).use{row->assertTrue(row.moveToFirst());assertFalse(row.getString(0).contains(draft))}}

@@ -34,7 +34,7 @@ class ConnectedCheckInOwnerTest {
    .put("attention",JSONObject().put("version",1).put("profile","calm_progressive_v1")))
   val store=ScopedEventStore(context,name,{200},{1})
   fun evidence(mock:Boolean=false)=AuthorizedCheckInEvidence(policy,0,2000,JSONObject().put("at",3000).put("latitude",0).put("longitude",0).put("accuracy_m",5).put("mock",mock))
-  fun photo()=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("sha256","a".repeat(64)).put("bytes",4).put("width",1).put("height",1).put("capture","camera_intent")
+  fun photo()=JSONObject().put("evidence_id",UUID.randomUUID().toString()).put("sha256","e".repeat(64)).put("bytes",4).put("width",1).put("height",1).put("capture","camera_intent")
   fun capture(owner:ConnectedDispatchOwner=this.owner,db:ScopedEventStore=store)=db.captureCheckIn(owner,grant,identity,evidence(),photo(),4000)
   fun raw(kind:String="check_in"):Pair<Long,String> =store.readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->
    while(c.moveToNext()){
@@ -64,6 +64,7 @@ class ConnectedCheckInOwnerTest {
 
  @Test fun atomicPhotoAndCheckInReopenWithEncryptedOwnerAndUnchangedSignedRetry(){Fixture(context).use{f->
   val eventId=f.capture();val original=f.raw();val record=f.decode(original.first,original.second);val originalPhoto=f.raw("photo_evidence");val photo=f.decode(originalPhoto.first,originalPhoto.second)
+  assertNotEquals(f.owner.configuration,photo.getJSONObject("event").getJSONObject("data").getString("sha256"))
   assertEquals(f.owner.json().toString(),record.getJSONObject("check_in_owner").toString())
   assertEquals(f.owner.json().toString(),photo.getJSONObject("photo_owner").toString())
   assertEquals(photo.getJSONObject("event").getString("event_id"),record.getJSONObject("event").getJSONObject("data").getString("photo_event_id"))
