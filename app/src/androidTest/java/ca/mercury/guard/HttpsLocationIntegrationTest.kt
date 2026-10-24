@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.location.Location
 import android.os.SystemClock
+import android.os.Bundle
+import android.provider.Settings
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso.onView
@@ -12,6 +14,7 @@ import androidx.test.espresso.action.ViewActions.*
 import androidx.test.espresso.matcher.ViewMatchers.*
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONObject
+import org.json.JSONArray
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -23,6 +26,46 @@ import javax.net.ssl.HttpsURLConnection
 
 /** Actual Auth/PG/TLS and collector lifecycle; explicit typed transport or separately required SDK GNSS. */
 class HttpsLocationIntegrationTest {
+ private data class PointRetry(val proof:JSONObject,val batch:JSONObject)
+ /** Explicit typed fixture only; real Android Keystore proof and PG acceptance, no SDK GNSS claim. */
+ private fun pointTransport(context:Context,m:JSONObject,c:GuardServiceConfig,client:GuardAccountClient,session:GuardAccountClient.Session,identity:DeviceIdentity,binding:GrantBinding,record:LocationConsentRecord):PointRetry {
+  val started=SystemClock.elapsedRealtime();val boot=Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)
+  val response=client.grant(session,c.deviceId,binding.assignmentId,identity,c.audience);val completed=SystemClock.elapsedRealtime()
+  val authority=ServerTimeAnchor(response.getLong("server_time_ms"),started,boot)
+  val grant=ShiftGrantVerifier(c.issuer,c.audience,c.keys).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,authority,completed,boot)?:error("Synthetic checkpoint signed grant missing")
+  val anchor=authority.copy(elapsedMillis=completed);val plan=AuthorizedPatrolRoute.parse(response.getJSONObject("patrol_route"));assertTrue(plan.gpsRequired)
+  assertEquals(record.id,grant.location!!.id);assertEquals(record.policy.payload,grant.location!!.policy.payload)
+  val requested=SystemClock.elapsedRealtimeNanos();SystemClock.sleep(2)
+  val fix=Location("gps").apply{latitude=0.0;longitude=0.0;accuracy=5f;elapsedRealtimeNanos=SystemClock.elapsedRealtimeNanos()}
+  val sample=AuthorizedPatrolLocation.fromLocation(fix,grant,anchor,requested,SystemClock.elapsedRealtimeNanos())?:error("Explicit typed point fixture invalid")
+  val transport=GuardTransport(c.endpoint)
+  ScopedEventStore(context).use{db->
+   assertEquals("Earlier location receipt was not retained before point fixture",0,db.pendingCount(binding.guardId))
+   db.capturePatrolCheckpoint(plan,plan.choice("entrance"),binding,grant,identity,sample.at,record,sample.data())
+   val proof=db.prepareUpload(identity,c.audience,binding.guardId,"point-interoperability")!!
+   val originalBytes=proof.toString();val batch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
+   val event=batch.getJSONArray("events").getJSONObject(0);assertEquals(1,batch.getJSONArray("events").length());assertEquals("patrol_checkpoint",event.getString("kind"))
+   val before=fixture(m,"/test/receipts").getInt("checkpoint_count")
+   fun reject(change:(JSONObject)->Unit){
+    val changed=JSONObject(event.toString()).put("event_id",UUID.randomUUID().toString());change(changed.getJSONObject("data"))
+    val unsigned=JSONObject().put("batch_id",UUID.randomUUID().toString()).put("schema_version",1).put("events",JSONArray().put(changed))
+    val invalid=identity.signScopedEventBatch(c.audience,unsigned,binding);val changedBatch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(invalid.getString("payload")),Charsets.UTF_8))
+    try{transport.sendPilotBatch(session.bearer(),invalid,changedBatch.getString("batch_id"),setOf(changed.getString("event_id")));fail("Invalid GPS checkpoint accepted by real service")}catch(e:GuardTransport.HttpFailure){assertEquals(400,e.statusCode)}
+    assertEquals(before,fixture(m,"/test/receipts").getInt("checkpoint_count"))
+   }
+   reject{it.getJSONObject("location").put("fix_at_ms",sample.requestedAt-1)}
+   reject{it.getJSONObject("location").put("consent_id",UUID.randomUUID().toString())}
+   reject{it.remove("location")}
+   val receipt=transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),setOf(event.getString("event_id")))
+   assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),setOf(event.getString("event_id"))));assertEquals(originalBytes,proof.toString())
+   val observed=fixture(m,"/test/receipts");assertEquals(before+1,observed.getInt("checkpoint_count"))
+   val location=observed.getJSONObject("last_checkpoint").getJSONObject("observation").getJSONObject("data").getJSONObject("location")
+   assertEquals(record.id,location.getString("consent_id"));assertEquals(record.policy.noticeSha256,location.getString("notice_sha256"));assertEquals("validated_device_observation",location.getJSONObject("server_validation").getString("status"));assertEquals(record.id,location.getJSONObject("server_validation").getString("consent_id"))
+   db.recordUploadReceipt(binding.guardId,JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"));assertEquals(0,db.pendingCount(binding.guardId))
+   return PointRetry(proof,batch)
+  }
+ }
+
  private fun fixture(metadata:JSONObject,path:String,body:JSONObject?=null):JSONObject {
   val c=URL("https://localhost:55446$path").openConnection() as HttpsURLConnection
   try{c.connectTimeout=10000;c.readTimeout=15000;c.instanceFollowRedirects=false;c.setRequestProperty("X-Mercury-Test-Nonce",metadata.getString("test_nonce"))
@@ -96,14 +139,33 @@ class HttpsLocationIntegrationTest {
     val current=active()!!;assertEquals(initial.record.id,current.record.id)
     // Pause capture, then retain one exact typed sample and incident before withdrawing.
     ConnectedLocationRuntime.stop(context,"Synthetic acceptance pause before withdrawal")
+    // Finish any already-captured location before pausing delivery; server receipt can precede the local atomic receipt write.
+    coordinator.request()
+    instrumentation.uiAutomation.executeShellCommand("cmd jobscheduler run -f ${context.packageName} ${UploadCoordinator.JOB_ID}").use{fd->java.io.FileInputStream(fd.fileDescriptor).use{it.readBytes()}}
+    waitFor("Original location receipt not retained before checkpoint transport",30000){ScopedEventStore(context).use{it.pendingCount(binding.guardId)==0}}
     (context.getSystemService(Context.JOB_SCHEDULER_SERVICE) as JobScheduler).cancel(UploadCoordinator.JOB_ID);UploadRuntime.cancel()
-    val at=current.anchor.epochMillis+SystemClock.elapsedRealtime()-current.anchor.elapsedMillis
+    val pointRetry=if(typedFixture)pointTransport(context,m,config,client,session,identity,binding,current.record)else null
+    // Refresh a short lease after the bounded network checks, retaining the same consent.
+    val queuedStart=SystemClock.elapsedRealtime();val boot=Settings.Global.getInt(context.contentResolver,Settings.Global.BOOT_COUNT,-1)
+    val queuedResponse=client.grant(session,config.deviceId,binding.assignmentId,identity,config.audience);val queuedCompleted=SystemClock.elapsedRealtime()
+    val queuedAuthority=ServerTimeAnchor(queuedResponse.getLong("server_time_ms"),queuedStart,boot)
+    val queuedGrant=ShiftGrantVerifier(config.issuer,config.audience,config.keys).verify(queuedResponse.getString("key_id"),queuedResponse.getString("payload"),queuedResponse.getString("signature"),binding,queuedAuthority,queuedCompleted,boot)?:error("Fresh withdrawal fixture lease missing")
+    val queuedAnchor=queuedAuthority.copy(elapsedMillis=queuedCompleted)
+    val at=ConnectedLocationTiming.observationAt(queuedAnchor.epochMillis,queuedAnchor.elapsedMillis,SystemClock.elapsedRealtime())
     val fix=Location("gps").apply{latitude=0.0;longitude=0.0;accuracy=5f;elapsedRealtimeNanos=SystemClock.elapsedRealtimeNanos()}
-    val sample=ConnectedLocationSample.fromLocation(fix,current.grant,at,SystemClock.elapsedRealtimeNanos())?:error("Synthetic typed sample unavailable within current lease")
+    val sample=ConnectedLocationSample.fromLocation(fix,queuedGrant,at,SystemClock.elapsedRealtimeNanos())?:error("Synthetic typed sample unavailable within current lease")
     val db=ScopedEventStore(context)
     try{
-     db.captureLocation(current.record,current.grant,identity,sample)
-     db.capture("incident",JSONObject().put("description","Synthetic incident after location withdrawal; no real event"),binding,current.grant,identity,at)
+     db.captureLocation(current.record,queuedGrant,identity,sample)
+     if(typedFixture){
+      val request=SystemClock.elapsedRealtimeNanos();SystemClock.sleep(2)
+      val pointFix=Location("gps").apply{latitude=0.0;longitude=0.0;accuracy=5f;elapsedRealtimeNanos=SystemClock.elapsedRealtimeNanos()}
+      val point=AuthorizedPatrolLocation.fromLocation(pointFix,queuedGrant,queuedAnchor,request,SystemClock.elapsedRealtimeNanos())?:error("Typed queued checkpoint fixture invalid")
+      val plan=AuthorizedPatrolRoute.parse(queuedResponse.getJSONObject("patrol_route"))
+      db.capturePatrolCheckpoint(plan,plan.choice("perimeter"),binding,queuedGrant,identity,point.at,current.record,point.data())
+     }
+     val incidentAt=ConnectedLocationTiming.observationAt(queuedAnchor.epochMillis,queuedAnchor.elapsedMillis,SystemClock.elapsedRealtime())
+     db.capture("incident",JSONObject().put("description","Synthetic incident after location withdrawal; no real event"),binding,queuedGrant,identity,incidentAt)
      val original=db.prepareUpload(identity,config.audience,binding.guardId,"synthetic-original")!!
      val body=JSONObject(String(java.util.Base64.getUrlDecoder().decode(original.getString("payload")),Charsets.UTF_8));val raw=body.toString();val rows=body.getJSONArray("events");assertEquals("location",rows.getJSONObject(0).getString("kind"))
      val countsBefore=fixture(m,"/test/location-receipts")
@@ -119,7 +181,14 @@ class HttpsLocationIntegrationTest {
      assertNull(active());assertEquals(raw,JSONObject(String(java.util.Base64.getUrlDecoder().decode(original.getString("payload")),Charsets.UTF_8)).toString())
      try{GuardTransport(config.endpoint).sendPilotBatch(session.bearer(),original,body.getString("batch_id"),(0 until rows.length()).map{rows.getJSONObject(it).getString("event_id")}.toSet());fail("Withdrawn original location accepted")}catch(e:GuardTransport.HttpFailure){assertEquals(400,e.statusCode)}
      assertTrue(db.pendingCount(binding.guardId)>0)
+     if(pointRetry!=null){
+      val old=pointRetry.batch;val oldRows=old.getJSONArray("events")
+      try{GuardTransport(config.endpoint).sendPilotBatch(session.bearer(),pointRetry.proof,old.getString("batch_id"),setOf(oldRows.getJSONObject(0).getString("event_id")));fail("Withdrawn accepted GPS checkpoint retry accepted")}catch(e:GuardTransport.HttpFailure){assertEquals(400,e.statusCode)}
+      assertEquals(countsBefore.getInt("checkpoint_count"),fixture(m,"/test/receipts").getInt("checkpoint_count"))
+      assertTrue((0 until rows.length()).any{rows.getJSONObject(it).getString("kind")=="patrol_checkpoint"})
+     }
      scenario.moveToState(Lifecycle.State.CREATED);scenario.moveToState(Lifecycle.State.RESUMED);assertNull("Background/resume restarted collector",active())
+     if(pointRetry!=null)instrumentation.addResults(Bundle().apply{putString("required_gps_checkpoint_transport","verified_synthetic_0_0")})
     }finally{db.close()}
    }
   }finally{

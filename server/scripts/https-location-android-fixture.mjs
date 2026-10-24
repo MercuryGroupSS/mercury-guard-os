@@ -30,8 +30,9 @@ if(config.API_URL!=='http://127.0.0.1:55321'||!['postgres:','postgresql:'].inclu
 const run=randomUUID(),prefix='https-location-'+run,guardId=prefix+'-guard',vendorId=prefix+'-vendor',siteId=prefix+'-site',deviceId=prefix+'-phone',assignmentId=prefix+'-shift';
 const guardEmail=prefix+'-guard@example.invalid',adminEmail=prefix+'-admin@example.invalid',password='synthetic-password-only',adminPassword=randomBytes(32).toString('base64url'),nonce=randomBytes(32).toString('base64url');
 const owner=new Client({connectionString:config.DB_URL,connectionTimeoutMillis:5000,statement_timeout:10000,query_timeout:12000}),serviceHeaders={apikey:config.SERVICE_ROLE_KEY,authorization:'Bearer '+config.SERVICE_ROLE_KEY,'content-type':'application/json'};
-const notice='Synthetic location acceptance only. This is not an operational tracking notice. Collection is limited to this test shift and its short lease; withdrawal stops further location acceptance. No real position or alert is used.';
+const notice='Synthetic location acceptance only. This is not an operational tracking notice. Collection includes explicit user-triggered patrol checkpoint point fixes under this same exact notice and is limited to this test shift and its short lease; withdrawal stops further location and GPS checkpoint acceptance. No real position or alert is used.';
 const policy=locationPolicySnapshot({version:1,revision:1,notice_revision:1,notice_text:notice,notice_sha256:locationDigest(notice),sample_interval_ms:1000,min_distance_m:0,max_fix_age_ms:20000,max_accuracy_m:30,max_capture_lease_ms:10000,geofence:{type:'circle',id:prefix+'-synthetic-circle',revision:1,latitude:0,longitude:0,radius_m:100}}).policy;
+const patrol={routeId:prefix+'-point-route',revision:1,gps_required:true,checkpoints:[{id:'entrance',label:'Synthetic entrance'},{id:'perimeter',label:'Synthetic perimeter'}]};
 const generated=[],inflight=new Set();let adminSubject,guardSubject,directory,devices,service,origin,tls,issuer,enrolledKey,ownerConnected=false,ownsPrivateFile=false,cleanupPromise;
 let signalStop;const stopped=new Promise(resolve=>{signalStop=resolve;});
 // Catch termination during setup too: finish the bounded operation, then clean
@@ -51,12 +52,12 @@ async function enroll(publicKeySpki){
  enrolledKey=key;
 }
 async function receipts(){
- if(!enrolledKey)return {count:0,location_count:0,incident_count:0,last_location:null};
+ if(!enrolledKey)return {count:0,location_count:0,incident_count:0,checkpoint_count:0,last_location:null,last_checkpoint:null};
  const values=[enrolledKey.thumbprint,guardId,vendorId,assignmentId],where=' WHERE device=$1 AND guard_id=$2 AND vendor_id=$3 AND assignment_id=$4';
- const [counts,latest]=await Promise.all([owner.query("SELECT count(*) AS total,count(*) FILTER(WHERE body->'event'->>'kind'='location') AS locations,count(*) FILTER(WHERE body->'event'->>'kind'='incident') AS incidents FROM mercury_guard.ingested_events"+where,values),owner.query("SELECT body FROM mercury_guard.ingested_events"+where+" AND body->'event'->>'kind'='location' ORDER BY cursor DESC LIMIT 1",values)]);
+ const [counts,latest,latestCheckpoint]=await Promise.all([owner.query("SELECT count(*) AS total,count(*) FILTER(WHERE body->'event'->>'kind'='location') AS locations,count(*) FILTER(WHERE body->'event'->>'kind'='incident') AS incidents,count(*) FILTER(WHERE body->'event'->>'kind'='patrol_checkpoint') AS checkpoints FROM mercury_guard.ingested_events"+where,values),owner.query("SELECT body FROM mercury_guard.ingested_events"+where+" AND body->'event'->>'kind'='location' ORDER BY cursor DESC LIMIT 1",values),owner.query("SELECT body FROM mercury_guard.ingested_events"+where+" AND body->'event'->>'kind'='patrol_checkpoint' ORDER BY cursor DESC LIMIT 1",values)]);
  const count=counts.rows[0],last=latest.rows[0]?.body;
  const mapping={assignmentId,guardId,vendorId,siteId,dashboardShiftId:prefix+'-synthetic-upstream',destination:prefix+'-synthetic-receiver',revision:1,active:true};
- return {count:Number(count.total),location_count:Number(count.locations),incident_count:Number(count.incidents),last_location:last?projectDashboardObservation(last,mapping):null};
+ return {count:Number(count.total),location_count:Number(count.locations),incident_count:Number(count.incidents),checkpoint_count:Number(count.checkpoints),last_location:last?projectDashboardObservation(last,mapping):null,last_checkpoint:latestCheckpoint.rows[0]?.body?projectDashboardObservation(latestCheckpoint.rows[0].body,mapping):null};
 }
 async function handle(req,res){
  try{
@@ -170,7 +171,7 @@ async function selfCheck(){
  const other=generateKeyPairSync('ec',{namedCurve:'prime256v1'}).publicKey.export({type:'spki',format:'der'}).toString('base64url');assert.equal((await tlsCall('/test/enroll',{body:{public_key_spki:other}})).status,400);
  const login=await tlsCall('/v1/session/login',{body:{guard_id:guardId,password}});assert.equal(login.status,200);const token=login.body.access_token;assert.equal((await tlsCall('/v1/me',{token})).body.guard_id,guardId);
  const enrollmentProof=async()=>{const challenge=await tlsCall('/v1/device-challenge',{token,body:{device_id:deviceId}});assert.equal(challenge.status,200);const c=challenge.body;return {version:1,algorithm:'SHA256withECDSA',audience:c.audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:thumb,public_key_spki:spki,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${thumb}`),keys.privateKey).toString('base64url')};};
- const assignments=await tlsCall('/v1/assignments',{token,body:await enrollmentProof()});assert.equal(assignments.status,200);assert.equal(assignments.body.assignments.length,1);const assignment=assignments.body.assignments[0];assert.deepEqual(assignment.locationPolicy,policy);assert.equal(assignment.shift_state.state,'not_started');
+ const assignments=await tlsCall('/v1/assignments',{token,body:await enrollmentProof()});assert.equal(assignments.status,200);assert.equal(assignments.body.assignments.length,1);const assignment=assignments.body.assignments[0];assert.deepEqual(assignment.locationPolicy,policy);assert.deepEqual(assignment.patrolRoute,patrol);assert.equal(assignment.shift_state.state,'not_started');
  const transition=async(action,reason='')=>tlsCall('/v1/shift-transition',{token,body:{assignment_id:assignmentId,proof:await enrollmentProof(),transition:{request_id:randomUUID(),action,confirmed:true,reason}}});
  assert.equal((await transition('start')).body.status,'shift_recorded_local_only');
  const grant=async()=>{const response=await tlsCall('/v1/shift-grant',{token,body:{assignment_id:assignmentId,proof:await enrollmentProof()}});assert.equal(response.status,200);return {response:response.body,claims:JSON.parse(Buffer.from(response.body.payload,'base64url'))};};
@@ -187,15 +188,23 @@ async function selfCheck(){
  const captured=batch('location',sample),signed=encode(captured),received=await tlsCall('/v2/batches',{token,body:signed});assert.equal(received.status,200);assert.deepEqual((await tlsCall('/v2/batches',{token,body:signed})).body,received.body);
  let records=(await tlsCall('/test/location-receipts')).body;assert.equal(records.location_count,1);assert.equal(records.last_location.observation.data.server_validation.geofence.state,'inside');assert.equal(records.last_location.observation.data.server_validation.consent_id,original.consent_id);
  assert.equal((await tlsCall('/v2/batches',{token,body:encode(batch('location',{...sample,mock:true}))})).status,400);
+ const point={...sample,requested_at_ms:authorized.claims.issued_at_ms,notice_revision:policy.notice_revision,notice_sha256:policy.notice_sha256};
+ const checkpoint=data=>batch('patrol_checkpoint',{route_id:patrol.routeId,route_revision:patrol.revision,checkpoint_id:'entrance',location:data});
+ const badStale=checkpoint({...point,fix_at_ms:point.requested_at_ms-1}),badConsent=checkpoint({...point,consent_id:randomUUID()});
+ assert.equal((await tlsCall('/v2/batches',{token,body:encode(badStale)})).status,400);assert.equal((await tlsCall('/v2/batches',{token,body:encode(badConsent)})).status,400);
+ assert.equal((await tlsCall('/test/receipts')).body.checkpoint_count,0);
+ const checkpointSigned=encode(checkpoint(point)),checkpointReceipt=await tlsCall('/v2/batches',{token,body:checkpointSigned});assert.equal(checkpointReceipt.status,200);assert.deepEqual((await tlsCall('/v2/batches',{token,body:checkpointSigned})).body,checkpointReceipt.body);
+ const checkpointRecord=(await tlsCall('/test/receipts')).body;assert.equal(checkpointRecord.checkpoint_count,1);assert.equal(checkpointRecord.last_checkpoint.observation.data.location.server_validation.status,'validated_device_observation');assert.equal(checkpointRecord.last_checkpoint.observation.data.location.notice_sha256,policy.notice_sha256);
+
  const withdrawal={...original,request_id:randomUUID(),action:'withdraw'},withdrawn=await consent(withdrawal);assert.equal(withdrawn.status,200);assert.equal(withdrawn.body.status,'consent_withdrawn');assert.deepEqual((await consent(withdrawal)).body,withdrawn.body);
  const statusHash=locationDigest(JSON.stringify({consent_id:original.consent_id}));assert.equal((await tlsCall('/v1/location-consents/status',{token,body:{consent_id:original.consent_id,proof:await locationProof('status',statusHash,original.consent_id)}})).body.state,'withdrawn');
- assert.equal((await tlsCall('/v2/batches',{token,body:signed})).status,400);assert.equal((await tlsCall('/v2/batches',{token,body:encode(batch('location',sample))})).status,400);
+ assert.equal((await tlsCall('/v2/batches',{token,body:checkpointSigned})).status,400);assert.equal((await tlsCall('/v2/batches',{token,body:signed})).status,400);assert.equal((await tlsCall('/v2/batches',{token,body:encode(batch('location',sample))})).status,400);
  const ordinary=await grant();assert.equal(ordinary.claims.actions.includes('location'),false);assert.equal((await tlsCall('/v2/batches',{token,body:encode(batch('incident',{description:'Synthetic incident after location withdrawal; no real event.'},ordinary.claims))})).status,200);
- records=(await tlsCall('/test/receipts')).body;assert.equal(records.location_count,1);assert.equal(records.incident_count,1);assert.equal((await transition('end','Synthetic HTTPS location test complete')).body.status,'shift_recorded_local_only');
+ records=(await tlsCall('/test/receipts')).body;assert.equal(records.location_count,1);assert.equal(records.incident_count,1);assert.equal(records.checkpoint_count,1);assert.equal((await transition('end','Synthetic HTTPS location test complete')).body.status,'shift_recorded_local_only');
  const ended=await tlsCall('/v1/shift-grant',{token,body:{assignment_id:assignmentId,proof:await enrollmentProof()}});assert.equal(ended.status,400);
  const signedOut=await tlsCall('/v1/session/logout',{token,body:{}});assert.equal(signedOut.status,400); // Logout never accepts a body.
  assert.equal((await tlsCall('/v1/session/logout',{token,method:'POST'})).status,200);assert.equal((await tlsCall('/v1/me',{token})).status,401);
- console.log('PASS: trusted localhost TLS and nonce/device confinement; actual Auth/shift/consent/conditional signed grant/typed location and exact retry; withdrawal denies location while ordinary incident remains independent.');
+ console.log('PASS: trusted localhost TLS and nonce/device confinement; actual Auth/shift/consent/conditional signed grant/typed location and exact retry; required-GPS checkpoint original notice validation and exact retry; stale/wrong consent denied; withdrawal denies location/checkpoint while ordinary incident remains independent.');
 }
 
 try{
@@ -203,7 +212,7 @@ try{
  await owner.connect();ownerConnected=true;
  adminSubject=await createUser(adminEmail,adminPassword);guardSubject=await createUser(guardEmail,password);
  await owner.query('INSERT INTO mercury_guard.vendors(vendor_id,kind,active) VALUES($1,$2,true)',[vendorId,'individual']);await owner.query('INSERT INTO mercury_guard.sites(site_id,active) VALUES($1,true)',[siteId]);await owner.query('INSERT INTO mercury_guard.guards(guard_id,auth_subject,vendor_id,active) VALUES($1,$2,$3,true)',[guardId,guardSubject,vendorId]);await owner.query('INSERT INTO mercury_guard.guard_login(guard_id,email) VALUES($1,$2)',[guardId,guardEmail]);await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[adminSubject,adminEmail]);
- directory=await openLocalGuardDirectory({config,mode:'postgres'});devices=new PostgresDeviceAssignments(directory.client);await devices.assign({assignmentId,guardId,vendorId,siteId,active:true,startsAt:Date.now()-1000,endsAt:Date.now()+3600000,locationPolicy:policy});
+ directory=await openLocalGuardDirectory({config,mode:'postgres'});devices=new PostgresDeviceAssignments(directory.client);await devices.assign({assignmentId,guardId,vendorId,siteId,active:true,startsAt:Date.now()-1000,endsAt:Date.now()+3600000,locationPolicy:policy,patrolRoute:patrol});
  // Avoid the production scheduler's global assignment scan/state in a fixture.
  devices.scheduledAfter=async()=>[];const locationConsents=new PostgresLocationConsents({devices}),store=new PostgresDurableIngest(devices,{locationConsents});store.workerState={cursor:()=>'',saveCursor:()=>{},finalized:()=>false,mark:()=>{}};
  const signing=generateKeyPairSync('rsa',{modulusLength:2048});issuer=new PostgresShiftGrantIssuer({devices,locationConsents,privateKey:signing.privateKey,keyId:'https-fixture',issuer:'mercury-local',audience:'mercury-local'});

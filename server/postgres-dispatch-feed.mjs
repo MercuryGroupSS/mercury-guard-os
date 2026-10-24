@@ -1,6 +1,8 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {scopeKey,prepareDispatchVersion,stable} from './dispatch-input.mjs';
 import {DispatchCursorError} from './dispatch-feed.mjs';
+import {createPostgresAuthSessionReader} from './postgres-auth-session.mjs';
+const uuid=value=>typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(value);
 export class PostgresDispatchFeed{
  constructor(devices){if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;}
  async publish(scope,value,existingClient=null){
@@ -15,20 +17,27 @@ export class PostgresDispatchFeed{
    await client.query('INSERT INTO mercury_guard.dispatch_changes(scope,id,version,body,guard_id,vendor_id,site_id,assignment_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[key,value.message_id,value.version,body,scope.guardId,scope.vendorId,scope.siteId,scope.assignmentId]);
   },existingClient);
  }
+ async requireSession(client,scope,at){
+  const session=scope.session;
+  if(!uuid(scope.subject)||session?.subject!==scope.subject||session.active!==true||!uuid(session.sessionId)||!Number.isSafeInteger(session.expiresAt)||!Number.isSafeInteger(session.expiresAt*1000)||session.expiresAt*1000<=Math.max(at,Date.now())||!await createPostgresAuthSessionReader(client)(scope.subject,session.sessionId))throw Error('Current exact dispatch session required');
+ }
  async read(scope,cursor,now=Date.now()){
   const key=scopeKey(scope);
   if(!Number.isSafeInteger(now)||now<=0||!/^[a-f0-9]{64}$/.test(scope.deviceThumbprint)||!Number.isSafeInteger(scope.revocationVersion)||scope.revocationVersion<0)throw Error('Verified device scope required');
-  const owner=createHash('sha256').update(JSON.stringify([key,scope.deviceThumbprint,scope.revocationVersion])).digest('hex');
+  if(!uuid(scope.subject))throw Error('Verified individual dispatch subject required');
+  const owner=createHash('sha256').update(JSON.stringify([key,scope.deviceThumbprint,scope.revocationVersion,scope.subject])).digest('hex');
   return this.devices.transaction(async client=>{
    await client.query('SELECT pg_advisory_xact_lock(724910621355084::bigint)');
+   await this.requireSession(client,scope,now);
    const current=await client.query(`SELECT 1 FROM mercury_guard.assignments a
     JOIN mercury_guard.guards g ON g.guard_id=a.guard_id AND g.vendor_id=a.vendor_id
+    JOIN mercury_guard.guard_login l ON l.guard_id=g.guard_id
     JOIN mercury_guard.vendors v ON v.vendor_id=g.vendor_id JOIN mercury_guard.sites s ON s.site_id=a.site_id
     JOIN mercury_guard.devices d ON d.thumbprint=$1
-    WHERE a.assignment_id=$2 AND g.guard_id=$3 AND v.vendor_id=$4 AND s.site_id=$5
+    WHERE a.assignment_id=$2 AND g.guard_id=$3 AND v.vendor_id=$4 AND s.site_id=$5 AND g.auth_subject=$8::uuid
      AND a.active AND a.ends_at_ms>$6 AND g.active AND v.active AND s.active AND d.active AND NOT d.revoked
      AND d.revocation_version=$7 AND ((d.mode='site' AND d.site_id=a.site_id) OR (d.mode='personal' AND d.guard_id=g.guard_id))
-    FOR SHARE OF a,g,v,s,d`,[scope.deviceThumbprint,scope.assignmentId,scope.guardId,scope.vendorId,scope.siteId,now,scope.revocationVersion]);
+    FOR SHARE OF a,g,l,v,s,d`,[scope.deviceThumbprint,scope.assignmentId,scope.guardId,scope.vendorId,scope.siteId,now,scope.revocationVersion,scope.subject]);
    if(current.rowCount!==1)throw Error('Dispatch scope unavailable');
    await client.query('DELETE FROM mercury_guard.dispatch_cursors WHERE expires<=$1',[now]);
    let after=0;
@@ -42,7 +51,10 @@ export class PostgresDispatchFeed{
    const more=selected.length<rows.length,next=more?Number(selected.at(-1).sequence):max;
    const saved=(await client.query('SELECT token FROM mercury_guard.dispatch_cursors WHERE scope=$1 AND sequence=$2',[owner,next])).rows[0];const token=saved?.token??randomUUID();
    if(saved)await client.query('UPDATE mercury_guard.dispatch_cursors SET expires=$1 WHERE token=$2',[now+86400000,token]);else await client.query('INSERT INTO mercury_guard.dispatch_cursors VALUES($1,$2,$3,$4)',[token,owner,next,now+86400000]);
-   return {scope:{guard_id:scope.guardId,vendor_id:scope.vendorId,site_id:scope.siteId,assignment_id:scope.assignmentId,device_thumbprint:scope.deviceThumbprint,revocation_version:scope.revocationVersion},changes:selected.map(r=>JSON.parse(r.body)),next_cursor:token,has_more:more,server_time_ms:now};
+   const page={scope:{guard_id:scope.guardId,vendor_id:scope.vendorId,site_id:scope.siteId,assignment_id:scope.assignmentId,device_thumbprint:scope.deviceThumbprint,revocation_version:scope.revocationVersion},changes:selected.map(r=>JSON.parse(r.body)),next_cursor:token,has_more:more,server_time_ms:now};
+   // A logout/deletion while reading or writing cursors must roll back the
+   // whole page operation. Auth row-lock/update authority is not introduced.
+   await this.requireSession(client,scope,now);return page;
   });
  }
  async validateAcknowledgement(scope,event){

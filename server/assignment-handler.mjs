@@ -43,7 +43,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(!body||Object.keys(body).sort().join()!=='assignment_id,cursor,proof'||typeof body.assignment_id!=='string'||body.cursor!==null&&typeof body.cursor!=='string')throw Error('Invalid dispatch request');
     const at=now(),result=await devices.list(identity,body.proof,at),assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
-    return reply(200,await dispatch.read({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint,revocationVersion:assignment.revocationVersion},body.cursor,at));
+    return reply(200,await dispatch.read({...identity,session,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint,revocationVersion:assignment.revocationVersion},body.cursor,at));
    }
    if(path==='/v1/shift-grant'){
     if(!grantIssuer)return reply(503,{error:'issuer_unavailable'});

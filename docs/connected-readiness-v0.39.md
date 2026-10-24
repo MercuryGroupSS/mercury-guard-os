@@ -1,0 +1,15 @@
+# Connected readiness and assignment instructions — v0.39 candidate
+
+This candidate closes remaining connected-app navigation gaps. Exact-source CI and an immutable configured APK record are required before accepting the candidate. Physical Fold testing remains deferred.
+
+An approved guard should be able to read the instructions for their assigned site before clock-in. The existing possession-authorized dispatch endpoint supports approved future assignments; a successful read must not start a shift, request a capture grant, record attendance or acknowledge an instruction. The new pre-start path is network-only. It must not adopt the older dispatch cache or make another individual's retained instructions visible. Existing active-shift acknowledgement still requires its current signed capture authority.
+
+The connected readiness panel must report the current connected account, assignment and service result alongside actual OS permission/channel and connected location state. It must give visible refresh feedback and distinguish permission from a delivered fresh GPS fix. It must not use prototype tracking, start collection while displaying status, invent check-in cadence, or add a new clock-in eligibility rule. Location consent and approved policy remain separate from OS permission.
+
+Private instructions and readiness are scoped to the current configuration, installation key, individual account and selected assignment. Pause, navigation, session/configuration changes and delayed responses must clear or reject stale private content. Biometric handset access remains distinct from server proof of an individual guard.
+
+The server read path retains its existing assignment/device/revision checks. The candidate also reviews the current Auth session and individual login binding within the PostgreSQL dispatch transaction and binds cursors to the subject. A stale cursor uses the existing reset response; no public protocol field or new privilege is introduced.
+
+The separate HTTPS location fixture extends synthetic Android-to-PostgreSQL coverage to a GPS-required checkpoint. Synthetic coordinates are explicitly labelled; this test does not establish actual SDK GNSS delivery or presence. The existing manual checkpoint and continuous-location paths remain independently covered.
+
+See the [current brief](project-brief.md), [v0.38 native contracts](native-contract-completion-v0.38.md), [location policy](patrol-gps.md) and [current attended Fold additions](fold-acceptance-v0.39.md). No real assignment, outside alert transport, operational completion or physical test is implied by this source.

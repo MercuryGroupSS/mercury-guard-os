@@ -21,7 +21,7 @@ const ownership=new URL('../../.local-backend/https-location-android-fixture.jso
 const ca=new URL('../../app/build/https-test/res/raw/https_fixture_ca.pem',import.meta.url);
 mkdirSync(privateDir,{recursive:true,mode:0o700});chmodSync(privateDir,0o700);
 const execute=promisify(execFile),abort=new AbortController();
-const result={version:1,test:'ca.mercury.guard.HttpsLocationIntegrationTest',mode:'explicit_typed_synthetic_0_0',sdk_gnss:'unverified',status:'failed',fixture_cleanup:'not_started',started_at:new Date().toISOString()};
+const result={version:1,test:'ca.mercury.guard.HttpsLocationIntegrationTest',mode:'explicit_typed_synthetic_0_0',sdk_gnss:'unverified',required_gps_checkpoint_transport:'not_verified',status:'failed',fixture_cleanup:'not_started',started_at:new Date().toISOString()};
 let fixture,fixtureResult,fixtureClosed,createdReverse=false,serial,failed;
 class GateError extends Error{constructor(code){super(code);this.code=code;}}
 function privateLog(name,text){const path=new URL(name,privateDir);writeFileSync(path,text,{mode:0o600});chmodSync(path,0o600);}
@@ -98,7 +98,8 @@ try{
  console.log('Running explicit typed synthetic 0,0 location acceptance on one emulator; SDK GNSS remains unverified.');
  const output=await device(['shell','am','instrument','-w','-r','-e','locationIntegration','true','-e','locationTypedFixture','true','-e','class','ca.mercury.guard.HttpsLocationIntegrationTest','ca.mercury.guard.httpstest.test/androidx.test.runner.AndroidJUnitRunner'],'instrumentation',180000);
  if(!/OK \(1 test\)/.test(output)||/INSTRUMENTATION_STATUS_CODE: -\d|FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/.test(output))throw new GateError('instrumentation_did_not_pass_one_test');
- result.tests_passed=1;result.status='passed';
+ if(!/INSTRUMENTATION_RESULT: required_gps_checkpoint_transport=verified_synthetic_0_0/.test(output))throw new GateError('required_gps_checkpoint_transport_unverified');
+ result.required_gps_checkpoint_transport='verified_synthetic_0_0';result.tests_passed=1;result.status='passed';
 }catch(error){failed=error instanceof GateError?error.code:'runner_failed';}
 finally{
  try{await cleanup();}catch{failed='fixture_cleanup_unconfirmed';result.fixture_cleanup='unconfirmed';fixture?.unref();}

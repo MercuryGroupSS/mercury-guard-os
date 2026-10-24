@@ -42,6 +42,7 @@ class GuardAccountActivity : Activity() {
  private var password: EditText?=null
  private var incidentDraftEditor:EditText?=null
  private var incidentHistoryView:ConnectedIncidentHistoryView?=null
+ private var connectedPrivatePanel:ConnectedPrivatePanel?=null
  private var incidentDraftScope:ConnectedIncidentDraftScope?=null
  private var incidentDraftDirty=false
  private var incidentDraftSuppress=false
@@ -63,12 +64,13 @@ class GuardAccountActivity : Activity() {
  }
  override fun onStop(){super.onStop();stopped=true;clearSession()}
  override fun onResume(){super.onResume();visibleForLocation=true;if(stopped){stopped=false;startScreen()}else shiftDeadlineRefresh?.run();loginParticles?.startMotion()}
- override fun onPause(){visibleForLocation=false;if(incidentHistoryView!=null){stopped=true;clearSession()};cancelPatrolPoint();cancelShiftDeadline(true);persistIncidentDraft();loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
- override fun onDestroy(){closeIncidentHistory();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
- private fun clearSession(){closeIncidentHistory();cancelPatrolPoint();cancelShiftDeadline();persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
+ override fun onPause(){visibleForLocation=false;if(incidentHistoryView!=null||connectedPrivatePanel!=null){stopped=true;clearSession()};cancelPatrolPoint();cancelShiftDeadline(true);persistIncidentDraft();loginParticles?.setSigningIn(false);loginParticles?.stopMotion();super.onPause()}
+ override fun onDestroy(){closeIncidentHistory();closeConnectedPanel();cancelShiftDeadline();loginParticles?.stopMotion();super.onDestroy()}
+ private fun clearSession(){closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline();persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;accountIdentity=null;accountAnchor=null;captureGrant=null;captureBinding=null;captureAnchor=null;generation++;busy=false;locationPing?.cancel();locationPing=null;signal?.cancel();signal=null;password?.text?.clear();password=null;session?.clear();session=null}
  private fun closeIncidentHistory(){incidentHistoryView?.close();incidentHistoryView=null}
+ private fun closeConnectedPanel(){connectedPrivatePanel?.close();connectedPrivatePanel=null}
  private fun screen(title:String,detail:String){
-  closeIncidentHistory();cancelPatrolPoint();cancelShiftDeadline()
+  closeIncidentHistory();closeConnectedPanel();cancelPatrolPoint();cancelShiftDeadline()
   persistIncidentDraft();incidentDraftEditor=null;incidentDraftScope=null;incidentDraftDirty=false
   loginParticles?.stopMotion();loginParticles=null
   password=null
@@ -264,6 +266,8 @@ class GuardAccountActivity : Activity() {
   }catch(_:Exception){status.text="Shift status could not be opened. Refresh assignments; saved confirmation requests remain preserved."}
   button("Escalate"){escalationScreen(item)}
   button("My escalation requests"){escalationList()};button("Shift location and consent"){locationScreen(item)}
+  button("Read assignment instructions"){readAssignmentInstructions(item)}
+  button("Connected device readiness"){connectedReadiness(item)}
   button("My recorded incidents"){loadIncidentHistory(item)}
   button("Send my queued records"){sendScoped(scope.binding.guardId)}
   button("Refresh assignments"){loadAssignments()};button("Sign out",true){signOut()}
@@ -327,6 +331,7 @@ class GuardAccountActivity : Activity() {
  private fun captureScreen(item:JSONObject){
   screen("AUTHORIZED ASSIGNMENT","Site: ${item.getString("siteId")}\nAuthorized capture · encrypted local save. Sending records confirms pilot receipt only, not dashboard delivery or payroll clock-in.")
   button("Escalate"){escalationScreen(item)};button("My escalation requests"){escalationList()};button("Shift location and consent"){locationScreen(item)}
+  button("Connected device readiness"){connectedReadiness(item)}
   val draftScope=try{connectedDraftScope(item)}catch(_:Exception){status.text="Sign in and refresh this assignment before recovering its incident draft.";return}
   val retainedDraft=try{ConnectedIncidentDraftStore(this).use{it.read(draftScope)}}catch(_:Exception){status.text="Encrypted incident draft unavailable. Existing text is preserved; do not clear app data.";return}
   val note=EditText(this).apply{hint="Describe the incident";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE;minLines=3;isSaveEnabled=false;filters=arrayOf(android.text.InputFilter.LengthFilter(8000))}
@@ -374,6 +379,119 @@ class GuardAccountActivity : Activity() {
    status.text="Scheduled window elapsed · clock-out unconfirmed. New capture is unavailable. Your unfinished incident remains preserved; confirm clock-out separately."
    button("Clock out"){confirmClockOut(item,shiftScope(item))}
   }
+ }
+ private data class AssignmentReadContext(val config:GuardServiceConfig,val session:GuardAccountClient.Session,val account:AccountIdentity,val owner:ConnectedIncidentDraftScope,val scope:DispatchScope)
+ private class AssignmentReadDenied:IllegalStateException()
+ private fun assignmentReadContext(item:JSONObject):AssignmentReadContext {
+  val c=config?:error("Trusted service required");val active=session?:error("Sign in again");val who=accountIdentity?:error("Individual account required")
+  active.bearer();val thumb=DeviceIdentity(this).publicIdentity()?.thumbprint?:error("Phone identity required");val scope=shiftScope(item)
+  check(scope.binding.guardId==who.guardId&&scope.vendorId==who.vendorId&&scope.binding.deviceThumbprint==thumb)
+  return AssignmentReadContext(c,active,who,ConnectedIncidentDraftScope(c.uploadBinding(),c.deviceId,thumb,who.subject,who.guardId,who.vendorId,scope.binding.siteId,scope.binding.assignmentId),scope)
+ }
+ private fun assignmentReadAuthorized(read:AssignmentReadContext,displayedRoot:LinearLayout,stamp:Int):Boolean=try{
+  check(visibleForLocation&&!stopped&&!isFinishing&&!isDestroyed&&root===displayedRoot&&generation==stamp&&config===read.config&&session===read.session&&accountIdentity==read.account)
+  read.session.bearer();check(read.owner.configuration==read.config.uploadBinding()&&read.owner.deviceId==read.config.deviceId&&DeviceIdentity(this).publicIdentity()?.thumbprint==read.owner.thumbprint);true
+ }catch(_:Exception){false}
+ /** Current profile and possession-verified assignment; this never requests a grant or changes attendance. */
+ private fun verifyAssignmentRead(read:AssignmentReadContext):JSONObject {
+  val client=GuardAccountClient(read.config.endpoint);val profile=client.profile(read.session)
+  if(profile.getString("auth_subject")!=read.owner.subject||profile.getString("guard_id")!=read.owner.guardId||profile.getString("vendor_id")!=read.owner.vendorId)throw AssignmentReadDenied()
+  val response=client.assignments(read.session,read.config.deviceId,DeviceIdentity(this),read.config.audience);val rows=response.getJSONArray("assignments")
+  val matches=(0 until rows.length()).map{rows.getJSONObject(it)}.filter{shiftScope(it)==read.scope}
+  if(matches.size!=1)throw AssignmentReadDenied();val epoch=response.getLong("server_time_ms");check(epoch>0)
+  return JSONObject(matches.single().toString()).put("status_server_time_ms",epoch).put("status_elapsed_ms",SystemClock.elapsedRealtime())
+ }
+ private fun newAssignmentPanel(item:JSONObject,title:String):Pair<AssignmentReadContext,ConnectedPrivatePanel>? {
+  val read=try{assignmentReadContext(item)}catch(_:Exception){startScreen();return null}
+  screen(title,"Private information for your individually signed-in account and this phone's assignment. Leaving this panel locks it.")
+  val displayedRoot=root;val stamp=generation
+  val panel=ConnectedPrivatePanel(this,{assignmentReadAuthorized(read,displayedRoot,stamp)},{startScreen()})
+  connectedPrivatePanel=panel;root.addView(panel)
+  button("Back to assignment"){if(assignmentReadAuthorized(read,displayedRoot,stamp))assignmentOverview(item)else startScreen()}
+  button("Sign out",true){signOut()}
+  return read to panel
+ }
+ private fun readAssignmentInstructions(item:JSONObject){
+  val (read,panel)=newAssignmentPanel(item,"ASSIGNMENT INSTRUCTIONS")?:return
+  fetchAssignmentInstructions(read,panel,null)
+ }
+ private fun fetchAssignmentInstructions(read:AssignmentReadContext,panel:ConnectedPrivatePanel,cursor:String?){
+  val ticket=panel.begin("Checking your account and assignment, then loading instructions… Reading does not acknowledge an instruction.")?:return
+  Thread{
+   var item:JSONObject?=null;var page:ConnectedAssignmentInstructions?=null;var denied=false
+   try{
+    item=verifyAssignmentRead(read)
+    page=ConnectedAssignmentInstructions.parse(read.scope,cursor,GuardAccountClient(read.config.endpoint).dispatch(read.session,read.config.deviceId,read.owner.assignmentId,DeviceIdentity(this),read.config.audience,cursor))
+   }catch(_:AssignmentReadDenied){denied=true}catch(e:GuardAccountClient.HttpFailure){denied=e.statusCode==401||e.statusCode==403}catch(_:Exception){}
+   val fresh=item;val result=page;val unauthorized=denied
+   runOnUiThread{
+    panel.render(ticket){
+     if(unauthorized){startScreen();return@render}
+     if(result==null||fresh==null){text("Instructions could not be verified. Previously received instructions are not shown and no acknowledgement was sent.");action("Retry instruction verification"){fetchAssignmentInstructions(read,panel,null)}}
+     else showReadOnlyInstructions(read,panel,fresh,result)
+    }
+   }
+  }.start()
+ }
+ private fun showReadOnlyInstructions(read:AssignmentReadContext,panel:ConnectedPrivatePanel,item:JSONObject,page:ConnectedAssignmentInstructions){
+  panel.text("Service checked: ${java.util.Date(page.checkedAt)}\nGuard: ${read.owner.guardId}\nSite: ${read.owner.siteId}\nAssignment: ${read.owner.assignmentId}\nInstructions are not saved on this phone. Reading here does not acknowledge them. Acknowledge instructions from an authorized shift.")
+  if(page.messages.isEmpty())panel.text("No active instructions on this page.")
+  for(message in page.messages)panel.action("${message.title} · v${message.version}"){
+   val ticket=panel.begin("Opening the received instruction version…")?:return@action
+   panel.render(ticket){
+    text("${message.title}\nVersion ${message.version} · issued ${java.util.Date(message.issuedAt)}")
+    text(message.body);message.dueAt?.let{text("Due: ${java.util.Date(it)}")}
+    text("Viewed on screen only. No acknowledgement was recorded or sent.")
+    action("Back to this received page"){val back=panel.begin("Opening received page…")?:return@action;panel.render(back){showReadOnlyInstructions(read,panel,item,page)}}
+    action("Refresh instructions"){fetchAssignmentInstructions(read,panel,null)}
+   }
+  }
+  if(page.hasMore)panel.action("More instructions"){fetchAssignmentInstructions(read,panel,page.nextCursor)}
+  panel.action("Refresh instructions"){fetchAssignmentInstructions(read,panel,null)}
+ }
+ private fun readinessSnapshot(read:AssignmentReadContext,item:JSONObject?):ConnectedReadiness.Snapshot {
+  fun access(readState:()->Boolean)=try{if(readState())ConnectedReadiness.Access.AVAILABLE else ConnectedReadiness.Access.BLOCKED}catch(_:Exception){ConnectedReadiness.Access.UNAVAILABLE}
+  val device=DeviceReadiness(this)
+  fun channel(id:String)=try{val manager=getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager;val value=manager.getNotificationChannel(id);when{!device.notificationPermissionGranted()||!manager.areNotificationsEnabled()->ConnectedReadiness.Channel.BLOCKED;value==null->ConnectedReadiness.Channel.NOT_CREATED;value.importance==android.app.NotificationManager.IMPORTANCE_NONE->ConnectedReadiness.Channel.BLOCKED;else->ConnectedReadiness.Channel.AVAILABLE}}catch(_:Exception){ConnectedReadiness.Channel.UNAVAILABLE}
+  var consent=ConnectedReadiness.Consent.UNAVAILABLE;var collecting:Boolean?=null
+  if(item!=null)try{
+   if(!item.has("locationPolicyPayload")||item.isNull("locationPolicyPayload"))consent=ConnectedReadiness.Consent.NO_POLICY
+   else {
+    val policy=AuthorizedLocationPolicy.parse(item.getString("locationPolicyPayload"),item.getString("locationPolicySha256"))
+    val account=EscalationScope(read.owner.configuration,read.owner.deviceId,read.owner.thumbprint,read.owner.subject,read.owner.guardId,read.owner.vendorId)
+    val scope=LocationConsentScope(account,read.scope.binding)
+    val record=LocationConsentStore(this).use{it.list(account).firstOrNull{r->r.scope==scope&&r.policy.sha256==policy.sha256}}
+    consent=when{record==null->ConnectedReadiness.Consent.NONE;record.withdrawalReceipt!=null->ConnectedReadiness.Consent.WITHDRAWN;record.withdrawn->ConnectedReadiness.Consent.WITHDRAWAL_PENDING;record.receipt!=null->ConnectedReadiness.Consent.ACCEPTED;else->ConnectedReadiness.Consent.PENDING}
+    collecting=record?.let{ConnectedLocationRuntime.activeConsent(it.id)}
+   }
+  }catch(_:Exception){consent=ConnectedReadiness.Consent.UNAVAILABLE;collecting=null}
+  return ConnectedReadiness.Snapshot(access{device.preciseLocationGranted()},access{(getSystemService(LOCATION_SERVICE) as android.location.LocationManager).isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)},access{device.notificationPermissionGranted()&&(getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager).areNotificationsEnabled()},channel(AuthorizedReminders.CHANNEL),channel(ConnectedLocationService.CHANNEL),access{Build.VERSION.SDK_INT<31||(getSystemService(ALARM_SERVICE) as android.app.AlarmManager).canScheduleExactAlarms()},consent,collecting)
+ }
+ private fun connectedReadiness(item:JSONObject){
+  val (read,panel)=newAssignmentPanel(item,"CONNECTED DEVICE READINESS")?:return
+  refreshConnectedReadiness(read,panel)
+ }
+ private fun refreshConnectedReadiness(read:AssignmentReadContext,panel:ConnectedPrivatePanel){
+  val ticket=panel.begin("Refresh requested. Reconnecting to verify your account and assignment… This does not request a location, start sharing or enable a reminder.")?:return
+  Thread{
+   var verified:JSONObject?=null;var denied=false
+   try{verified=verifyAssignmentRead(read)}catch(_:AssignmentReadDenied){denied=true}catch(e:GuardAccountClient.HttpFailure){denied=e.statusCode==401||e.statusCode==403}catch(_:Exception){}
+   val fresh=verified;val unauthorized=denied
+   runOnUiThread{panel.render(ticket){
+    if(unauthorized){startScreen();return@render}
+    if(fresh==null)text("Could not reconnect to verify this account and assignment. Device settings are shown below; consent could not be checked. Retry when connected.")
+    else {
+     val attendance=when(fresh.optJSONObject("shift_state")?.optString("state")){"not_started"->"clock-in not recorded";"active"->"start recorded; clock-out unconfirmed";"ended"->"clock-out recorded";else->"not supplied"}
+     val window=try{val at=shiftObserved(fresh);when{at<fresh.getLong("startsAt")->"not started";at>=fresh.getLong("endsAt")->"elapsed";else->"within scheduled window"}}catch(_:Exception){"not verified"}
+     text("Account and phone assignment confirmed at ${java.util.Date(fresh.getLong("status_server_time_ms"))}.\nAssignment: ${read.owner.assignmentId}\nScheduled window: $window\nAttendance: $attendance. Checking readiness does not clock in or allow new records.")
+    }
+    readinessSnapshot(read,fresh).lines().forEach{ text(it) }
+    action(if(fresh==null)"Retry service and readiness check"else"Refresh readiness"){refreshConnectedReadiness(read,panel)}
+    if(fresh!=null)action("Review approved location policy and consent"){locationScreen(fresh)}
+    action("Open device location settings"){try{startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))}catch(_:Exception){Toast.makeText(this@GuardAccountActivity,"Device location settings are unavailable.",Toast.LENGTH_LONG).show()}}
+    action("Open app notification settings"){try{startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE,packageName))}catch(_:Exception){Toast.makeText(this@GuardAccountActivity,"App notification settings are unavailable.",Toast.LENGTH_LONG).show()}}
+   }}
+  }.start()
  }
  private fun loadDispatch(item:JSONObject,refresh:Boolean,offset:Int=0){
   val c=config?:return;val active=session?:return;val binding=captureBinding?:return

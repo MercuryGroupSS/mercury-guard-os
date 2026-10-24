@@ -72,6 +72,15 @@ test('dispatch route needs a fresh proof and rejects other assignments and inval
  }finally{dispatch.close();db.close();}
 });
 
+test('future assignment instructions use current verified identity and device proof without clock-in or capture authority',async()=>{
+ const db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);db.assign({assignmentId:'future',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'site-1',active:true,startsAt:5000,endsAt:10000});
+ const session={subject:identity.subject,active:true,expiresAt:1000,sessionId:'verified-session'},directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};let capturedScope,reads=0;
+ const forbidden=()=>{throw Error('Reading instructions must not invoke attendance or capture authority');};
+ const handler=createAssignmentHandler({directory,devices:asyncDevices(db),dispatch:{read:async(scope,cursor,at)=>{capturedScope=scope;reads++;assert.equal(cursor,null);assert.equal(at,2000);return {changes:[{message_id:'instruction'}]};}},shiftLifecycle:{snapshot:forbidden,transition:forbidden,permitsCapture:forbidden},grantIssuer:{issue:forbidden},store:{ingest:forbidden},now:()=>2000,verifySession:async token=>token==='valid'?session:null});
+ const request=()=>{const p=proof(k,db.challenge(identity,'phone',2000));return new Request('https://guard.test/v1/dispatch',{method:'POST',headers:{authorization:'Bearer valid','content-type':'application/json'},body:JSON.stringify({assignment_id:'future',cursor:null,proof:p})});};
+ try{const page=await handler(request());assert.equal(page.status,200);assert.deepEqual((await page.json()).changes,[{message_id:'instruction'}]);assert.equal(reads,1);assert.equal(capturedScope.subject,identity.subject);assert.equal(capturedScope.session,session);assert.equal(capturedScope.assignmentId,'future');assert.equal(capturedScope.deviceThumbprint,db.device('phone').thumbprint);const replay=request(),again=replay.clone();assert.equal((await handler(replay)).status,200);assert.equal((await handler(again)).status,400);}finally{db.close();}
+});
+
 test('shift route authenticates proofs and permits explicit scheduled end without reopening capture',async()=>{
  const {ShiftLifecycle}=await import('./shift-lifecycle.mjs');const shiftLifecycle=new ShiftLifecycle(':memory:'),db=new LocalDeviceAssignments(':memory:'),k=pair();setup(db,k);let now=200;
  const directory={loadGuardsForSubject:()=>[{...identity,authSubject:identity.subject,active:true}],loadVendor:()=>({vendorId:'MG001',kind:'company',active:true})};
