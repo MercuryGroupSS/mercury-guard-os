@@ -19,6 +19,10 @@ jobs:
           node-version: '24.19.0'
       - run: npm ci --prefix server --ignore-scripts
       - run: node --test server/*.test.mjs
+      - name: Check local operational drill syntax
+        run: |
+          node --check server/scripts/check-local-capacity.mjs
+          node --check server/scripts/check-local-backup-restore.mjs
 
   postgres-identity:
     runs-on: ubuntu-24.04

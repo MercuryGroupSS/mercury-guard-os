@@ -1,0 +1,115 @@
+#!/usr/bin/env node
+// Owned API35 emulator only: actual Settings enrollment, framework fingerprint,
+// visible individual sign-in, real local Auth/PG, and exact secure-state cleanup.
+import {execFile,spawn} from 'node:child_process';
+import {promisify} from 'node:util';
+import {openSync,closeSync,existsSync,readFileSync,writeFileSync,mkdirSync,chmodSync,unlinkSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {get} from 'node:https';
+import {randomInt,randomUUID} from 'node:crypto';
+import {resolve} from 'node:path';
+import {connect} from 'node:net';
+import {readPrivateBuildFile} from '../controlled-apk-input.mjs';
+const root=fileURLToPath(new URL('../../',import.meta.url));process.chdir(root);
+const adb=process.env.MERCURY_ADB_BIN??'adb',gradle=process.env.MERCURY_GRADLE_BIN??'gradle',aapt=process.env.MERCURY_AAPT_BIN??(process.env.ANDROID_HOME?resolve(process.env.ANDROID_HOME,'build-tools/35.0.0/aapt'):'aapt');
+const apkRoot=resolve(process.env.MERCURY_ANDROID_APK_ROOT??'app/build/outputs/apk'),privateDir=new URL('../../.local-backend/signin-android-ci/',import.meta.url),publicDir=new URL('../../app/build/reports/signin-acceptance/',import.meta.url),securityFile=new URL('emulator-security.json',privateDir),ownership=new URL('../../.local-backend/https-signin-android-fixture.json',import.meta.url),ca=new URL('../../app/build/https-test/res/raw/https_fixture_ca.pem',import.meta.url);
+mkdirSync(privateDir,{recursive:true,mode:0o700});chmodSync(privateDir,0o700);
+const execute=promisify(execFile),abort=new AbortController(),uiPath='/data/local/tmp/mercury-signin-enrollment.xml',runId=randomUUID(),runDir=new URL(runId+'/',privateDir),runnerFile=new URL('runner-owner.json',privateDir);mkdirSync(runDir,{mode:0o700});
+const result={version:1,run_id:runId,test:'ca.mercury.guard.HttpsSignInIntegrationTest',status:'failed',actual_framework_biometric:'not_verified',individual_accounts:0,fixture_cleanup:'not_started',emulator_security_cleanup:'not_started',started_at:new Date().toISOString()};
+let serial,approvedEmulator=false,ownsRunner=false,claimedRunner=false,security,ownsSecurity=false,uiTouched=false,fixture,fixtureResult,fixtureClosed,createdReverse=false,unconfirmedShutdown=false,cleanupOkay=true,failed,phase='initial';
+class GateError extends Error{constructor(code){super(code);this.code=code;}}
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function assertResourceWindow(){
+ for(const name of ['https-signin-android-fixture.json','https-location-android-fixture.json','https-escalation-android-fixture.json'])if(existsSync(new URL('../../.local-backend/'+name,import.meta.url)))throw new GateError('existing_https_fixture_requires_owner_cleanup');
+ for(const port of [55443,55444,55446,55450]){const live=await new Promise(resolve=>{const socket=connect({host:'127.0.0.1',port});let done=false;const finish=value=>{if(done)return;done=true;socket.destroy();resolve(value);};socket.setTimeout(500,()=>finish(false));socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));});if(live)throw new GateError('existing_https_listener_requires_owner_coordination');}
+}
+function privateLog(name,value){const path=new URL(name,runDir);writeFileSync(path,value,{mode:0o600});chmodSync(path,0o600);}
+async function command(binary,args,label,{timeout=30000,log=false,cleanup=false}={}){try{const output=await execute(binary,args,{cwd:root,env:process.env,encoding:'utf8',timeout,maxBuffer:32*1024*1024,...(cleanup?{}:{signal:abort.signal})});if(log)privateLog(label+'.log',output.stdout+'\n'+output.stderr);return output.stdout;}catch(error){if(log)privateLog(label+'.log',(error.stdout??'')+'\n'+(error.stderr??''));throw new GateError(label+'_failed');}}
+const device=(args,label,options)=>command(adb,['-s',serial,...args],label,options);
+process.once('SIGINT',()=>abort.abort());process.once('SIGTERM',()=>abort.abort());
+function fingerprints(text){const json=text.split('\n').find(line=>line.startsWith('{')&&line.includes('"prints"'));if(!json)throw new GateError('fingerprint_inventory_unavailable');return JSON.parse(json).prints.reduce((sum,p)=>sum+p.count,0);}
+async function secureState(cleanup=false){const options={cleanup};const lock=await device(['shell','dumpsys','lock_settings'],'lock_state',options),prints=await device(['shell','dumpsys','fingerprint'],'fingerprint_state',options);return {credential:/CredentialType: (\w+)/.exec(lock)?.[1],fingers:fingerprints(prints)};}
+function securityRecord(){writeFileSync(securityFile,JSON.stringify(security)+'\n',{mode:0o600});chmodSync(securityFile,0o600);}
+function decode(text){return text.replace(/&quot;/g,'"').replace(/&apos;/g,"'").replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&');}
+async function nodes(){await device(['shell','uiautomator','dump',uiPath],'settings_dump');const xml=await device(['shell','cat',uiPath],'settings_read');return [...xml.matchAll(/<node\b([^>]*?)\/?\s*>/g)].map(match=>Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/g)].map(a=>[a[1],decode(a[2])])));}
+async function waitNode(predicate,label,timeout=20000){const until=Date.now()+timeout;while(Date.now()<until){if(abort.signal.aborted)throw new GateError('interrupted');const found=(await nodes()).filter(predicate);if(found.length===1)return found[0];await pause(200);}throw new GateError(label+'_not_found');}
+async function tapNode(node,label){const b=/^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(node.bounds??'')?.slice(1).map(Number);if(!b||b[2]<=b[0]||b[3]<=b[1]||node.enabled!=='true')throw new GateError(label+'_not_reachable');await device(['shell','input','tap',String(Math.floor((b[0]+b[2])/2)),String(Math.floor((b[1]+b[3])/2))],label);}
+const textNode=value=>n=>n.package==='com.android.settings'&&n.text?.toUpperCase()===value&&n.enabled==='true';
+async function tapText(value){await tapNode(await waitNode(textNode(value),'settings_'+value),'settings_action');}
+async function enroll(){
+ const state=await secureState();
+ if(existsSync(securityFile))throw new GateError('existing_security_record_requires_owner_recovery');
+ if(state.credential!=='NONE'||state.fingers!==0)throw new GateError('fresh_unsecured_unenrolled_emulator_required');
+ security={version:1,serial,original_credential:'NONE',original_fingerprints:0,pin:String(randomInt(100000,1000000)),finger_id:31,state:'baseline_verified'};writeFileSync(securityFile,JSON.stringify(security)+'\n',{mode:0o600,flag:'wx'});ownsSecurity=true;result.emulator_security_cleanup='pending';
+ // Fingerprint-only Settings enrollment avoids continuing a leftover optional
+ // face-enrollment wizard after the owned PIN/fingerprint have been removed.
+ uiTouched=true;await device(['shell','am','start','-a','android.settings.FINGERPRINT_ENROLL','-f','0x10008000'],'settings_enrollment_start');
+ await tapNode(await waitNode(n=>n['resource-id']==='com.android.settings:id/lock_pin','pin_option'),'pin_option');
+ const entry=await waitNode(n=>n['resource-id']==='com.android.settings:id/password_entry','pin_entry');await tapNode(entry,'pin_focus');await device(['shell','input','text',security.pin],'synthetic_pin_entry');security.state='pin_entry_in_progress';securityRecord();await tapText('NEXT');
+ await waitNode(n=>n.text==='Re-enter your PIN','pin_confirm');await device(['shell','input','text',security.pin],'synthetic_pin_confirm');await tapText('CONFIRM');security.state='pin_confirmed';securityRecord();
+ await waitNode(n=>n.text==='Lock screen','lock_screen_notice');await tapText('DONE');
+ // API35 Google APIs image uses an explicit multipage Pixel Imprint notice.
+ for(let i=0;i<8;i++){const current=await nodes();const agree=current.find(textNode('I AGREE'));if(agree){await tapNode(agree,'enrollment_consent');break;}const more=current.find(textNode('MORE'));if(!more)throw new GateError('fingerprint_notice_unexpected');await tapNode(more,'fingerprint_notice_more');if(i===7)throw new GateError('fingerprint_notice_unbounded');}
+ await waitNode(n=>n.text==='Touch the sensor','sensor_enrollment');security.state='fingerprint_enrollment_started';securityRecord();
+ for(let i=0;i<20;i++){await device(['emu','finger','touch','31'],'enrollment_touch');await pause(200);await device(['emu','finger','remove'],'enrollment_remove');await pause(200);if((await nodes()).some(n=>n.text==='Fingerprint added'))break;if(i===19)throw new GateError('fingerprint_enrollment_incomplete');}
+ await tapText('DONE');const enrolled=await secureState();if(enrolled.credential!=='PIN'||enrolled.fingers!==1)throw new GateError('framework_enrollment_unverified');security.state='enrolled';securityRecord();
+}
+async function health(){if(!existsSync(ca))return false;return new Promise(resolve=>{const req=get({hostname:'localhost',port:55450,path:'/test/health',ca:readFileSync(ca),timeout:2000},res=>{let text='';res.on('data',chunk=>{text+=chunk;if(text.length>512)req.destroy(Error('Bounded response'));});res.on('end',()=>{try{resolve(res.statusCode===200&&JSON.parse(text).fixture_type==='real_pg_auth_signin');}catch{resolve(false);}});});req.on('timeout',()=>req.destroy(Error('Health timeout')));req.on('error',()=>resolve(false));});}
+async function startFixture(){
+ if(existsSync(ownership))throw new GateError('existing_fixture_requires_owner_cleanup');const file=new URL('fixture.log',runDir),fd=openSync(file,'w',0o600);chmodSync(file,0o600);
+ try{fixture=spawn(process.execPath,['server/scripts/https-signin-android-fixture.mjs'],{cwd:root,env:{...process.env,MERCURY_HTTPS_SIGNIN_FIXTURE:'synthetic-only'},stdio:['ignore',fd,fd]});}finally{closeSync(fd);}
+ fixtureClosed=new Promise(resolve=>{fixture.once('error',()=>resolve(fixtureResult={spawn_error:true}));fixture.once('close',(code,signal)=>resolve(fixtureResult={code,signal}));});result.fixture_cleanup='pending';
+ const until=Date.now()+90000;while(Date.now()<until){if(abort.signal.aborted)throw new GateError('interrupted');if(fixtureResult)throw new GateError('fixture_start_failed');let own=false;try{own=JSON.parse(readPrivateBuildFile(ownership.pathname,8192)).pid===fixture.pid;}catch{}if(own&&await health())return;await pause(300);}throw new GateError('fixture_ready_timeout');
+}
+async function instrument(){
+ let ended=false,output,executionError,pollError;const running=execute(adb,['-s',serial,'shell','am','instrument','-w','-r','-e','signinIntegration','true','-e','class','ca.mercury.guard.HttpsSignInIntegrationTest','ca.mercury.guard.httpstest.test/androidx.test.runner.AndroidJUnitRunner'],{cwd:root,env:process.env,encoding:'utf8',timeout:180000,maxBuffer:8*1024*1024,signal:abort.signal});const task=running.then(value=>{output=value.stdout;},()=>{executionError=true;}).finally(()=>{ended=true;});
+ const handled=new Set(),allowed=new Map([['unknown_finger','32'],['valid_finger_a','31'],['valid_finger_b','31']]);
+ try{while(!ended){
+   let step;try{step=(await device(['shell','run-as','ca.mercury.guard.httpstest','cat','files/signin-test-step'],'sensor_step',{timeout:5000})).trim();}catch{}
+   if(step&&!handled.has(step)){if(!allowed.has(step))throw new GateError('unexpected_sensor_request');await device(['emu','finger','touch',allowed.get(step)],'framework_finger_touch');await pause(150);await device(['emu','finger','remove'],'framework_finger_remove');await device(['shell','run-as','ca.mercury.guard.httpstest','touch','files/signin-test-ack-'+step],'sensor_ack');handled.add(step);}
+   await pause(100);
+  }}catch(error){pollError=error;}
+ finally{
+  if(!ended){try{await device(['shell','am','force-stop','ca.mercury.guard.httpstest'],'failed_instrumentation_stop',{cleanup:true});}catch{unconfirmedShutdown=true;pollError=new GateError('instrumentation_stop_unconfirmed');}running.child?.kill('SIGTERM');await Promise.race([task,pause(10000)]);if(!ended){unconfirmedShutdown=true;pollError=new GateError('instrumentation_child_unconfirmed');}}
+  else await task;
+ }
+ if(pollError)throw pollError;
+ // Never persist raw UI/instrumentation errors: Espresso can include entered
+ // credentials in its hierarchy diagnostics. Only fixed acceptance fields leave memory.
+ if(executionError||!output||!/OK \(1 test\)/.test(output)||/INSTRUMENTATION_STATUS_CODE: -\d|FAILURES!!!|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED|Process crashed/.test(output)){
+  const stage=/failed at bounded stage: ([a-z_]+)/.exec(output??'')?.[1],type=/failure_type=([A-Za-z]+)/.exec(output??'')?.[1];if(stage)result.failed_stage=stage;if(type)result.failure_type=type;throw new GateError('actual_signin_instrumentation_failed');
+ }
+ const marker=output.split('\n').find(line=>line.includes('SIGNIN_ACCEPTANCE actual_launcher=true actual_platform_strong_biometric=true'));
+ if(!marker||handled.size!==3)throw new GateError('actual_signin_evidence_missing');result.actual_framework_biometric='verified_emulator';result.individual_accounts=2;result.tests_passed=1;privateLog('instrumentation-summary.json',JSON.stringify({status:'passed',tests:1,sensor_steps:[...handled],raw_ui_output_retained:false})+'\n');
+}
+async function cleanup(){
+ if(approvedEmulator&&fixture)try{await device(['shell','am','force-stop','ca.mercury.guard.httpstest'],'test_package_stop',{cleanup:true});}catch{cleanupOkay=false;unconfirmedShutdown=true;failed??='test_package_stop_unconfirmed';}
+ if(fixture){if(!fixtureResult)fixture.kill('SIGTERM');const closed=await Promise.race([fixtureClosed,new Promise(resolve=>{const timer=setTimeout(()=>resolve(null),120000);timer.unref();})]);const log=readFileSync(new URL('fixture.log',runDir),'utf8');if(closed?.code===0&&!existsSync(ownership)&&log.includes('PASS: exact HTTPS sign-in company/guards/assignments/device/challenges, Auth users/sessions and test assets cleaned; global limiter retained.'))result.fixture_cleanup='confirmed';else{result.fixture_cleanup='unconfirmed';failed='fixture_cleanup_unconfirmed';fixture.unref();}}
+ if(approvedEmulator&&createdReverse)try{await device(['reverse','--remove','tcp:55450'],'owned_reverse_remove',{cleanup:true});}catch{cleanupOkay=false;failed??='owned_reverse_cleanup_unconfirmed';}
+ if(approvedEmulator&&ownsSecurity){
+  try{const current=await secureState(true);if(current.fingers>1||!['NONE','PIN'].includes(current.credential))throw new GateError('security_ownership_changed');
+   if(current.credential==='PIN'){if(!(await device(['shell','locksettings','verify','--old',security.pin],'cleanup_owned_pin_verify',{cleanup:true})).includes('Lock credential verified successfully'))throw new GateError('cleanup_owned_pin_verification_failed');await device(['shell','locksettings','clear','--old',security.pin],'cleanup_owned_pin_clear',{cleanup:true});}
+   const until=Date.now()+10000;let clean;do{clean=await secureState(true);if(clean.credential==='NONE'&&clean.fingers===0)break;await pause(200);}while(Date.now()<until);
+   if(clean.credential!=='NONE'||clean.fingers!==0)throw new GateError('original_security_state_unconfirmed');unlinkSync(securityFile);result.emulator_security_cleanup='confirmed_none_pin_zero_fingerprints';
+  }catch{cleanupOkay=false;result.emulator_security_cleanup='unconfirmed_ownership_retained';failed='emulator_security_cleanup_unconfirmed';}
+ }
+ if(approvedEmulator&&(ownsSecurity||uiTouched))try{await device(['shell','rm','-f',uiPath],'owned_ui_dump_remove',{cleanup:true});}catch{cleanupOkay=false;failed??='owned_ui_dump_cleanup_unconfirmed';}
+ if(ownsRunner){
+  if(cleanupOkay&&!unconfirmedShutdown&&(!fixture||result.fixture_cleanup==='confirmed')&&(!ownsSecurity||result.emulator_security_cleanup==='confirmed_none_pin_zero_fingerprints')){const saved=JSON.parse(readPrivateBuildFile(runnerFile.pathname,4096));if(saved.pid!==process.pid||saved.run!==runId||saved.serial!==serial)throw new GateError('runner_ownership_changed');unlinkSync(runnerFile);ownsRunner=false;}
+  else result.runner_ownership='retained_for_recovery';
+ }
+}
+try{
+ serial=process.env.MERCURY_ANDROID_SERIAL;if(!serial){if(process.env.CI!=='true')throw new GateError('explicit_emulator_serial_required');const devices=await command(adb,['devices'],'emulator_inventory'),matches=devices.split('\n').map(l=>l.trim().split(/\s+/)).filter(([id,state])=>/^emulator-\d+$/.test(id)&&state==='device');if(matches.length!==1)throw new GateError('one_ci_emulator_required');serial=matches[0][0];}
+ if(!/^emulator-\d+$/.test(serial)||process.env.CI!=='true'&&serial!=='emulator-5568')throw new GateError('owned_emulator_serial_required');if((await device(['shell','getprop','ro.kernel.qemu'],'emulator_identity')).trim()!=='1')throw new GateError('qemu_required');if((await device(['shell','getprop','ro.build.version.sdk'],'emulator_sdk')).trim()!=='35')throw new GateError('api35_required');approvedEmulator=true;result.emulator=serial;
+ try{writeFileSync(runnerFile,JSON.stringify({version:1,pid:process.pid,run:runId,serial})+'\n',{mode:0o600,flag:'wx'});ownsRunner=true;claimedRunner=true;}catch{throw new GateError('existing_runner_requires_owner_recovery');}
+ await assertResourceWindow();
+ phase='actual_settings_enrollment';await enroll();
+ phase='real_auth_fixture';await startFixture();
+ phase='debug_only_build';const build=['--no-daemon',...(process.env.MERCURY_GRADLE_INIT_SCRIPT?['-I',process.env.MERCURY_GRADLE_INIT_SCRIPT]:[]),...(process.env.MERCURY_LOCAL_DEBUG_KEYSTORE?['-PlocalDebugKeystore='+process.env.MERCURY_LOCAL_DEBUG_KEYSTORE]:[]),'-Pkotlin.compiler.execution.strategy=in-process','-PhttpsTest=true',':app:assembleDebug',':app:assembleDebugAndroidTest'];await command(gradle,build,'https_test_build',{timeout:600000,log:true});
+ const app=resolve(apkRoot,'debug/app-debug.apk'),test=resolve(apkRoot,'androidTest/debug/app-debug-androidTest.apk');for(const [path,pkg] of [[app,'ca.mercury.guard.httpstest'],[test,'ca.mercury.guard.httpstest.test']]){const badging=await command(aapt,['dump','badging',path],'owned_apk_identity');if(!badging.startsWith(`package: name='${pkg}' `))throw new GateError('unexpected_built_apk_package');}
+ const reverses=await device(['reverse','--list'],'reverse_inventory'),existing=reverses.split('\n').map(l=>l.trim().split(/\s+/)).filter(p=>p.at(-2)==='tcp:55450');if(existing.length&&existing.some(p=>p.at(-1)!=='tcp:55450'))throw new GateError('conflicting_reverse_mapping');if(!existing.length){await device(['reverse','tcp:55450','tcp:55450'],'reverse_create');createdReverse=true;}
+ await device(['install','-r','-t',app],'owned_test_install',{timeout:90000});await device(['install','-r','-t',test],'owned_runner_install',{timeout:90000});await device(['shell','pm','clear','ca.mercury.guard.httpstest'],'fresh_owned_test_install');
+ phase='actual_visible_signin';console.log('Testing actual framework biometric and two individual guard sign-ins on the owned API35 emulator; raw credential UI output is withheld.');await instrument();result.status='passed';
+}catch(error){failed=error instanceof GateError?error.code:'runner_failed';result.failed_phase=phase;}
+finally{try{await cleanup();}catch{failed='cleanup_unconfirmed';result.fixture_cleanup='unconfirmed';fixture?.unref();}if(failed){result.status='failed';result.error=failed;}result.finished_at=new Date().toISOString();privateLog('result.json',JSON.stringify(result,null,2)+'\n');if(claimedRunner){mkdirSync(publicDir,{recursive:true});writeFileSync(new URL('result.json',publicDir),JSON.stringify(result,null,2)+'\n');}console.log(JSON.stringify(result));if(failed)process.exitCode=1;}

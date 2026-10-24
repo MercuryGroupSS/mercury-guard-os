@@ -1,3 +1,31 @@
+# Mercury One data protection and recovery
+
+The current connected account flow is separate from the retained offline demonstration. The historical v0.3–v0.7 notes below describe the demo and must not be read as the current connected authentication or delivery contract. See the [current brief](project-brief.md) for verification and deployment status.
+
+## Current connected account and device data
+
+A valid packaged HTTPS/issuer configuration opens the individually authenticated flow. A local Android biometric gates the ID/password screen; it does not identify a named guard to the server or attest a biometric to it. Supabase Auth verifies the individual, while approved guard/vendor/site/device records authorize assignments. Vendor IDs alone do not identify a person.
+
+The account Activity applies Android screenshot protection and clears its foreground session, credentials and capture authority on leaving. External camera launch clears credentials even in multi-window. This does not erase text already handled by a keyboard, camera or compromised operating system. Explicit sign-out separately stops connected location, reminders and automatic delivery and requests provider-session closure; offline provider confirmation can remain unresolved.
+
+Connected incidents, retry snapshots, local receipts, consent records, escalation requests and photos use the installation's Keystore-backed encryption. Scoped incident drafts additionally retain the original Auth subject, guard, vendor, configuration, device, site and assignment. Draft recovery never submits an incident or transfers ownership to another account. Database indexes/counts and delivery state are not a tamper-proof audit ledger; server authorization and immutable receipts remain separate checks.
+
+Automatic delivery uses an encrypted, boot-bound, expiring access bearer for one verified individual/configuration/device. It contains no password or refresh token. Foreground locking does not itself stop separately authorized background delivery. Explicit sign-out, guard change, expiry or invalid scope removes that authority. Android can delay work; local save, Guard metadata receipt, photo-byte receipt and receiver acknowledgement are distinct states.
+
+An explicitly consented external camera writes temporary plaintext into private capture cache. The app validates and encrypts accepted bytes, revokes URI access and removes its temporary output; abandoned account-camera output is discarded on recreation. A camera application may retain its own copies. A hash binds bytes to a record but proves neither truth nor physical presence. The connected collector has separate visible notice/consent and a short signed lease; demo GPS is never substituted for it.
+
+## Recovery and retention limits
+
+Android app backup is disabled. Encrypted data under noBackupFilesDir and the installation's nonexportable Keystore keys are not an enterprise recovery system. Keep the installation, signing identity and app data intact during updates. Losing the phone, uninstalling, clearing storage or losing a Keystore key can make unsent records and drafts unrecoverable. A matching APK signing certificate does not itself back up an installation's encryption key. The controlled APK update gate checks package/signer/version, not local data migration or key recovery.
+
+The configured backend persists private Guard/receiver records and JPEG bytes in PostgreSQL. It relies on database access controls, host/storage protection and reviewed backup handling; application-level encryption of every server field is not implemented. Database backups must be private and access-controlled. Restoring database data cannot recreate external Auth service configuration, TLS/issuer keys, delivery credentials, release signing material or a phone's Keystore. These require an approved recovery plan and separate verification.
+
+No automatic production retention/deletion schedule is selected by this code. Preserve original history, receipts and unresolved queues until an approved policy and recovery procedure are tested. Local deletion, SQLite secure deletion and cache cleanup do not establish forensic erasure from storage blocks, third-party apps, backups or exported destinations. Live email/Ops activation, real-camera/GNSS acceptance, hardware-backed key behavior and full-shift recovery remain operational gates.
+
+## Retained offline prototype notes
+
+The following original notes remain intact for the demo's schema, export and migration history. Their statements about absent authentication or transport apply to that historical demonstration.
+
 # Local data protection — v0.3
 
 The app remains an offline test prototype. Device-local encryption is one layer and does not implement production authentication, backend authorization, biometrics, liveness, uniform recognition, or centralized retention.

@@ -26,6 +26,10 @@ Preserve the original installed application if signing certificates differ. Unin
 
 The original v0.1 source was recovered in commit `5269cbeace7fb527fe73237628b38b12f568251e`. Earlier immutable builds and [development history](docs/development-history-through-shared-delivery.md) remain preserved.
 
+## Operational readiness checks
+
+The [actual platform sign-in gate](docs/guard-identity-and-site-phones.md#actual-platform-sign-in-acceptance) verifies SystemUI strong biometrics, visible individual sign-in, shared-company assignment isolation, relocking and provider-session revocation. The [logical recovery drill](docs/recovery-readiness.md) verifies actual dump/restore of synthetic Guard records, media, effective privileges and original retry/lease behavior in disposable local databases. The [bounded capacity baseline](docs/capacity-baseline.md) records concurrent handler behavior and exact security/receipt outcomes without changing production locks. These local checks leave real Auth/key recovery, production backup custody, representative hosting capacity and hardware acceptance open.
+
 ## Remaining activation
 
 Supply the approved reachable HTTPS origin, owner/individual identities, enrollment and Ops source/destination configuration; verify real email and actual connected-app exchange. Complete production signing/update recovery, retention/backups, capacity/security acceptance and attended Fold testing. These operational inputs and hardware results are not inferred from local fixtures or green CI.

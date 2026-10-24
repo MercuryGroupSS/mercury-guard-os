@@ -2,6 +2,26 @@
 
 Confirmed operating decisions: site phones use biometric verification, then individual guard user ID and a private credential. Vendor IDs may represent companies or individual guards. Vendor identity is not sufficient to identify or authorize a person.
 
+## Current contract through v0.35
+
+The connected application now implements individual Guard ID/password sign-in through real local Supabase Auth, approved installation-key enrollment and device-proven assignment reads. PostgreSQL stores the distinct guard/vendor links and current Auth-session checks. The native screen gates credentials behind Android biometric verification and relocks foreground access after leaving. Configuration, individual identity, device approval and explicit shift confirmation remain separate requirements; preparing a public key does not approve a phone.
+
+A company Vendor ID can link multiple individual guards. Each approved guard sees only authorized site/device assignments. Encrypted drafts retain their original individual subject and scope; pending delivery retains original event attribution. A later guard does not inherit the preceding foreground credentials or capture authority. Local biometrics do not identify which named person used a shared phone.
+
+The current Preview is unconfigured. Real owner/guard enrollment, email delivery, actual Ops bindings and attended Fold acceptance remain open. Consult the [current project brief](project-brief.md) and [data protection notes](local-data-security.md) for the current boundary.
+
+## Actual platform sign-in acceptance
+
+The opt-in `HttpsSignInIntegrationTest` now passes through the real launcher, visible installation-key preparation and owner-fixture public-key approval, Android SystemUI strong biometric prompt, visible credentials and the production login/assignment handlers against real local Supabase Auth/PostgreSQL. It verifies cancel and unknown-finger denial, an enrolled fingerprint, rejected company Vendor ID login, individual A's assignment, background/reopen relocking, a second biometric verification, individual B under the same company with a different Auth subject and assignment, removal of A's upload authority, and exact A/B provider-session revocation after explicit sign-out. There is no injected biometric callback, foreground account/session or login result. The approved synthetic public-key fixture is not a real owner enrollment.
+
+Run `MERCURY_ANDROID_SERIAL=emulator-5568 node server/scripts/run-signin-https-android-test.mjs` from the source root only with the owned local stack and disposable API35 English Google APIs emulator. CI selects its sole emulator explicitly. The runner refuses physical serials, non-qemu/wrong-API targets, a pre-existing PIN/fingerprint, competing fixture listeners and an existing runner/security claim. It uses actual Settings to enroll one temporary synthetic PIN/fingerprint, injects the sensor through the emulator console, and restores the original NONE-PIN/zero-fingerprint state. Unconfirmed cleanup retains ownership metadata for recovery. It changes only the separately packaged `ca.mercury.guard.httpstest` on the approved emulator. It does not operate the Fold or `ca.mercury.guard`.
+
+The local run executed one test with no skip, and confirmed exact Auth/fixture/generated-asset cleanup and original emulator security restoration. CI separately runs the gate from a fresh x86_64 image; its terminal result belongs to the source verification record. Only a fixed sanitized status/cleanup summary is published under `app/build/reports/signin-acceptance/result.json`; raw credential/UI diagnostics and private runtime keys are withheld. The ordinary suite skips this opt-in case unless its dedicated fixture is requested. This proves the platform flow in an emulator; it does not establish physical Fold biometric performance, identify the named person touching a shared sensor, or activate real accounts.
+
+## Retained implementation history
+
+The following checkpoints preserve earlier stages and their then-pending work. Historical test counts, SQLite mode and statements that a feature is not yet wired are not the current completion record.
+
 ## Existing dashboard compatibility
 
 Read-only source review on 23 October 2026 found `hr/migrations/M1_hr_schema_and_employees.sql` restricts employees to one record per vendor, with an EMP-vendor ID format. That payroll model cannot serve as a company guard roster. Source review does not prove which migrations are applied live. Keep payroll and billing unchanged. Create a separate guard roster with stable guard ID, unique authenticated subject, active state and explicit vendor link. Reuse confirmed links; never infer identity from a name or vendor login.
