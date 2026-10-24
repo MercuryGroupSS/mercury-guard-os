@@ -10,6 +10,8 @@ import {verifyPostgresPatrolRounds} from './verify-postgres-patrol-rounds.mjs';
 import {verifyPostgresLocation} from './verify-postgres-location.mjs';
 import {verifyPostgresConfiguredService} from './verify-postgres-configured-service.mjs';
 import {verifyPostgresConfiguredReceiver} from './verify-postgres-configured-receiver.mjs';
+import {verifyPostgresPhotoChunks} from './verify-postgres-photo-chunks.mjs';
+import {verifyPostgresNetlifyRuntime} from './verify-postgres-netlify-runtime.mjs';
 import {verifyPostgresShiftWindows} from './verify-postgres-shift-windows.mjs';
 import {verifyPostgresEscalations} from './verify-postgres-escalations.mjs';
 import {verifyPostgresDashboard} from './verify-postgres-dashboard.mjs';
@@ -77,6 +79,10 @@ try{
  await verifyPostgresConfiguredService(url.toString(),fixture);
  await verifyPostgresShiftWindows(url.toString(),fixture);
  await verifyPostgresConfiguredReceiver(url.toString(),fixture);
+ // These gates create and clean their own database from the original /postgres
+ // owner connection. Never point the Netlify gate at this shared child fixture.
+ await verifyPostgresPhotoChunks(databaseUrl,admin);
+ await verifyPostgresNetlifyRuntime(databaseUrl,admin);
  console.log('PASS: migration replay, concurrent shared per-account/global limits, expiry and private function grants');
 }finally{
  for(const c of clients)await c.end();await fixture?.end();if(created){await admin.query('DROP DATABASE '+name);console.log('PASS: isolated limiter verification database removed');}await admin.end();

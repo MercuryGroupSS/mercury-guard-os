@@ -1,0 +1,14 @@
+{
+  "name": "mercury-guard-os",
+  "version": "0.36.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": "24.x"},
+  "scripts": {
+    "test": "node --test server/*.test.mjs",
+    "check:netlify": "node server/scripts/check-netlify-source.mjs",
+    "test:netlify-bundle": "node server/scripts/check-netlify-bundle.mjs"
+  },
+  "dependencies": {"pg": "8.23.1"},
+  "devDependencies": {"@netlify/zip-it-and-ship-it": "16.5.1"}
+}

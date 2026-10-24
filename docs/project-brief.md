@@ -77,6 +77,14 @@ Detailed backend evidence and limits are in [PostgreSQL implementation notes](po
 
 ## Work still required for a finished product
 
+### Netlify hosting direction
+
+The user selected a separate Guard deployment in the existing Netlify account. The new adapter reuses the individual Auth/current-session/authorization and PostgreSQL application components without the direct TLS listener or persistent process timers. It requires an exact production site/canonical origin and deployment marker, verified PostgreSQL TLS and service-role checkouts, finite serialized scheduled passes and independently enabled integrations. Account email defaults to blocked until the approved pilot recipients are supplied. No existing application's contact data is repurposed for account setup.
+
+Original JPEG evidence is retained up to 20 MiB using phone-key-signed one-MiB pieces, durable exact retries and explicit whole-file finalization. Machine photo delivery can resume between bounded scheduled passes. Large protected Reports downloads use exact authenticated ranges and full-image hash verification before display. Accepted evidence and original receipts survive staging cleanup and retries. The direct HTTP/TLS paths retain compatibility.
+
+An actual local Netlify package/load gate catches runtime dependencies and page-asset relocation, with a pinned packager and no deployment. Separate real PostgreSQL gates cover chunk/restart/authority/transaction behavior and the Netlify composition with explicitly injected local transport and synthetic Auth HTTP. See [Netlify deployment and activation](netlify-deployment.md) and [photo protocol](photo-chunks.md). Hosted checks, real mail, current Ops assignment proof, signing and physical Fold acceptance remain open. Site SOPs and selected real identities are private activation inputs and are excluded from public source.
+
 1. Configure real email delivery and approved owner activation, then provision real guard/site/device approvals through the console. Verify setup/recovery through the chosen hosted origin and native browser handoff.
 2. Configure real approved Ops bindings and source/destination credentials. Verify report/photo exchange against the actual connected apps without changing their existing data unexpectedly. Durable private byte transfer and protected synthetic-image display are implemented and locally verified; live configuration and real-camera acceptance remain open.
 3. Activate the tested configured HTTPS composition with approved deployment inputs; complete production deployment, signing-key distribution/rotation, release signing/update recovery, production retention/backups and capacity/security acceptance. A bounded local handler baseline now exists; the actual deployment still needs representative throughput/latency and overload measurement before scaling.

@@ -27,3 +27,6 @@ supabase-start.log
 
 # Installation-specific public trust config is provisioned into controlled builds only.
 app/src/main/assets/guard-service.json
+
+# Netlify local link state contains installation-specific account/site metadata.
+.netlify/

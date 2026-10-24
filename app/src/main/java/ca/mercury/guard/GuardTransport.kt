@@ -39,18 +39,30 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
    return validatePilotReceipt(JSONObject(body), expectedBatchId, expectedIds)
   } finally { cancellation?.detach(connection);connection.disconnect() }
  }
- fun sendPilotEvidence(accessToken:String,eventId:String,metadata:JSONObject,bytes:ByteArray):JSONObject {
+ fun sendPilotEvidence(accessToken:String,eventId:String,metadata:JSONObject,bytes:ByteArray,identity:DeviceIdentity,audience:String):JSONObject {
+  // Snapshot original ownership/hash/bytes before networking. A chunk receipt
+  // never acknowledges local evidence; only the unchanged final receipt does.
+  require(bytes.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES)
+  val expected=JSONObject(metadata.toString());val original=bytes.copyOf()
   require(java.util.UUID.fromString(eventId).toString()==eventId)
   require(accessToken.isNotBlank()&&accessToken.length<=16384&&accessToken.none{it.isWhitespace()})
-  require(bytes.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES && metadata.getLong("bytes")==bytes.size.toLong())
-  val hash=java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
-  require(metadata.getString("sha256")==hash)
-  cancellation?.check();val url=URL(endpoint.trimEnd('/')+"/v1/evidence/"+eventId)
+  require(original.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES && expected.getLong("bytes")==original.size.toLong())
+  require(expected.getString("sha256")==photoHash(original))
+  for(index in 0 until PhotoChunkPlan.count(original.size)){
+   cancellation?.check();val range=PhotoChunkPlan.range(original.size,index);val part=original.copyOfRange(range.first,range.last+1)
+   val hash=photoHash(part);val signature=identity.signEvidenceChunk(audience,eventId,expected,index,hash,part.size)
+   val receipt=sendEvidencePart(accessToken,"$eventId/chunks/$index","application/octet-stream",part,hash,signature)
+   validateEvidenceChunkReceipt(receipt,eventId,expected,index,part)
+  }
+  cancellation?.check();return sendEvidencePart(accessToken,"$eventId/finalize","application/json","{}".toByteArray(Charsets.UTF_8)).also{validateEvidenceReceipt(it,eventId,expected)}
+ }
+ private fun sendEvidencePart(accessToken:String,path:String,type:String,bytes:ByteArray,chunkHash:String?=null,chunkSignature:String?=null):JSONObject {
+  cancellation?.check();val url=URL(endpoint.trimEnd('/')+"/v1/evidence/"+path)
   val connection=(network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
   try{
    cancellation?.attach(connection);cancellation?.check()
    connection.requestMethod="POST";connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=10000;connection.doOutput=true
-   connection.setRequestProperty("Authorization","Bearer $accessToken");connection.setRequestProperty("Content-Type","image/jpeg");connection.setFixedLengthStreamingMode(bytes.size)
+   connection.setRequestProperty("Authorization","Bearer $accessToken");connection.setRequestProperty("Content-Type",type);chunkHash?.let{connection.setRequestProperty("X-Mercury-Chunk-SHA256",it)};chunkSignature?.let{connection.setRequestProperty("X-Mercury-Chunk-Signature",it)};connection.setFixedLengthStreamingMode(bytes.size)
    cancellation?.check();connection.outputStream.use{cancellation?.check();it.write(bytes)}
    if(connection.responseCode!=200)throw HttpFailure(connection.responseCode)
    val raw=connection.inputStream.use{input->
@@ -58,10 +70,18 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
     while(true){val count=input.read(chunk);if(count<0)break;check(out.size()+count<=8192);out.write(chunk,0,count)}
     out.toString("UTF-8")
    }
-   return JSONObject(raw).also{validateEvidenceReceipt(it,eventId,metadata)}
+   return JSONObject(raw)
   }finally{cancellation?.detach(connection);connection.disconnect()}
  }
  companion object {
+  internal fun photoHash(bytes:ByteArray)=java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString(""){"%02x".format(it.toInt() and 255)}
+  internal fun validateEvidenceChunkReceipt(receipt:JSONObject,eventId:String,metadata:JSONObject,index:Int,bytes:ByteArray){
+   require(receipt.keys().asSequence().toSet()==setOf("event_id","evidence_id","sha256","bytes","chunk_index","chunk_sha256","chunk_bytes","status"))
+   require(receipt.get("event_id")==eventId&&receipt.get("evidence_id")==metadata.get("evidence_id")&&receipt.get("sha256")==metadata.get("sha256")&&receipt.get("status")=="evidence_chunk_retained")
+   fun number(name:String):Long {val value=receipt.get(name);require(value is Int||value is Long);return (value as Number).toLong()}
+   require(number("bytes")==metadata.getLong("bytes")&&number("chunk_index")==index.toLong()&&number("chunk_bytes")==bytes.size.toLong()&&receipt.get("chunk_sha256")==photoHash(bytes))
+   require(PhotoChunkPlan.range(metadata.getInt("bytes"),index).count()==bytes.size)
+  }
   fun validateEvidenceReceipt(receipt:JSONObject,eventId:String,metadata:JSONObject){
    require(receipt.keys().asSequence().toSet()==setOf("event_id","evidence_id","sha256","bytes","status"))
    require(receipt.get("event_id")==eventId&&receipt.get("evidence_id")==metadata.get("evidence_id")&&receipt.get("sha256")==metadata.get("sha256")&&receipt.get("status")=="evidence_accepted_local_only")

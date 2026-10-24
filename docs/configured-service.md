@@ -1,5 +1,7 @@
 # Configured HTTPS service and local pilot
 
+For the separate serverless platform adapter, see [Mercury One on Netlify](netlify-deployment.md). The direct TLS entry point described here retains its own configuration and listener checks.
+
 The configured entry point composes the existing Guard PostgreSQL, individual Auth, current-session, device, shift, grant, consent, escalation and administration handlers behind direct HTTPS. It accepts explicit private runtime files and existing approvals. It does not deploy a server, apply migrations, generate production keys, discover credentials, create accounts or approve a phone. The existing local launcher remains unchanged.
 
 ## Required inputs

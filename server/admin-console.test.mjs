@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {adminConsoleResponse} from './admin-console-handler.mjs';
 import {locationPolicy as validateLocationPolicy} from './location-policy.mjs';
-import {buildPayload,buildReviewedPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,locationReportPresentation,maxReportPhotoBytes} from './admin-console/model.mjs';
+import {buildPayload,buildReviewedPayload,PendingChange,AdminClient,valuesForRow,readReportJpeg,ReportPhotoPreview,reportPresentation,locationReportPresentation,maxReportPhotoBytes,reportPhotoRangeBytes} from './admin-console/model.mjs';
 const json=(data,status=200)=>new Response(JSON.stringify(data),{status,headers:{'content-type':'application/json'}});
 const session={access_token:'synthetic-access',expires_at:1000},member={subject:'individual-admin',role:'guard_os_admin',expires_at:1000};
 test('operator escalation review binds the original ID and preserves guard-visible response',()=>{
@@ -110,6 +110,44 @@ test('private evidence rejects wrong type, length, truncated data, non-JPEG cont
  await assert.rejects(readReportJpeg(imageResponse(),{...photo,sha256:'b'.repeat(64)}),/fingerprint/);
  const other=new Uint8Array(jpeg);other[0]=0;await assert.rejects(readReportJpeg(imageResponse(other),{...photo,sha256:createHash('sha256').update(other).digest('hex')}),/not a JPEG/);
  let cancelled=false;const body=new ReadableStream({start(controller){controller.enqueue(jpeg);controller.enqueue(new Uint8Array([1]));},cancel(){cancelled=true;}});await assert.rejects(readReportJpeg(new Response(body,{headers:{'content-type':'image/jpeg'}}),photo),/exceeded/);assert.equal(cancelled,true);
+});
+function rangedPhoto(size=reportPhotoRangeBytes*2+13){const bytes=new Uint8Array(size);bytes.set([255,216,255,224]);bytes.set([255,217],size-2);return {bytes,media:{...photo,bytes:size,sha256:createHash('sha256').update(bytes).digest('hex')}};}
+function rangeResponse(bytes,media,range,{status=206,headers={},body}={}){const match=/^bytes=(\d+)-(\d+)$/.exec(range);assert.ok(match);const start=Number(match[1]),end=Number(match[2]);return new Response(body??bytes.slice(start,end+1),{status,headers:{'content-type':'image/jpeg','content-length':String(end-start+1),'content-range':`bytes ${start}-${end}/${media.bytes}`,etag:'"'+media.sha256+'"',...headers}});}
+test('large private photos use sequential bounded ranges on the exact protected path and verify the complete original image',async()=>{
+ const {bytes,media}=rangedPhoto(),calls=[];let active=0;
+ const client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);assert.equal(active++,0);calls.push({path,options});await Promise.resolve();active--;return rangeResponse(bytes,media,options.headers.range);}});await client.login('a@example.test','password');
+ const blob=await client.media(media);assert.equal(blob.type,'image/jpeg');assert.deepEqual(new Uint8Array(await blob.arrayBuffer()),bytes);assert.equal(calls.length,3);
+ assert.deepEqual(calls.map(call=>call.options.headers.range),['bytes=0-1048575','bytes=1048576-2097151','bytes=2097152-2097164']);
+ for(const {path,options}of calls){assert.equal(path,photo.path);assert.deepEqual(Object.keys(options.headers).sort(),['authorization','range']);assert.equal(options.headers.authorization,'Bearer synthetic-access');assert.equal(options.mode,'same-origin');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');assert.equal(options.cache,'no-store');assert.equal(options.method,'GET');}
+ const boundary=rangedPhoto(reportPhotoRangeBytes),smallCalls=[];const small=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):(smallCalls.push(options),imageResponse(boundary.bytes))});await small.login('a@example.test','password');assert.equal((await small.media(boundary.media)).size,reportPhotoRangeBytes);assert.equal(smallCalls.length,1);assert.equal(smallCalls[0].headers.range,undefined);
+ const maximum=rangedPhoto(maxReportPhotoBytes),ranges=[];const capped=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):(ranges.push(options.headers.range),rangeResponse(maximum.bytes,maximum.media,options.headers.range))});await capped.login('a@example.test','password');const complete=await capped.media(maximum.media);assert.equal(complete.size,maxReportPhotoBytes);assert.equal(createHash('sha256').update(new Uint8Array(await complete.arrayBuffer())).digest('hex'),maximum.media.sha256);assert.deepEqual(ranges,Array.from({length:20},(_,i)=>`bytes=${i*reportPhotoRangeBytes}-${(i+1)*reportPhotoRangeBytes-1}`));
+});
+test('range loading rejects changed identity, boundaries, framing and missing partial support without a raw fallback',async()=>{
+ const {bytes,media}=rangedPhoto();
+ for(const change of [{status:200},{headers:{'content-range':'bytes 1-1048576/'+media.bytes}},{headers:{'content-range':'bytes 0-1048575/*'}},{headers:{'content-range':'bytes 0-1048575/'+(media.bytes+1)}},{headers:{'content-length':String(reportPhotoRangeBytes+1)}},{headers:{'content-length':''}},{headers:{etag:'"'+'b'.repeat(64)+'"'}},{headers:{etag:'W/"'+media.sha256+'"'}},{headers:{etag:''}},{headers:{'content-type':'application/octet-stream'}}]){
+  let requests=0;const client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):(requests++,rangeResponse(bytes,media,options.headers.range,change))});await client.login('a@example.test','password');await assert.rejects(client.media(media),/range failed validation/);assert.equal(requests,1);assert.ok(client.session);
+ }
+});
+test('a ranged request keeps the originally validated report reference even if its caller replaces the source fields',async()=>{
+ const original=rangedPhoto(),provided={...original.media},paths=[];const client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);paths.push(path);if(paths.length===1)Object.assign(provided,{path:'/v1/admin/actions?token=untrusted',sha256:'f'.repeat(64),bytes:4,state:'pending'});return rangeResponse(original.bytes,original.media,options.headers.range);}});await client.login('a@example.test','password');assert.equal((await client.media(provided)).size,original.media.bytes);assert.deepEqual(paths,[photo.path,photo.path,photo.path]);
+});
+test('ranged transfers reject short, trailing, interrupted and altered original bytes before creating an image',async()=>{
+ const {bytes,media}=rangedPhoto();
+ for(const kind of ['short','trailing','interrupted','altered']){
+  let requests=0,cancelled=false;const client=new AdminClient({now:()=>1000,fetchImpl:async(path,options)=>{if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);requests++;let body;
+   if(requests===1){if(kind==='short')body=bytes.slice(0,reportPhotoRangeBytes-1);if(kind==='trailing')body=new ReadableStream({start(c){c.enqueue(bytes.slice(0,reportPhotoRangeBytes));c.enqueue(new Uint8Array([1]));},cancel(){cancelled=true;}});if(kind==='interrupted')body=new ReadableStream({start(c){c.error(Error('private transfer diagnostic'));}});if(kind==='altered'){body=bytes.slice(0,reportPhotoRangeBytes);body[10]=1;}}
+   return rangeResponse(bytes,media,options.headers.range,{body});}});await client.login('a@example.test','password');await assert.rejects(client.media(media),kind==='short'?/incomplete/:kind==='trailing'?/exceeded/:kind==='interrupted'?/interrupted/:/fingerprint/);assert.equal(requests,kind==='altered'?3:1);if(kind==='trailing')assert.equal(cancelled,true);
+ }
+});
+test('revocation, expiry, cancellation and a changed sign-in stop later ranges while stale denials preserve a newer session',async()=>{
+ const {bytes,media}=rangedPhoto();
+ for(const failure of ['denied','expired','cancelled','signed_out']){
+  let now=1000,requests=0,lost=0;const controller=new AbortController();let client;client=new AdminClient({now:()=>now,onSessionLost:()=>lost++,fetchImpl:async(path,options)=>{if(path.endsWith('/login'))return json(session);if(path.endsWith('/me'))return json(member);requests++;
+   if(requests===2&&failure==='denied')return json({},403);
+   const response=rangeResponse(bytes,media,options.headers.range);if(requests===1){if(failure==='expired')now=1000000;if(failure==='cancelled')controller.abort();if(failure==='signed_out')client.clear();}return response;
+  }});await client.login('a@example.test','password');await assert.rejects(client.media(media,{signal:controller.signal}),failure==='denied'?e=>e.status===403:failure==='expired'?e=>e.status===401:failure==='signed_out'?/Session changed/:/interrupted/);assert.equal(requests,failure==='denied'?2:1);assert.equal(lost,['denied','expired'].includes(failure)?1:0);if(failure!=='cancelled')assert.equal(client.session,null);
+ }
+ let release,requests=0,lost=0;const client=new AdminClient({now:()=>1000,onSessionLost:()=>lost++,fetchImpl:async(path,options)=>path.endsWith('/login')?json(session):path.endsWith('/me')?json(member):(++requests===1?rangeResponse(bytes,media,options.headers.range):new Promise(resolve=>{release=resolve;}))});await client.login('a@example.test','password');const old=client.media(media);while(!release)await new Promise(resolve=>setImmediate(resolve));await client.login('b@example.test','password');const current=client.session;release(json({},403));await assert.rejects(old,e=>e.status===403);assert.equal(requests,2);assert.equal(client.session,current);assert.equal(lost,0);
 });
 test('photo authorization revocation and expiry clear the session, while stale photo responses cannot cross sign-ins',async()=>{
  let lost=0,now=1000,release,started;const waiting=new Promise(resolve=>{started=resolve;});let denied=false;

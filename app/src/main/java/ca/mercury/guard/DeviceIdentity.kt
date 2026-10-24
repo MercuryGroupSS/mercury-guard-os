@@ -64,6 +64,12 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    .put("challenge",challenge).put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki)
    .put("signature_der",encoded(signature))
  }
+ /** Replay binds only the exact original piece; it cannot create or replace another piece. */
+ fun signEvidenceChunk(audience:String,eventId:String,metadata:JSONObject,index:Int,chunkHash:String,chunkBytes:Int):String=synchronized(lock){
+  val ks=store();val identity=checked(ks)?:error("Installation signing key not initialized")
+  val message=PhotoChunkPlan.proofMessage(audience,identity.thumbprint,eventId,metadata.getString("evidence_id"),metadata.getString("sha256"),metadata.getInt("bytes"),index,chunkHash,chunkBytes)
+  encoded(Signature.getInstance("SHA256withECDSA").run{initSign(ks.getKey(alias,null) as PrivateKey);update(message.toByteArray(Charsets.UTF_8));sign()})
+ }
  /** Distinct domain binds the fresh possession challenge to one exact retained intent or status query. */
  fun signEscalationChallenge(audience:String,operation:String,requestId:String,challenge:String,payloadHash:String):JSONObject=synchronized(lock){
   require(audience.matches(Regex("[A-Za-z0-9._:/-]{1,128}"))&&operation in setOf("create","status")&&EscalationRules.uuid(requestId))

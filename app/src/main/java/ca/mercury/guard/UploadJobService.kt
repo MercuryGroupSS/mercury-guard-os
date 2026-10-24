@@ -149,7 +149,7 @@ internal class NativeUploadPort(private val context:Context,private val config:G
   check();check(photo.getJSONObject("scope").getString("guard_id")==authority.guardId)
   val event=photo.getJSONObject("event");val data=event.getJSONObject("data")
   val bytes=try{EvidenceStore(context).readPhoto(data.getString("evidence_id"))}catch(_:Exception){throw UploadEvidenceUnavailable()}
-  val receipt=try{transport.sendPilotEvidence(session().bearer(),event.getString("event_id"),data,bytes)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}
+  val receipt=try{transport.sendPilotEvidence(session().bearer(),event.getString("event_id"),data,bytes,identity,config.audience)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}
   db.recordUploadMediaReceipt(authority.guardId,receipt)
  }
  override fun reviewPhoto(photo:JSONObject,status:Int){check();db.retainPhotoForReview(authority.guardId,photo.getJSONObject("event").getString("event_id"),authority.generation,status)}

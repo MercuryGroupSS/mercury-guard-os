@@ -145,20 +145,40 @@ export class AdminClient{
  }
  async media(media,{signal}={}){
   validateReportMedia(media);
+  media={state:media.state,path:media.path,sha256:media.sha256,bytes:media.bytes};
   const session=this.session,generation=this.generation;
   if(!session||session.expiresAt*1000<=this.now()){this.clear();this.onSessionLost();throw new ApiError(errors[401],401);}
   try{
    const timeout=AbortSignal.timeout(30000),requestSignal=signal?AbortSignal.any([signal,timeout]):timeout;
-   let response;try{response=await this.fetch(media.path,{method:'GET',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:requestSignal,headers:{authorization:'Bearer '+session.token}});}catch{throw new ApiError('The private photo could not be loaded. Try again.');}
-   if(!response.ok){await response.body?.cancel();throw new ApiError(errors[response.status]??'The private photo is unavailable.',response.status);}
-   const blob=await readReportJpeg(response,media);
-   if(generation!==this.generation)throw new ApiError('Session changed. Reload the photo after signing in.');
-   if(session.expiresAt*1000<=this.now()){this.clear();this.onSessionLost();throw new ApiError(errors[401],401);}
+   const current=()=>{
+    if(generation!==this.generation)throw new ApiError('Session changed. Reload the photo after signing in.');
+    if(session.expiresAt*1000<=this.now()){this.clear();this.onSessionLost();throw new ApiError(errors[401],401);}
+    if(requestSignal.aborted)throw new ApiError('The private photo transfer was interrupted. Try again.');
+   };
+   const fetchPhoto=async range=>{
+    current();let response;
+    try{response=await this.fetch(media.path,{method:'GET',cache:'no-store',credentials:'omit',redirect:'error',mode:'same-origin',signal:requestSignal,headers:{authorization:'Bearer '+session.token,...(range?{range}:{})}});}catch{throw new ApiError('The private photo could not be loaded. Try again.');}
+    if(!response.ok){await response.body?.cancel();throw new ApiError(errors[response.status]??'The private photo is unavailable.',response.status);}
+    try{current();}catch(error){await response.body?.cancel();throw error;}
+    return response;
+   };
+   let blob;
+   if(media.bytes<=reportPhotoRangeBytes)blob=await readReportJpeg(await fetchPhoto(),media);
+   else{
+    const bytes=new Uint8Array(media.bytes);
+    for(let start=0;start<media.bytes;start+=reportPhotoRangeBytes){
+     const end=Math.min(media.bytes,start+reportPhotoRangeBytes)-1,response=await fetchPhoto('bytes='+start+'-'+end);
+     const part=await readReportJpegRange(response,media,start,end);current();bytes.set(part,start);
+    }
+    blob=await checkedReportJpeg(bytes,media);
+   }
+   current();
    return blob;
   }catch(error){if([401,403].includes(error.status)&&generation===this.generation){this.clear();this.onSessionLost();}throw error;}
  }
 }
 export const maxReportPhotoBytes=20*1024*1024;
+export const reportPhotoRangeBytes=1024*1024;
 export function validateReportMedia(media){
  if(media?.state!=='stored'||!/^\/v1\/admin\/media\/[a-f0-9]{64}$/.test(media.path)||!/^[a-f0-9]{64}$/.test(media.sha256)||!Number.isSafeInteger(media.bytes)||media.bytes<4||media.bytes>maxReportPhotoBytes)throw new ApiError('The saved photo reference is incomplete. Refresh the report.');
 }
@@ -167,12 +187,24 @@ export async function readReportJpeg(response,media){
  const fail=async()=>{await response.body?.cancel();throw new ApiError('The private photo failed validation. Refresh the report before trying again.');};
  if(response.headers.get('content-type')?.toLowerCase()!=='image/jpeg')return fail();
  const length=response.headers.get('content-length');if(length!==null&&(!/^[0-9]+$/.test(length)||Number(length)!==media.bytes))return fail();
+ return checkedReportJpeg(await readReportPhotoBytes(response,media.bytes),media);
+}
+async function readReportJpegRange(response,media,start,end){
+ const fail=async()=>{await response.body?.cancel();throw new ApiError('The private photo range failed validation. Refresh the report before trying again.');};
+ if(response.status!==206||response.headers.get('content-type')?.toLowerCase()!=='image/jpeg'||response.headers.get('content-range')!=='bytes '+start+'-'+end+'/'+media.bytes||response.headers.get('content-length')!==String(end-start+1)||response.headers.get('etag')!=='"'+media.sha256+'"')return fail();
+ return readReportPhotoBytes(response,end-start+1);
+}
+async function readReportPhotoBytes(response,expectedBytes){
  const reader=response.body?.getReader();if(!reader)throw new ApiError('The private photo has no contents.');
  const chunks=[];let size=0;
- try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>media.bytes||size>maxReportPhotoBytes){await reader.cancel();throw new ApiError('The private photo exceeded its saved size.');}chunks.push(value);}}
+ try{while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>expectedBytes||size>maxReportPhotoBytes){await reader.cancel();throw new ApiError('The private photo exceeded its saved size.');}chunks.push(value);}}
  catch(error){if(error instanceof ApiError)throw error;throw new ApiError('The private photo transfer was interrupted. Try again.');}finally{reader.releaseLock();}
- if(size!==media.bytes)throw new ApiError('The private photo transfer was incomplete. Try again.');
+ if(size!==expectedBytes)throw new ApiError('The private photo transfer was incomplete. Try again.');
  const bytes=new Uint8Array(size);let offset=0;for(const chunk of chunks){bytes.set(chunk,offset);offset+=chunk.byteLength;}
+ return bytes;
+}
+async function checkedReportJpeg(bytes,media){
+ const size=bytes.length;
  if(bytes[0]!==255||bytes[1]!==216||bytes[2]!==255||bytes[size-2]!==255||bytes[size-1]!==217)throw new ApiError('The saved photo is not a JPEG image.');
  const digest=Array.from(new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256',bytes)),value=>value.toString(16).padStart(2,'0')).join('');
  if(digest!==media.sha256)throw new ApiError('The private photo does not match its saved fingerprint.');

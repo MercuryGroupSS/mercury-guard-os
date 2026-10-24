@@ -32,6 +32,10 @@ The [actual platform sign-in gate](docs/guard-identity-and-site-phones.md#actual
 
 ## Remaining activation
 
+The selected hosting path now has a [Netlify adapter](docs/netlify-deployment.md): a separate Guard site, production-only canonical-origin/site binding, current individual Auth/session checks, verified PostgreSQL TLS/role checkouts and bounded scheduled processing. [Signed photo chunks](docs/photo-chunks.md) preserve original evidence up to 20 MiB across smaller function payloads; protected Reports reads use verified ranges. Account email paths default to a deny-all recipient list for pilot setup. This source does not provision or activate a hosted service.
+
+The real local function-bundle gate is `npm ci --ignore-scripts && npm run check:netlify && npm run test:netlify-bundle`. It packages both modern Node 24 functions outside the checkout, verifies archived dependencies/assets, and confirms an unconfigured invocation is denied without network calls. Shared PostgreSQL replay also includes independent full-size photo and Netlify-runtime gates; their provider and database-transport fixtures remain explicitly local/synthetic.
+
 Supply the approved reachable HTTPS origin, owner/individual identities, enrollment and Ops source/destination configuration; verify real email and actual connected-app exchange. Complete production signing/update recovery, retention/backups, capacity/security acceptance and attended Fold testing. These operational inputs and hardware results are not inferred from local fixtures or green CI.
 
 Dedicated-device management and [flashable OS feasibility](docs/firmware-track.md) are separate tracks after APK acceptance. No compatible Fold6 system image or bootloader/recovery route has been validated.

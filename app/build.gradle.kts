@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
  namespace = "ca.mercury.guard"
  compileSdk = 35
- defaultConfig { applicationId = if (providers.gradleProperty("localPreview").orNull == "true") "ca.mercury.guard.preview" else "ca.mercury.guard"; minSdk = 28; targetSdk = 35; versionCode = 35; versionName = "0.35.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
+ defaultConfig { applicationId = if (providers.gradleProperty("localPreview").orNull == "true") "ca.mercury.guard.preview" else "ca.mercury.guard"; minSdk = 28; targetSdk = 35; versionCode = 36; versionName = "0.36.0"; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
  if (providers.gradleProperty("localPreview").orNull == "true") {
   sourceSets.getByName("debug").manifest.srcFile("src/preview/AndroidManifest.xml")
  }

@@ -18,6 +18,10 @@ import java.util.UUID
 import java.io.File
 
 class HttpsAccountIntegrationTest {
+ private fun chunkStatus(token:String,eventId:String,bytes:ByteArray,signature:String?):Int{
+  val c=URL("https://localhost:55443/v1/evidence/$eventId/chunks/0").openConnection() as HttpsURLConnection
+  try{c.requestMethod="POST";c.instanceFollowRedirects=false;c.connectTimeout=10000;c.readTimeout=10000;c.doOutput=true;c.setRequestProperty("Authorization","Bearer $token");c.setRequestProperty("Content-Type","application/octet-stream");c.setRequestProperty("X-Mercury-Chunk-SHA256",GuardTransport.photoHash(bytes));signature?.let{c.setRequestProperty("X-Mercury-Chunk-Signature",it)};c.setFixedLengthStreamingMode(bytes.size);c.outputStream.use{it.write(bytes)};return c.responseCode}finally{c.disconnect()}
+ }
  private fun fixture(path:String,body:JSONObject?=null,host:String="localhost"):JSONObject {
   val connection=URL("https://$host:55443$path").openConnection() as HttpsURLConnection
   try{
@@ -118,8 +122,15 @@ class HttpsAccountIntegrationTest {
    assertEquals(receipt,transport.sendPilotBatch(session.bearer(),proof,batch.getString("batch_id"),ids))
    db.recordUploadReceipt("fixture-guard",JSONObject().put("batch_id",receipt.batchId).put("event_ids",JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
    assertEquals(0,db.pendingCount("fixture-guard"));assertEquals(7,fixture("/test/receipts").getInt("count"))
-   val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes)
-   assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes).toString())
+   // A stolen same-guard bearer cannot poison fragments without the original
+   // installation key. Positive transport below uses real Android Keystore.
+   assertEquals(403,chunkStatus(session.bearer(),photoEvent,photoBytes,null))
+   val otherKey=java.security.KeyPairGenerator.getInstance("EC").apply{initialize(java.security.spec.ECGenParameterSpec("secp256r1"))}.generateKeyPair()
+   val message=PhotoChunkPlan.proofMessage("mercury-local",public.thumbprint,photoEvent,photo.getString("evidence_id"),photo.getString("sha256"),photoBytes.size,0,GuardTransport.photoHash(photoBytes),photoBytes.size)
+   val forged=java.security.Signature.getInstance("SHA256withECDSA").run{initSign(otherKey.private);update(message.toByteArray(Charsets.UTF_8));Base64.getUrlEncoder().withoutPadding().encodeToString(sign())}
+   assertEquals(403,chunkStatus(session.bearer(),photoEvent,photoBytes,forged))
+   val media=transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes,identity,"mercury-local")
+   assertEquals(media.toString(),transport.sendPilotEvidence(session.bearer(),photoEvent,photo,photoBytes,identity,"mercury-local").toString())
    assertEquals(1,fixture("/test/receipts").getInt("media_count"))
    db.recordUploadMediaReceipt("fixture-guard",media);assertTrue(db.pendingPhotos("fixture-guard").isEmpty())
    val refreshed=client.grant(session,"fixture-phone",item.getString("assignmentId"),identity,"mercury-local")

@@ -1,0 +1,23 @@
+[build]
+  command = "npm ci --omit=dev --ignore-scripts && node server/scripts/check-netlify-source.mjs"
+  publish = "netlify/public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "24.19.0"
+
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["server/admin-console/**", "server/account-page/**"]
+
+[[redirects]]
+  from = "/"
+  to = "/admin/"
+  status = 302
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"

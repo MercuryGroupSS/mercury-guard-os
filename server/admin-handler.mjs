@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {strictJson} from './verify-batch.mjs';
 import {AdminDeniedError,AdminConflictError} from './postgres-administration.mjs';
+import {PHOTO_CHUNK_BYTES} from './photo-chunks.mjs';
 const reply=(status,value)=>new Response(JSON.stringify(value),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 async function body(request,max=65536){
  if(request.headers.get('content-type')?.split(';')[0].trim()!=='application/json')throw Error('JSON required');
@@ -30,7 +31,15 @@ export function createAdminHandler({admin,verifySession,passwordSession,now=Date
   let session;
   try{session=await verifySession(token);if(!session||!Number.isSafeInteger(session.expiresAt)||session.expiresAt*1000<=now())return reply(401,{error:'authentication_required'});if(!await admin.member(session))return reply(403,{error:'administrator_required'});}catch{return reply(503,{error:'admin_authorization_unavailable'});}
   try{
-   if(media){const image=await admin.media(session,media[1]);if(!image)return reply(404,{error:'media_unavailable'});return new Response(image.bytes,{status:200,headers:{'content-type':'image/jpeg','content-length':String(image.bytes.length),'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','content-disposition':'inline'}});}
+   if(media){
+    const range=request.headers.get('range');let start,end;
+    if(range!==null){const match=/^bytes=(0|[1-9][0-9]*)-(0|[1-9][0-9]*)$/.exec(range);if(!match)return reply(416,{error:'bounded_media_range_required'});start=Number(match[1]);end=Number(match[2]);if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end<start||end-start+1>PHOTO_CHUNK_BYTES)return reply(416,{error:'bounded_media_range_required'});}
+    const image=await admin.media(session,media[1]);if(!image)return reply(404,{error:'media_unavailable'});
+    if(range!==null&&end>=image.bytes.length)return reply(416,{error:'media_range_unavailable'});
+    const bytes=range===null?image.bytes:image.bytes.subarray(start,end+1),headers={'content-type':'image/jpeg','content-length':String(bytes.length),'cache-control':'no-store','x-content-type-options':'nosniff','referrer-policy':'no-referrer','cross-origin-resource-policy':'same-origin','content-disposition':'inline','accept-ranges':'bytes','etag':'"'+image.sha256+'"'};
+    if(range!==null)headers['content-range']=`bytes ${start}-${end}/${image.bytes.length}`;
+    return new Response(bytes,{status:range===null?200:206,headers});
+   }
    if(path==='/v1/admin/me'){if(url.search)return reply(400,{error:'invalid_request'});return reply(200,{subject:session.subject,role:'guard_os_admin',expires_at:session.expiresAt});}
    if(path==='/v1/admin/catalog'){
     if([...url.searchParams.keys()].some(k=>!['kind','after'].includes(k))||url.searchParams.getAll('kind').length!==1||url.searchParams.getAll('after').length>1)return reply(400,{error:'invalid_request'});

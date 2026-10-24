@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['server/**', 'supabase/**', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', 'netlify/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
   pull_request:
-    paths: ['server/**', 'supabase/**', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', 'netlify/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
 permissions:
   contents: read
 jobs:
@@ -23,6 +23,18 @@ jobs:
         run: |
           node --check server/scripts/check-local-capacity.mjs
           node --check server/scripts/check-local-backup-restore.mjs
+
+  netlify-bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - run: npm ci --ignore-scripts
+      - run: npm run check:netlify
+      - run: npm run test:netlify-bundle
 
   postgres-identity:
     runs-on: ubuntu-24.04

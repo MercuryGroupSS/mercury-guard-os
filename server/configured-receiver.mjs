@@ -20,5 +20,5 @@ export function readConfiguredReceiver(config){
 export function createConfiguredReceiver({config,pool,identity}){
  const settings=readConfiguredReceiver(config);if(settings===null)return null;
  const inbox=new PostgresDashboardInbox(pool,{authorizeCommit:client=>assertConfiguredDeploymentIdentity(client,identity)});
- return {observations:createDashboardInboxHandler({...settings,inbox,loadMapping:scope=>inbox.get(scope)}),media:createDashboardMediaHandler({...settings,inbox})};
+ return {observations:createDashboardInboxHandler({...settings,inbox,loadMapping:scope=>inbox.get(scope)}),media:createDashboardMediaHandler({...settings,inbox}),cleanupPhotoChunks:(now,limit)=>inbox.cleanupPhotoChunks(now,limit)};
 }

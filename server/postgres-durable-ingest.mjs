@@ -5,6 +5,7 @@ import {isDeepStrictEqual} from 'node:util';
 import {createHash} from 'node:crypto';
 import {verifyScopedBatch} from './verify-batch.mjs';
 import {photoMetadata} from './photo-metadata.mjs';
+import {PHOTO_CHUNK_BYTES,PHOTO_CHUNK_TTL_MS,photoChunkReceipt,validatePhotoChunk,assemblePhotoChunks,validateWholePhoto} from './photo-chunks.mjs';
 import {permitsCheckpoint,patrolRoundKey} from './patrol-route.mjs';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const actions={incident:'incident',patrol_checkpoint:'patrol',check_in:'check_in',check_in_miss_reason:'check_in',photo_evidence:'photo',location:'location',dispatch_ack:'dispatch_ack'};
@@ -69,9 +70,18 @@ export class PostgresDurableIngest{
  }
  async photoForGuard(guardId,eventId){if(!uuid(eventId))return null;const rows=(await this.pool.query('SELECT body FROM mercury_guard.ingested_events WHERE id=$1 AND guard_id=$2',[eventId,guardId])).rows;return rows.length===1&&rows[0].body.event.kind==='photo_evidence'?rows[0].body:null;}
  async retainPhoto(record,bytes,receivedAt=Date.now()){
-  if(!Number.isSafeInteger(receivedAt)||receivedAt<=0)throw Error('Trusted receipt time required');
   const meta=photoMetadata(record.event.data);
   if(bytes.length!==meta.bytes||createHash('sha256').update(bytes).digest('hex')!==meta.sha256)throw Error('Evidence mismatch');
+  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId})=>{
+   const prior=(await client.query('SELECT sha256,octet_length(bytes) size FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
+   if(prior){if(prior.sha256!==meta.sha256||prior.size!==bytes.length)throw Error('Evidence conflict');}
+   else await client.query('INSERT INTO mercury_guard.ingested_media VALUES($1,$2,$3,$4,$5)',[device,eventId,meta.sha256,bytes,receivedAt]);
+   return this.photoReceipt(record,meta);
+  });
+ }
+ photoReceipt(record,meta){return {event_id:record.event.event_id,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};}
+ async withPhotoAuthority(record,receivedAt,fn){
+  if(!Number.isSafeInteger(receivedAt)||receivedAt<=0)throw Error('Trusted receipt time required');
   return this.devices.transaction(async client=>{
    await client.query('SELECT pg_advisory_xact_lock(724910621355083::bigint)');
    const {device_thumbprint:device,guard_id:guard}=record.scope,eventId=record.event.event_id;
@@ -81,11 +91,43 @@ export class PostgresDurableIngest{
    const enrolled=(await client.query('SELECT public_key_spki FROM mercury_guard.devices WHERE thumbprint=$1',[device])).rows[0];
    if(!grant||!enrolled)throw Error('Evidence authority unavailable');
    await this.lockAuthority(client,{subject:grant.subject,vendorId:record.vendor_id,guardId:guard,assignmentId:record.scope.assignment_id,siteId:record.scope.site_id,thumbprint:device,revocationVersion:record.scope.revocation_version,publicKeySpki:enrolled.public_key_spki,audience:JSON.parse(Buffer.from(grant.payload,'base64url')).audience,receivedAtMs:receivedAt},{events:[record.event]});
-   const prior=(await client.query('SELECT sha256,octet_length(bytes) size FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
-   if(prior){if(prior.sha256!==meta.sha256||prior.size!==bytes.length)throw Error('Evidence conflict');}
-   else await client.query('INSERT INTO mercury_guard.ingested_media VALUES($1,$2,$3,$4,$5)',[device,eventId,meta.sha256,bytes,receivedAt]);
-   return {event_id:eventId,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};
+   const assignment=(await client.query('SELECT ends_at_ms FROM mercury_guard.assignments WHERE assignment_id=$1',[record.scope.assignment_id])).rows[0];
+   return fn(client,{device,eventId,expiresAt:Math.min(receivedAt+PHOTO_CHUNK_TTL_MS,Number(assignment.ends_at_ms)+PHOTO_CHUNK_TTL_MS)});
   });
+ }
+ async retainPhotoChunk(record,index,bytes,receivedAt=Date.now()){
+  const meta=photoMetadata(record.event.data),sha=validatePhotoChunk(meta,index,bytes);
+  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId,expiresAt})=>{
+   const accepted=(await client.query('SELECT sha256,bytes FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
+   if(accepted){validateWholePhoto(meta,accepted.bytes);if(accepted.sha256!==meta.sha256||!accepted.bytes.subarray(index*PHOTO_CHUNK_BYTES,index*PHOTO_CHUNK_BYTES+bytes.length).equals(bytes))throw Error('Immutable photo conflict');}
+   else{
+    // Expired fragments can be reconstructed only from the original retained
+    // handset JPEG. This never deletes an accepted original or an event/receipt.
+    await client.query('DELETE FROM mercury_guard.evidence_chunks WHERE device=$1 AND event_id=$2 AND expires_at<$3',[device,eventId,receivedAt]);
+    const prior=(await client.query('SELECT sha256,bytes FROM mercury_guard.evidence_chunks WHERE device=$1 AND event_id=$2 AND chunk_index=$3',[device,eventId,index])).rows[0];
+    if(prior){if(prior.sha256!==sha||!prior.bytes.equals(bytes))throw Error('Immutable photo chunk conflict');}
+    else await client.query('INSERT INTO mercury_guard.evidence_chunks(device,event_id,chunk_index,sha256,bytes,received_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[device,eventId,index,sha,bytes,receivedAt,expiresAt]);
+   }
+   return photoChunkReceipt(eventId,meta,index,bytes);
+  });
+ }
+ async finalizePhotoChunks(record,receivedAt=Date.now()){
+  const meta=photoMetadata(record.event.data);
+  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId})=>{
+   const accepted=(await client.query('SELECT sha256,bytes FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
+   if(accepted){if(accepted.sha256!==meta.sha256)throw Error('Immutable photo conflict');validateWholePhoto(meta,accepted.bytes);}
+   else{
+    const rows=(await client.query('SELECT chunk_index,sha256,bytes,expires_at FROM mercury_guard.evidence_chunks WHERE device=$1 AND event_id=$2 ORDER BY chunk_index',[device,eventId])).rows;
+    if(rows.some(row=>Number(row.expires_at)<receivedAt))throw Error('Incomplete photo fragments expired');
+    const bytes=assemblePhotoChunks(meta,rows);await client.query('INSERT INTO mercury_guard.ingested_media VALUES($1,$2,$3,$4,$5)',[device,eventId,meta.sha256,bytes,receivedAt]);
+   }
+   await client.query('DELETE FROM mercury_guard.evidence_chunks WHERE device=$1 AND event_id=$2',[device,eventId]);
+   return this.photoReceipt(record,meta);
+  });
+ }
+ async cleanupPhotoChunks(now=Date.now(),limit=40){
+  if(!Number.isSafeInteger(now)||now<=0||!Number.isSafeInteger(limit)||limit<1||limit>100)throw Error('Bounded cleanup required');
+  return (await this.pool.query('DELETE FROM mercury_guard.evidence_chunks WHERE (device,event_id,chunk_index) IN (SELECT device,event_id,chunk_index FROM mercury_guard.evidence_chunks WHERE expires_at<$1 ORDER BY expires_at LIMIT $2)',[now,limit])).rowCount;
  }
  reconcileCheckIns(assignment,now){return reconcilePostgresCheckIns(this,assignment,now);}
  async hasMissedCheckIn(guard,assignment,revision,slot){return (await this.pool.query('SELECT 1 FROM mercury_guard.missed_check_ins WHERE guard_id=$1 AND assignment_id=$2 AND revision=$3 AND slot=$4',[guard,assignment,revision,slot])).rowCount===1;}

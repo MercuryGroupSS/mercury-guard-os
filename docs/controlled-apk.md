@@ -21,8 +21,8 @@ The input has exactly these fields; replace all placeholders with reviewed value
   },
   "expected": {
     "package": "ca.mercury.guard",
-    "version_code": 35,
-    "version_name": "0.35.0",
+    "version_code": 36,
+    "version_name": "0.36.0",
     "signer_sha256": "EXPECTED_64_CHARACTER_LOWERCASE_CERTIFICATE_SHA256"
   },
   "output_directory": "/ABS/OUTPUT/NEW_IMMUTABLE_DIRECTORY",
