@@ -30,3 +30,13 @@ test('TLS name/key/validity and supplied RSA issuer are bound to public configur
  assert.throws(()=>configuredPublicConfiguration(fixture.config,material,'not an ID'));
  assert.ok(readFileSync(fixture.config.tls.certificate_path).length>0);
 });
+test('configured Ops history requires an exact optional boolean without alternate table or field selection',()=>{
+ const ops={origin:'https://ops.example.invalid',server_key:'sb_secret_synthetic-ops',interval_ms:1000};
+ for(const extra of [{},{history_fallback:false},{history_fallback:true}]){
+  const config={...structuredClone(fixture.config),ops_refresh:{...ops,...extra}};
+  assert.deepEqual(validateConfiguredServiceConfig(config).ops_refresh,config.ops_refresh);
+ }
+ for(const extra of [{history_fallback:null},{history_fallback:'true'},{history_fallback:1},{history_fallback:[]},{history_fallback:undefined},{history_fallback:true,table:'shift_history'},{history_fallback:true,select:'guard_name'}]){
+  assert.throws(()=>validateConfiguredServiceConfig({...structuredClone(fixture.config),ops_refresh:{...ops,...extra}}),/configuration invalid/);
+ }
+});

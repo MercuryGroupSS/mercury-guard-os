@@ -24,3 +24,15 @@ test('mail recipient activation is exact, bounded and never derives addresses fr
  const f=fixture();f.value.mail_recipients=['owner-approved@example.invalid'];f.save();assert.deepEqual(f.load().config.mail_recipients,['owner-approved@example.invalid']);
  for(const list of [['Owner@example.invalid'],['owner@example.invalid','owner@example.invalid'],['not-an-email'],['owner\u0000@example.invalid'],Array.from({length:26},(_,i)=>'owner'+i+'@example.invalid')]){f.value.mail_recipients=list;f.save();assert.throws(f.load);}
 });
+test('Netlify Ops history opt-in survives normalization and rejects ambiguous flags or alternate sources',()=>{
+ for(const extra of [{},{history_fallback:false},{history_fallback:true}]){
+  const f=fixture();f.value.ops_refresh={origin:'https://ops.example.invalid',...extra};f.env.MERCURY_GUARD_OPS_SERVER_KEY='sb_secret_synthetic-ops-only';f.save();
+  const {config,materials}=f.load();assert.deepEqual(config.ops_refresh,{...f.value.ops_refresh,server_key:f.env.MERCURY_GUARD_OPS_SERVER_KEY});
+  assert.deepEqual(validateNetlifyConfiguration(config,materials),config);
+  for(const bad of [null,'true',1,[],{}])assert.throws(()=>validateNetlifyConfiguration({...config,ops_refresh:{...config.ops_refresh,history_fallback:bad}},materials));
+  assert.throws(()=>validateNetlifyConfiguration({...config,ops_refresh:{...config.ops_refresh,table:'shift_history'}},materials));
+ }
+ for(const extra of [{history_fallback:null},{history_fallback:'true'},{history_fallback:1},{history_fallback:[]},{history_fallback:true,table:'shift_history'},{history_fallback:true,select:'guard_name'}]){
+  const f=fixture();f.value.ops_refresh={origin:'https://ops.example.invalid',...extra};f.env.MERCURY_GUARD_OPS_SERVER_KEY='sb_secret_synthetic-ops-only';f.save();assert.throws(f.load,/configuration invalid/);
+ }
+});

@@ -80,10 +80,11 @@ class ConnectedIncidentDraftLifecycleTest {
   }).check(matches(isDisplayingAtLeast(90))).perform(click(),replaceText(text),closeSoftKeyboard())
  }
  @Test fun rotationBackgroundPatrolAndEscalationRecoverOnlyTheOriginalVerifiedIndividualDraft(){
+  ConnectedPatrolUiFixture(context).use{
   val suffix=UUID.randomUUID().toString();val key=KeyPairGenerator.getInstance("RSA").apply{initialize(2048)}.generateKeyPair().public
   val config=GuardServiceConfig.parse(JSONObject().put("endpoint","https://example.test").put("issuer","test").put("audience","mercury-local").put("device_id","draft-phone")
    .put("issuer_keys",JSONObject().put("test",Base64.getUrlEncoder().withoutPadding().encodeToString(key.encoded))).toString())
-  val scope=ConnectedIncidentDraftScope(config.uploadBinding(),config.deviceId,"b".repeat(64),UUID.randomUUID().toString(),"draft-guard","draft-vendor","draft-site","draft-$suffix")
+  val scope=ConnectedIncidentDraftScope(config.uploadBinding(),config.deviceId,DeviceIdentity(context).publicIdentity()?.thumbprint?:error("Synthetic presentation identity missing"),UUID.randomUUID().toString(),"draft-guard","draft-vendor","draft-site","draft-$suffix")
   val other=scope.copy(subject=UUID.randomUUID().toString())
   val item=JSONObject().put("guardId",scope.guardId).put("vendorId",scope.vendorId).put("siteId",scope.siteId).put("assignmentId",scope.assignmentId)
    .put("patrolRoute",JSONObject().put("routeId","draft-route").put("revision",1).put("checkpoints",JSONArray().put(JSONObject().put("id","entrance").put("label","Entrance"))))
@@ -108,5 +109,6 @@ class ConnectedIncidentDraftLifecycleTest {
    scenario.onActivity{click(it,"Discard unfinished incident")};onView(withId(android.R.id.button1)).inRoot(androidx.test.espresso.matcher.RootMatchers.isDialog()).perform(click())
    onView(withHint("Describe the incident")).check(matches(withText("")));assertNull(ConnectedIncidentDraftStore(context).use{it.read(scope)})
   }}finally{ConnectedIncidentDraftStore(context).use{store->for(s in listOf(scope,other))store.read(s)?.let{store.clear(s,it)}}}
+  }
  }
 }

@@ -23,7 +23,7 @@ function publicConfiguration(value){
  if(!exact(c.database,['connection_mode'])||!['session','direct'].includes(c.database.connection_mode))fail();
  if(!exact(c.issuer,['issuer','audience','key_id'])||!safe(c.issuer.issuer,256)||!(/^[A-Za-z0-9._:/-]{1,128}$/).test(c.issuer.audience)||!(/^[A-Za-z0-9_-]{1,64}$/).test(c.issuer.key_id))fail();
  if(!exact(c.workers,['batch_size','max_duration_ms'])||!Number.isSafeInteger(c.workers.batch_size)||c.workers.batch_size<1||c.workers.batch_size>20||!Number.isSafeInteger(c.workers.max_duration_ms)||c.workers.max_duration_ms<1000||c.workers.max_duration_ms>25000)fail();
- if(c.ops_refresh!==null){if(!exact(c.ops_refresh,['origin']))fail();origin(c.ops_refresh.origin);}
+ if(c.ops_refresh!==null){if(!exact(c.ops_refresh,Object.hasOwn(c.ops_refresh??{},'history_fallback')?['origin','history_fallback']:['origin'])||Object.hasOwn(c.ops_refresh,'history_fallback')&&typeof c.ops_refresh.history_fallback!=='boolean')fail();origin(c.ops_refresh.origin);}
  if(typeof c.dashboard_delivery!=='boolean'||typeof c.dashboard_receiver!=='boolean')fail();c.mail_recipients=recipients(c.mail_recipients);return c;
 }
 function secret(get,name,max=65536,{optional=false}={}){
@@ -57,8 +57,8 @@ export function readNetlifyEnvironment({get}={}){
 export function validateNetlifyConfiguration(value,materials){
  try{
   const fields=['version','mode','deployment_id','public_origin','platform','auth','database','issuer','workers','ops_refresh','dashboard_delivery','dashboard_receiver','mail_recipients'];
-  if(!exact(value,fields)||value.mode!=='netlify'||!exact(value.auth,['origin','publishable_key','server_key'])||!exact(value.database,['connection_mode','url'])||value.ops_refresh!==null&&!exact(value.ops_refresh,['origin','server_key']))fail();
-  const c=structuredClone(value),base={...c,auth:{origin:c.auth.origin,publishable_key:c.auth.publishable_key},database:{connection_mode:c.database.connection_mode},ops_refresh:c.ops_refresh===null?null:{origin:c.ops_refresh.origin},dashboard_delivery:c.dashboard_delivery!==null,dashboard_receiver:c.dashboard_receiver!==null};delete base.mode;
+  if(!exact(value,fields)||value.mode!=='netlify'||!exact(value.auth,['origin','publishable_key','server_key'])||!exact(value.database,['connection_mode','url'])||value.ops_refresh!==null&&!exact(value.ops_refresh,Object.hasOwn(value.ops_refresh??{},'history_fallback')?['origin','server_key','history_fallback']:['origin','server_key']))fail();
+  const c=structuredClone(value),base={...c,auth:{origin:c.auth.origin,publishable_key:c.auth.publishable_key},database:{connection_mode:c.database.connection_mode},ops_refresh:c.ops_refresh===null?null:{origin:c.ops_refresh.origin,...(Object.hasOwn(c.ops_refresh,'history_fallback')?{history_fallback:c.ops_refresh.history_fallback}:{})},dashboard_delivery:c.dashboard_delivery!==null,dashboard_receiver:c.dashboard_receiver!==null};delete base.mode;
   const env={MERCURY_GUARD_NETLIFY_CONFIG:JSON.stringify(base),MERCURY_GUARD_AUTH_SERVER_KEY:c.auth.server_key,MERCURY_GUARD_DATABASE_URL:c.database.url,MERCURY_GUARD_ISSUER_PRIVATE_KEY:materials?.issuerKey?.export({type:'pkcs8',format:'pem'}),MERCURY_GUARD_DATABASE_CA:materials?.databaseCa?.toString('utf8'),MERCURY_GUARD_OPS_SERVER_KEY:c.ops_refresh?.server_key,MERCURY_GUARD_DELIVERY_CONFIG:c.dashboard_delivery===null?undefined:JSON.stringify({version:1,...c.dashboard_delivery}),MERCURY_GUARD_RECEIVER_CONFIG:c.dashboard_receiver===null?undefined:JSON.stringify({version:1,...c.dashboard_receiver})};
   const checked=readNetlifyEnvironment({get:name=>env[name]});if(checked.materials.issuerSha256!==materials?.issuerSha256||checked.materials.issuerPublicKey!==materials?.issuerPublicKey)fail();return checked.config;
  }catch{fail();}

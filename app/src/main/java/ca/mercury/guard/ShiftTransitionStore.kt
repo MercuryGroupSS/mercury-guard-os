@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import org.json.JSONObject
+import org.json.JSONArray
 import java.security.MessageDigest
 import java.util.UUID
 
@@ -14,6 +15,22 @@ class ShiftTransitionStore internal constructor(context:Context,name:String="mer
  private val cipher=DeviceCipher()
  companion object{
   internal fun validReason(reason:String)=reason.length<=2000&&JSONObject().put("reason",reason).toString().toByteArray(Charsets.UTF_8).size<=2000
+  // Object order is not part of JSON identity (PostgreSQL JSONB reorders keys).
+  // Preserve every key, JSON type, value and array position. Int/Long are the
+  // same integral wire type; do not coerce strings, booleans or floating values.
+  private fun sameJson(left:Any?,right:Any?):Boolean=when{
+   left===JSONObject.NULL||right===JSONObject.NULL->left===JSONObject.NULL&&right===JSONObject.NULL
+   left is JSONObject&&right is JSONObject->{
+    val keys=left.keys().asSequence().toSet()
+    keys==right.keys().asSequence().toSet()&&keys.all{sameJson(left.get(it),right.get(it))}
+   }
+   left is JSONArray&&right is JSONArray->left.length()==right.length()&&(0 until left.length()).all{sameJson(left.get(it),right.get(it))}
+   left is String&&right is String->left==right
+   left is Boolean&&right is Boolean->left==right
+   (left is Int||left is Long)&&(right is Int||right is Long)->(left as Number).toLong()==(right as Number).toLong()
+   left is Number&&right is Number->left.javaClass==right.javaClass&&left==right
+   else->left==null&&right==null
+  }
  }
  override fun onConfigure(db:SQLiteDatabase){super.onConfigure(db);db.rawQuery("PRAGMA secure_delete=ON",null).use{check(it.moveToFirst()&&it.getInt(0)==1)}}
  override fun onOpen(db:SQLiteDatabase){
@@ -74,7 +91,7 @@ class ShiftTransitionStore internal constructor(context:Context,name:String="mer
     val timestamp=receipt.get("server_time_ms");require((timestamp is Int||timestamp is Long)&&(timestamp as Number).toLong()>0)
     val expected=scope.json().apply{remove("revocation_version")};val actual=receipt.getJSONObject("scope")
     require(actual.keys().asSequence().toSet()==expected.keys().asSequence().toSet());for(field in expected.keys())require(actual.get(field)==expected.get(field))
-    if(value.has("rejection"))require(value.getJSONObject("rejection").toString()==receipt.toString())
+    if(value.has("rejection")){require(sameJson(value.getJSONObject("rejection"),receipt));db.setTransactionSuccessful();return false}
     save(db,address,value.put("rejection",receipt));db.setTransactionSuccessful();return false
    }
    require(!value.has("rejection"))
@@ -86,7 +103,7 @@ class ShiftTransitionStore internal constructor(context:Context,name:String="mer
    val at=integer("recorded_at_ms");val start=integer("clocked_in_at_ms");require(receipt.get("early_exit") is Boolean)
    if(action=="start")require(at==start&&receipt.isNull("clocked_out_at_ms")&&receipt.isNull("reason")&&!receipt.getBoolean("early_exit"))
    else require(integer("clocked_out_at_ms")==at&&at>=start&&receipt.get("reason")==request.get("reason"))
-   if(value.has("receipt"))require(value.getJSONObject("receipt").toString()==receipt.toString())
+   if(value.has("receipt")){require(sameJson(value.getJSONObject("receipt"),receipt));db.setTransactionSuccessful();return true}
    save(db,address,value.put("receipt",receipt));db.setTransactionSuccessful();return true
   }finally{db.endTransaction()}
  }
