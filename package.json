@@ -1,6 +1,6 @@
 {
   "name": "mercury-guard-os",
-  "version": "0.45.0",
+  "version": "0.46.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,7 +9,8 @@
   "scripts": {
     "test": "node --test server/*.test.mjs",
     "check:netlify": "node server/scripts/check-netlify-source.mjs",
-    "test:netlify-bundle": "node server/scripts/check-netlify-bundle.mjs"
+    "test:netlify-bundle": "node server/scripts/check-netlify-bundle.mjs",
+    "test:portal-browser": "node server/scripts/test-portal-browser.mjs"
   },
   "dependencies": {
     "pg": "8.23.1"

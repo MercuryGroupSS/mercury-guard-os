@@ -7,7 +7,8 @@ import java.net.URL
 
 /** HTTPS transport foundation. Caller owns verified capture scope and session lifecycle.
  * Local pilot receipts deliberately cannot acknowledge the operational demo outbox. */
-class GuardTransport(private val endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null) {
+class GuardTransport(private val endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null,
+ private val beforeWrite:()->Unit={},private val connectionFactory:((URL)->HttpURLConnection)?=null) {
  class HttpFailure(val statusCode:Int):IllegalStateException("Upload unavailable (HTTP $statusCode)")
  data class PilotReceipt(val batchId: String, val eventIds: Set<String>)
  init {
@@ -20,8 +21,8 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
   require(proof.getInt("version") == 2) { "Original capture scope required" }
   val bytes = proof.toString().toByteArray(Charsets.UTF_8)
   require(bytes.size <= 360000)
-  cancellation?.check();val url=URL(endpoint.trimEnd('/') + "/v2/batches")
-  val connection = (network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
+  cancellation?.check();beforeWrite();val url=URL(endpoint.trimEnd('/') + "/v2/batches")
+  val connection = connectionFactory?.invoke(url)?:((network?.openConnection(url)?:url.openConnection()) as HttpURLConnection)
   try {
    cancellation?.attach(connection);cancellation?.check()
    connection.requestMethod = "POST"; connection.instanceFollowRedirects = false
@@ -29,7 +30,7 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
    connection.setRequestProperty("Authorization", "Bearer $accessToken")
    connection.setRequestProperty("Content-Type", "application/json")
    connection.setFixedLengthStreamingMode(bytes.size)
-   cancellation?.check();connection.outputStream.use { cancellation?.check();it.write(bytes) }
+   cancellation?.check();beforeWrite();connection.outputStream.use { cancellation?.check();beforeWrite();it.write(bytes) }
    if(connection.responseCode!=200)throw HttpFailure(connection.responseCode)
    val body = connection.inputStream.use { input ->
     val buffer = java.io.ByteArrayOutputStream(); val chunk = ByteArray(4096)
@@ -49,7 +50,7 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
   require(original.size.toLong() in 1..EvidenceStore.MAX_PHOTO_BYTES && expected.getLong("bytes")==original.size.toLong())
   require(expected.getString("sha256")==photoHash(original))
   for(index in 0 until PhotoChunkPlan.count(original.size)){
-   cancellation?.check();val range=PhotoChunkPlan.range(original.size,index);val part=original.copyOfRange(range.first,range.last+1)
+   cancellation?.check();beforeWrite();val range=PhotoChunkPlan.range(original.size,index);val part=original.copyOfRange(range.first,range.last+1)
    val hash=photoHash(part);val signature=identity.signEvidenceChunk(audience,eventId,expected,index,hash,part.size)
    val receipt=sendEvidencePart(accessToken,"$eventId/chunks/$index","application/octet-stream",part,hash,signature)
    validateEvidenceChunkReceipt(receipt,eventId,expected,index,part)
@@ -57,13 +58,13 @@ class GuardTransport(private val endpoint: String,private val network:android.ne
   cancellation?.check();return sendEvidencePart(accessToken,"$eventId/finalize","application/json","{}".toByteArray(Charsets.UTF_8)).also{validateEvidenceReceipt(it,eventId,expected)}
  }
  private fun sendEvidencePart(accessToken:String,path:String,type:String,bytes:ByteArray,chunkHash:String?=null,chunkSignature:String?=null):JSONObject {
-  cancellation?.check();val url=URL(endpoint.trimEnd('/')+"/v1/evidence/"+path)
-  val connection=(network?.openConnection(url)?:url.openConnection()) as HttpURLConnection
+  cancellation?.check();beforeWrite();val url=URL(endpoint.trimEnd('/')+"/v1/evidence/"+path)
+  val connection=connectionFactory?.invoke(url)?:((network?.openConnection(url)?:url.openConnection()) as HttpURLConnection)
   try{
    cancellation?.attach(connection);cancellation?.check()
    connection.requestMethod="POST";connection.instanceFollowRedirects=false;connection.connectTimeout=10000;connection.readTimeout=10000;connection.doOutput=true
    connection.setRequestProperty("Authorization","Bearer $accessToken");connection.setRequestProperty("Content-Type",type);chunkHash?.let{connection.setRequestProperty("X-Mercury-Chunk-SHA256",it)};chunkSignature?.let{connection.setRequestProperty("X-Mercury-Chunk-Signature",it)};connection.setFixedLengthStreamingMode(bytes.size)
-   cancellation?.check();connection.outputStream.use{cancellation?.check();it.write(bytes)}
+   cancellation?.check();beforeWrite();connection.outputStream.use{cancellation?.check();beforeWrite();it.write(bytes)}
    if(connection.responseCode!=200)throw HttpFailure(connection.responseCode)
    val raw=connection.inputStream.use{input->
     val out=java.io.ByteArrayOutputStream();val chunk=ByteArray(1024)

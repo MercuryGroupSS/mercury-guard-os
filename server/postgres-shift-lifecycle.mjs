@@ -1,3 +1,4 @@
+import {requirePostgresAuthSession} from './postgres-auth-session.mjs';
 import {createHash} from 'node:crypto';
 import {prepareShiftTransition} from './shift-transition-input.mjs';
 import {ShiftTransitionRejected} from './shift-lifecycle.mjs';
@@ -7,13 +8,15 @@ export class PostgresShiftLifecycle{
  async transition(input){
   const {identity,assignment,deviceThumbprint,request,now,allowStart=true}=input,{scope,digest}=prepareShiftTransition(input);
   const result=await this.devices.transaction(async client=>{
+   const finish=async result=>{await requirePostgresAuthSession(client,input.session,identity.subject,now);return result;};
    // Serializes receipt allocation through commit so dashboard cursors cannot skip a late commit.
    await client.query('SELECT pg_advisory_xact_lock(724910621355082::bigint)');
+   await requirePostgresAuthSession(client,input.session,identity.subject,now);
    const denied=(await client.query('SELECT digest,receipt FROM mercury_guard.shift_rejections WHERE request=$1',[request.request_id])).rows[0];
-   if(denied){if(denied.digest!==digest)throw Error('Rejected request changed');return {rejected:denied.receipt};}
-   const reject=async code=>{const receipt={request_id:request.request_id,scope,action:request.action,code,server_time_ms:now,status:'shift_rejected_local_only'};await client.query('INSERT INTO mercury_guard.shift_rejections VALUES($1,$2,$3)',[request.request_id,digest,receipt]);return {rejected:receipt};};
+   if(denied){if(denied.digest!==digest)throw Error('Rejected request changed');return finish({rejected:denied.receipt});}
+   const reject=async code=>{const receipt={request_id:request.request_id,scope,action:request.action,code,server_time_ms:now,status:'shift_rejected_local_only'};await client.query('INSERT INTO mercury_guard.shift_rejections VALUES($1,$2,$3)',[request.request_id,digest,receipt]);return finish({rejected:receipt});};
    const retry=(await client.query('SELECT digest,receipt FROM mercury_guard.shift_transitions WHERE request=$1',[request.request_id])).rows[0];
-   if(retry){if(retry.digest!==digest)throw Error('Transition request changed');return {receipt:retry.receipt};}
+   if(retry){if(retry.digest!==digest)throw Error('Transition request changed');return finish({receipt:retry.receipt});}
    // Revalidate and lock authority after asynchronous proof handling; cancellation or
    // suspension must serialize with a newly committed clock event.
    const authority=(await client.query(`SELECT a.active AS assignment_active FROM mercury_guard.assignments a
@@ -42,7 +45,7 @@ export class PostgresShiftLifecycle{
    }
    const saved=row((await client.query('SELECT * FROM mercury_guard.shift_sessions WHERE assignment=$1',[assignment.assignmentId])).rows[0]);
    const receipt={request_id:request.request_id,scope,action:request.action,recorded_at_ms:now,clocked_in_at_ms:saved.clocked_in,clocked_out_at_ms:saved.clocked_out,early_exit:saved.clocked_out!==null&&saved.clocked_out<assignment.endsAt,reason:saved.reason,status:'shift_recorded_local_only'};
-   await client.query('INSERT INTO mercury_guard.shift_transitions(request,digest,receipt) VALUES($1,$2,$3)',[request.request_id,digest,receipt]);return {receipt};
+   await client.query('INSERT INTO mercury_guard.shift_transitions(request,digest,receipt) VALUES($1,$2,$3)',[request.request_id,digest,receipt]);return finish({receipt});
   });
   if(result.rejected)throw new ShiftTransitionRejected(result.rejected);return result.receipt;
  }

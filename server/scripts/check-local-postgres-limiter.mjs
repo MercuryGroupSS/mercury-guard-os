@@ -1,3 +1,4 @@
+import {verifyPostgresSessionFences} from './verify-postgres-session-fences.mjs';
 import {Client} from 'pg';
 import {readFileSync} from 'node:fs';
 import {randomUUID,createHash} from 'node:crypto';
@@ -76,6 +77,7 @@ try{
  await verifyPostgresPatrolRounds(url.toString(),fixture);
  await verifyPostgresEscalations(url.toString(),fixture);
  await verifyPostgresLocation(url.toString(),fixture);
+ await verifyPostgresSessionFences(url.toString(),fixture);
  await fixture.query(readFileSync(new URL('../../supabase/migrations/20261024011341_guard_deployment_identity.sql',import.meta.url),'utf8'));
  await verifyPostgresConfiguredService(url.toString(),fixture);
  await verifyPostgresShiftWindows(url.toString(),fixture);

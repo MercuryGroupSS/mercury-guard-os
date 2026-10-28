@@ -1,3 +1,4 @@
+import {requirePostgresAuthSession} from './postgres-auth-session.mjs';
 import {ShiftGrantSigner} from './shift-grant-signer.mjs';
 export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
  constructor({devices,locationConsents=null,...config}){super(config);if(typeof devices?.transaction!=='function'||typeof devices?.pool?.query!=='function')throw Error('Transactional PostgreSQL devices required');this.devices=devices;this.pool=devices.pool;this.locationConsents=locationConsents;}
@@ -6,6 +7,7 @@ export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
   return this.devices.transaction(async client=>{
    // Shares the clock-event lock: clock-out and grant issuance have one commit order.
    await client.query('SELECT pg_advisory_xact_lock(724910621355082::bigint)');
+   await requirePostgresAuthSession(client,context.session,identity.subject,now);
    const {rows}=await client.query(`SELECT 1 FROM mercury_guard.assignments a
     JOIN mercury_guard.guards g ON g.guard_id=a.guard_id AND g.vendor_id=a.vendor_id
     JOIN mercury_guard.vendors v ON v.vendor_id=g.vendor_id
@@ -25,7 +27,7 @@ export class PostgresShiftGrantIssuer extends ShiftGrantSigner{
    const location=this.locationConsents?await this.locationConsents.forGrant(client,context):null;
    const {claims,policy,payload,response}=location?this.prepare({...base,location,allowedActions:[...base.allowedActions,'location']}):prepared;
    await client.query('INSERT INTO mercury_guard.capture_grants(id,subject,vendor_id,assignment_id,device_thumbprint,payload,policy) VALUES($1,$2,$3,$4,$5,$6,$7)',[claims.grant_id,identity.subject,identity.vendorId,assignment.assignmentId,device.thumbprint,payload,policy]);
-   if(location)await this.locationConsents.requireSession(client,context.session);
+   await requirePostgresAuthSession(client,context.session,identity.subject,now);
    return response;
   });
  }

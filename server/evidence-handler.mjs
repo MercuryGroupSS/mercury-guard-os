@@ -49,7 +49,7 @@ export function createEvidenceHandler({verifySession,directory,devices,grantIssu
    const current=await resolve({subject:identity.subject,active:true});
    const live=await verifySession(match[1]);
    if(!live||live.subject!==originalSession.subject||live.sessionId!==originalSession.sessionId||!current||current.guardId!==identity.guardId||current.vendorId!==identity.vendorId||expires<=now()||!await authorized())return reply(403,{error:'evidence_unavailable'});
-   return reply(200,chunk?await store.retainPhotoChunk(record,index,bytes,now()):finalize?await store.finalizePhotoChunks(record,now()):await store.retainPhoto(record,bytes,now()));
+   return reply(200,chunk?await store.retainPhotoChunk(record,index,bytes,now(),live):finalize?await store.finalizePhotoChunks(record,now(),live):await store.retainPhoto(record,bytes,now(),live));
   }catch{return reply(400,{error:'evidence_rejected'});}
   finally{reader.releaseLock();}
  };

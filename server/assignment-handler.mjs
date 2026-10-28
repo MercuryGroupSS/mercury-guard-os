@@ -27,21 +27,21 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
    const body=strictJson(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(chunks)));
    if(path==='/v1/device-challenge'){
     if(!body||Object.keys(body).join()!=='device_id')throw Error('Invalid request');
-    return reply(200,await devices.challenge(identity,body.device_id,now()));
+    return reply(200,await devices.challenge(identity,body.device_id,now(),session));
    }
    if(path==='/v1/shift-transition'){
     if(!shiftLifecycle)return reply(503,{error:'shift_service_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof,transition'||typeof body.assignment_id!=='string')throw Error('Invalid transition request');
-    const at=now(),result=await devices.list(identity,body.proof,at,{historical:true,includeCancelled:true});
+    const at=now(),result=await devices.list(identity,body.proof,at,{historical:true,includeCancelled:true,session});
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
     if(assignment.assignmentActive===false&&body.transition?.action==='end'&&(await shiftLifecycle.snapshot({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint})).state==='not_started')throw Error('No confirmed shift to close');
-    return reply(200,await shiftLifecycle.transition({identity,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at,allowStart:assignment.assignmentActive!==false}));
+    return reply(200,await shiftLifecycle.transition({identity,session,assignment:{...assignment,active:true},deviceThumbprint:assignment.deviceThumbprint,request:body.transition,now:at,allowStart:assignment.assignmentActive!==false}));
    }
    if(path==='/v1/dispatch'){
     if(!dispatch)return reply(503,{error:'dispatch_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,cursor,proof'||typeof body.assignment_id!=='string'||body.cursor!==null&&typeof body.cursor!=='string')throw Error('Invalid dispatch request');
-    const at=now(),result=await devices.list(identity,body.proof,at),assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
+    const at=now(),result=await devices.list(identity,body.proof,at,{session}),assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id);
     if(!assignment)throw Error('Assignment unavailable');
     return reply(200,await dispatch.read({...identity,session,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint,revocationVersion:assignment.revocationVersion},body.cursor,at));
    }
@@ -49,7 +49,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
     if(!grantIssuer)return reply(503,{error:'issuer_unavailable'});
     if(!body||Object.keys(body).sort().join()!=='assignment_id,proof'||typeof body.assignment_id!=='string')throw Error('Invalid grant request');
     const at=now();
-    const result=await devices.list(identity,body.proof,at);
+    const result=await devices.list(identity,body.proof,at,{session});
     const assignment=result.assignments.find(a=>a.assignmentId===body.assignment_id&&a.canStart);
     if(!assignment)throw Error('Assignment unavailable');
     if(shiftLifecycle&&!await shiftLifecycle.permitsCapture({...identity,siteId:assignment.siteId,assignmentId:assignment.assignmentId,deviceThumbprint:assignment.deviceThumbprint},at,{live:true}))throw Error('Active shift required');
@@ -60,7 +60,7 @@ export function createAssignmentHandler({verifySession,directory,devices,grantIs
      allowedActions:['patrol','incident','photo','check_in',...(dispatch?['dispatch_ack']:[])],now:at});
     return reply(200,{...grant,check_in_status:store&&assignment.checkInPolicy?await reconcileCheckIns(store,assignment,at,{activeWindow:await shiftLifecycle?.checkInWindow(assignment)}):null});
    }
-   const at=now(),result=await devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle});
+   const at=now(),result=await devices.list(identity,body,at,{historical:!!shiftLifecycle,includeCancelled:!!shiftLifecycle,session});
    if(shiftLifecycle){
     result.assignments=(await Promise.all(result.assignments.map(async a=>({...a,canStart:a.assignmentActive!==false&&at>=a.startsAt&&at<a.endsAt,shift_state:await shiftLifecycle.snapshot({...identity,siteId:a.siteId,assignmentId:a.assignmentId,deviceThumbprint:a.deviceThumbprint})})))).filter(a=>(a.assignmentActive!==false&&at<a.endsAt)||a.shift_state.state!=='not_started');
     result.server_time_ms=at;

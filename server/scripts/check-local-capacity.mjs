@@ -93,13 +93,13 @@ try{
   const ec=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),spki=ec.publicKey.export({type:'spki',format:'der'}).toString('base64url'),deviceId='capacity-phone-'+i;
   await devices.enroll({deviceId,mode:'site',siteId:site,active:true,revoked:false,publicKeySpki:spki});
   const device=await devices.device(deviceId),assignment={assignmentId:'capacity-shift-'+i,guardId:identity.guardId,vendorId:vendor,siteId:site,deviceId,startsAt:base-1000,endsAt:base+600000,active:true,canStart:true};
-  await devices.assign(assignment);await shifts.transition({identity,assignment,deviceThumbprint:device.thumbprint,request:{action:'start',confirmed:true,request_id:randomUUID(),reason:''},now:base});
-  sessions.set(token,{subject:identity.subject,sessionId,active:true,expiresAt:Math.floor((base+600000)/1000)});
-  scopes.push({identity,sessionId,token,ec,spki,device,assignment,sequence:0});
+  const session={subject:identity.subject,sessionId,active:true,expiresAt:Math.floor((base+600000)/1000)};await devices.assign(assignment);await shifts.transition({identity,session,assignment,deviceThumbprint:device.thumbprint,request:{action:'start',confirmed:true,request_id:randomUUID(),reason:''},now:base});
+  sessions.set(token,session);
+  scopes.push({identity,session,sessionId,token,ec,spki,device,assignment,sequence:0});
  }
  const request=(path,token,raw)=>new Request('https://capacity.invalid'+path,{method:'POST',headers:{authorization:'Bearer '+token,'content-type':'application/json'},body:raw});
  async function proofBody(s,assignmentId=s.assignment.assignmentId){
-  const c=await devices.challenge(s.identity,s.device.deviceId);
+  const c=await devices.challenge(s.identity,s.device.deviceId,Date.now(),s.session);
   const signature=sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${audience}\n${c.request_id}\n${c.challenge}\n${s.device.thumbprint}`),s.ec.privateKey).toString('base64url');
   return JSON.stringify({assignment_id:assignmentId,proof:{version:1,algorithm:'SHA256withECDSA',audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:s.device.thumbprint,public_key_spki:s.spki,signature_der:signature}});
  }

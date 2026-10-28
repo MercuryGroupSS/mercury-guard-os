@@ -1,3 +1,4 @@
+import {requirePostgresAuthSession} from './postgres-auth-session.mjs';
 import {validateLocationSample} from './location-policy.mjs';
 import {reconcilePostgresCheckIns} from './postgres-check-in-status.mjs';
 import {postgresCheckInWorkerState} from './check-in-worker-state.mjs';
@@ -58,9 +59,10 @@ export class PostgresDurableIngest{
   return this.devices.transaction(async client=>{
    // Serialize through commit for stable event cursors, sequence and retry receipts.
    await client.query('SELECT pg_advisory_xact_lock(724910621355083::bigint)');
+   await requirePostgresAuthSession(client,c.session,c.subject,received);
    const validations=await this.lockAuthority(client,{...c,receivedAtMs:received},batch);
    const old=(await client.query('SELECT digest,body FROM mercury_guard.ingest_receipts WHERE device=$1 AND id=$2',[c.thumbprint,batch.batch_id])).rows[0];
-   if(old){if(old.digest!==hash)throw Error('Batch ID content conflict');if(validations.size)await this.locationConsents.requireSession(client,c.session);return old.body;}
+   if(old){if(old.digest!==hash)throw Error('Batch ID content conflict');if(validations.size)await this.locationConsents.requireSession(client,c.session);await requirePostgresAuthSession(client,c.session,c.subject,received);return old.body;}
    let last=Number((await client.query('SELECT COALESCE(MAX(sequence),0) n FROM mercury_guard.ingested_events WHERE device=$1',[c.thumbprint])).rows[0].n);
    for(const e of batch.events){
     const record={scope:batch.scope,event:e,vendor_id:c.vendorId,...(validations.get(e.event_id)??{})},eventHash=digest(record);
@@ -73,14 +75,14 @@ export class PostgresDurableIngest{
     last=e.sequence;
    }
    const receipt={batch_id:batch.batch_id,event_ids:batch.events.map(e=>e.event_id),status:'accepted_local_only'};
-   await client.query('INSERT INTO mercury_guard.ingest_receipts VALUES($1,$2,$3,$4)',[c.thumbprint,batch.batch_id,hash,receipt]);if(validations.size)await this.locationConsents.requireSession(client,c.session);return receipt;
+   await client.query('INSERT INTO mercury_guard.ingest_receipts VALUES($1,$2,$3,$4)',[c.thumbprint,batch.batch_id,hash,receipt]);if(validations.size)await this.locationConsents.requireSession(client,c.session);await requirePostgresAuthSession(client,c.session,c.subject,received);return receipt;
   });
  }
  async photoForGuard(guardId,eventId){if(!uuid(eventId))return null;const rows=(await this.pool.query('SELECT body FROM mercury_guard.ingested_events WHERE id=$1 AND guard_id=$2',[eventId,guardId])).rows;return rows.length===1&&rows[0].body.event.kind==='photo_evidence'?rows[0].body:null;}
- async retainPhoto(record,bytes,receivedAt=Date.now()){
+ async retainPhoto(record,bytes,receivedAt=Date.now(),session){
   const meta=photoMetadata(record.event.data);
   if(bytes.length!==meta.bytes||createHash('sha256').update(bytes).digest('hex')!==meta.sha256)throw Error('Evidence mismatch');
-  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId})=>{
+  return this.withPhotoAuthority(record,receivedAt,session,async(client,{device,eventId})=>{
    const prior=(await client.query('SELECT sha256,octet_length(bytes) size FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
    if(prior){if(prior.sha256!==meta.sha256||prior.size!==bytes.length)throw Error('Evidence conflict');}
    else await client.query('INSERT INTO mercury_guard.ingested_media VALUES($1,$2,$3,$4,$5)',[device,eventId,meta.sha256,bytes,receivedAt]);
@@ -88,24 +90,26 @@ export class PostgresDurableIngest{
   });
  }
  photoReceipt(record,meta){return {event_id:record.event.event_id,evidence_id:meta.evidence_id,sha256:meta.sha256,bytes:meta.bytes,status:'evidence_accepted_local_only'};}
- async withPhotoAuthority(record,receivedAt,fn){
+ async withPhotoAuthority(record,receivedAt,session,fn){
   if(!Number.isSafeInteger(receivedAt)||receivedAt<=0)throw Error('Trusted receipt time required');
   return this.devices.transaction(async client=>{
    await client.query('SELECT pg_advisory_xact_lock(724910621355083::bigint)');
+   await requirePostgresAuthSession(client,session,session?.subject,receivedAt);
    const {device_thumbprint:device,guard_id:guard}=record.scope,eventId=record.event.event_id;
    const stored=(await client.query('SELECT body FROM mercury_guard.ingested_events WHERE device=$1 AND id=$2 AND guard_id=$3',[device,eventId,guard])).rows[0];
    if(!stored||stored.body.event.kind!=='photo_evidence'||!isDeepStrictEqual(stored.body,record))throw Error('Evidence event unavailable');
    const grant=(await client.query('SELECT subject,payload FROM mercury_guard.capture_grants WHERE id=$1 AND NOT revoked',[record.event.data.capture_grant_id])).rows[0];
    const enrolled=(await client.query('SELECT public_key_spki FROM mercury_guard.devices WHERE thumbprint=$1',[device])).rows[0];
-   if(!grant||!enrolled)throw Error('Evidence authority unavailable');
+   if(!grant||!enrolled||grant.subject!==session.subject)throw Error('Evidence authority unavailable');
    await this.lockAuthority(client,{subject:grant.subject,vendorId:record.vendor_id,guardId:guard,assignmentId:record.scope.assignment_id,siteId:record.scope.site_id,thumbprint:device,revocationVersion:record.scope.revocation_version,publicKeySpki:enrolled.public_key_spki,audience:JSON.parse(Buffer.from(grant.payload,'base64url')).audience,receivedAtMs:receivedAt},{events:[record.event]});
    const assignment=(await client.query('SELECT ends_at_ms FROM mercury_guard.assignments WHERE assignment_id=$1',[record.scope.assignment_id])).rows[0];
-   return fn(client,{device,eventId,expiresAt:Math.min(receivedAt+PHOTO_CHUNK_TTL_MS,Number(assignment.ends_at_ms)+PHOTO_CHUNK_TTL_MS)});
+   const result=await fn(client,{device,eventId,expiresAt:Math.min(receivedAt+PHOTO_CHUNK_TTL_MS,Number(assignment.ends_at_ms)+PHOTO_CHUNK_TTL_MS)});
+   await requirePostgresAuthSession(client,session,grant.subject,receivedAt);return result;
   });
  }
- async retainPhotoChunk(record,index,bytes,receivedAt=Date.now()){
+ async retainPhotoChunk(record,index,bytes,receivedAt=Date.now(),session){
   const meta=photoMetadata(record.event.data),sha=validatePhotoChunk(meta,index,bytes);
-  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId,expiresAt})=>{
+  return this.withPhotoAuthority(record,receivedAt,session,async(client,{device,eventId,expiresAt})=>{
    const accepted=(await client.query('SELECT sha256,bytes FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
    if(accepted){validateWholePhoto(meta,accepted.bytes);if(accepted.sha256!==meta.sha256||!accepted.bytes.subarray(index*PHOTO_CHUNK_BYTES,index*PHOTO_CHUNK_BYTES+bytes.length).equals(bytes))throw Error('Immutable photo conflict');}
    else{
@@ -119,9 +123,9 @@ export class PostgresDurableIngest{
    return photoChunkReceipt(eventId,meta,index,bytes);
   });
  }
- async finalizePhotoChunks(record,receivedAt=Date.now()){
+ async finalizePhotoChunks(record,receivedAt=Date.now(),session){
   const meta=photoMetadata(record.event.data);
-  return this.withPhotoAuthority(record,receivedAt,async(client,{device,eventId})=>{
+  return this.withPhotoAuthority(record,receivedAt,session,async(client,{device,eventId})=>{
    const accepted=(await client.query('SELECT sha256,bytes FROM mercury_guard.ingested_media WHERE device=$1 AND event_id=$2',[device,eventId])).rows[0];
    if(accepted){if(accepted.sha256!==meta.sha256)throw Error('Immutable photo conflict');validateWholePhoto(meta,accepted.bytes);}
    else{

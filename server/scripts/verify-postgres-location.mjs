@@ -34,7 +34,7 @@ export async function verifyPostgresLocation(connectionString,owner){
   async function status(id,person=0){return consents.status(sessions[person],id,await proof('status',locationDigest(JSON.stringify({consent_id:id})),id,person));}
   // Consent does not need a location grant, but does need a confirmed shift.
   const first=original(),firstProof=await proof('consent',locationDigest(Buffer.from(encoded(first),'base64url')));await assert.rejects(consents.receive(sessions[0],encoded(first),firstProof),LocationDeniedError);
-  await shifts.transition({identity,assignment,deviceThumbprint:device.thumbprint,request:{action:'start',confirmed:true,request_id:prefix+'-start',reason:''},now});
+  await shifts.transition({identity,session:sessions[0],assignment,deviceThumbprint:device.thumbprint,request:{action:'start',confirmed:true,request_id:prefix+'-start',reason:''},now});
   const manualClaims=JSON.parse(Buffer.from((await issue()).payload,'base64url'));assert.equal(manualClaims.actions.includes('location'),false);
   assignment.patrolRoute=gpsRoute;await owner.query('UPDATE mercury_guard.assignments SET patrol_route=$2 WHERE assignment_id=$1',[assignment.assignmentId,gpsRoute]);
   const receipt=await consents.receive(sessions[0],encoded(first),firstProof);assert.equal(receipt.status,'consent_recorded');assert.deepEqual(await send(first),receipt);assert.equal((await status(first.consent_id)).state,'active');

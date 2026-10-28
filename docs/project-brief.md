@@ -1,12 +1,12 @@
 # Mercury One — current project brief
 
-Updated 24 October 2026 (accepted v0.44 native source and configured Preview; v0.45 browser request correction). The product is still in development. This brief describes the current state; the [complete development history](development-history-through-shared-delivery.md) and internal cumulative baseline remain preserved. Exact-source checks and immutable package records distinguish an accepted build from work in progress.
+Updated 28 October 2026 (v0.46 candidate; accepted v0.45 baseline and v0.44 configured APK retained). The product is still in development. This brief describes the current state; the [complete development history](development-history-through-shared-delivery.md) and internal cumulative baseline remain preserved. Exact-source checks and immutable package records distinguish an accepted build from work in progress.
 
 ## Accepted scope
 
 Deliver an ordinary native Android app for Galaxy Z Fold6, preserving Pixel portability. Use individual guard identities even when one Vendor ID represents a company employing several guards. Keep biometric handset unlock distinct from proof of a named guard. Integrate assignments and observations with Mercury Ops through explicit mappings. Develop dedicated-device management and firmware feasibility separately after the APK track.
 
-Work is confined to MercuryGroupSS/mercury-guard-os. Existing applications and repositories are unchanged. The user approved a dedicated Guard Supabase project and selected a separate Guard deployment in the existing Netlify account. Local disposable tests remain isolated from that hosted project. Current physical-device testing is deferred.
+Work is confined to MercuryGroupSS/mercury-guard-os. Existing applications and repositories are unchanged. The user approved a dedicated Guard Supabase project and selected a separate Guard deployment in the existing Netlify account. Local disposable tests remain isolated from that hosted project. The user has authorized non-destructive testing on the USB-connected Fold6. Original application data, enrolled biometrics and signing identities must be preserved.
 
 ## Packaged app
 
@@ -108,3 +108,16 @@ An actual local Netlify package/load gate catches runtime dependencies and page-
 6. Keep [dedicated-device and firmware work](firmware-track.md) separate. No flashable Fold6 OS, bootloader unlock, recovery or OTA image has been validated. No phone was flashed, reset, rooted or enrolled by this continuation.
 
 No completion claim is based solely on green unit tests or local fixtures. Hosted integration, real approved identities, release and hardware gates remain open.
+
+
+## v0.46 candidate — original ownership and session boundaries
+
+Queued ordinary events and photos now require the current configuration, device identity, Auth subject, Guard ID and Vendor ID to match their immutable original owner before selection and before each sensitive network write. Each queue partition retains the original full assignment/site/revocation owner. Ownerless historical connected rows are retained and quarantined, never attributed to a replacement account. Same-principal historical evidence can still retry against its original scope after the current assignment feed omits it. GPS batches also recheck the local withdrawal barrier immediately before writing. Patrol completion and duplicate detection use the full original nine-field owner.
+
+The backend now rechecks the exact verified Auth session through the operation transaction at entry and immediately before returning assignment results or committing ordinary grants, attendance, event receipts and photo bytes. Assignment listing also checks current guard, vendor and site authority for personal devices. These read-only session checks add no Auth row locks, database privileges, schema or wire changes; a provider deletion after the final read remains a documented non-serialized limit. Existing stronger location, dispatch and escalation paths retain their checks.
+
+Account code focus is applied only to an unlocked successful current request. Completion prioritizes Android guard sign-in and separate assignment approval. Administrator access still requires explicit owner approval. Closing a report returns focus to the exact selected delivery card or a stable heading, and private image references are cleared across navigation and sign-out. A provider-free real Chrome regression exercises these flows and runs in server CI.
+
+Local validation of this candidate: 303 Node tests; canonical PostgreSQL rollback/revocation/authority regressions; a 144-operation finite capacity drill; actual logical restore of 50 tables and 23 synthetic records; two real Netlify bundles; real browser interaction regressions; 64 JVM tests; Android test compilation; zero lint errors. Twenty new Android ownership/transport regressions still require execution. Exact-source hosted CI, configured v0.46 package/signature and physical results remain separate pending evidence. No real guard account or attendance is activated by these source tests.
+
+Email delivery was verified separately after the privately submitted SMTP correction: the controlled account request succeeded, the Auth log returned 200, and a new matching message reached the selected mailbox. Personal code/password completion and administrator activation still require the user's private action; no code or password was read. A current Ops schedule can be read into a distinct isolated pilot through an explicit binding. That does not sign in as the assigned guard, clock them in or out, publish a test incident to Ops, or establish operational pilot acceptance. Private source records and site documents remain excluded from this repository.

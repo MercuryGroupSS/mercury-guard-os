@@ -114,7 +114,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   check(record.accepted&&record.id==approved.id&&record.policy.sha256==approved.policy.sha256&&record.policy.payload==approved.policy.payload)
   return captureInternal("location",sample.data(approved),record.scope.binding,grant,identity,sample.at,record.scope)
  }
- private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null,dispatchOwner:ConnectedDispatchOwner?=null,checkOwner:ConnectedDispatchOwner?=null):String {
+ private fun captureInternal(kind:String,data:JSONObject,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,locationOwner:LocationConsentScope?,incidentOwner:ConnectedIncidentDraftScope?=null,dispatchOwner:ConnectedDispatchOwner?=null,checkOwner:ConnectedDispatchOwner?=null,patrolOwner:ConnectedDispatchOwner?=null):String {
   require(observedAt in 0..9007199254740991L)
   check(grant.permits(requiredAction(kind),original,elapsedNow(),bootNow())) { "Capture not authorized" }
   check(identity.publicIdentity()?.thumbprint == original.deviceThumbprint) { "Capture device mismatch" }
@@ -130,6 +130,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    check(kind in setOf("check_in","check_in_miss_reason","photo_evidence")&&checkOwner.scope.binding==original){"Original check-in capture owner mismatch"}
    record.put(if(kind=="photo_evidence")"photo_owner"else "check_in_owner",checkOwner.json())
   }
+  if(patrolOwner!=null){check(kind=="patrol_checkpoint"&&patrolOwner.scope.binding==original);record.put("patrol_owner",patrolOwner.json())}
   require(record.toString().toByteArray(Charsets.UTF_8).size <= 240000)
   val db=writableDatabase;db.beginTransaction()
   try {
@@ -259,12 +260,15 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   return PatrolCheckpointKey(roundId,checkpointId) in checkpointProgress(original,routeId,revision)
  }
  /** One scan per rendered route, rather than one full encrypted-history scan for every button. */
- internal fun checkpointProgress(original:GrantBinding,routeId:String,revision:Long):Set<PatrolCheckpointKey>{
+ internal fun checkpointProgress(original:GrantBinding,routeId:String,revision:Long)=checkpointProgress(original,routeId,revision,null)
+ internal fun checkpointProgress(owner:ConnectedDispatchOwner,routeId:String,revision:Long)=checkpointProgress(owner.scope.binding,routeId,revision,owner)
+ private fun checkpointProgress(original:GrantBinding,routeId:String,revision:Long,owner:ConnectedDispatchOwner?):Set<PatrolCheckpointKey>{
   val recorded=mutableSetOf<PatrolCheckpointKey>()
   readableDatabase.rawQuery("SELECT sequence,body FROM captured ORDER BY sequence",null).use{c->while(c.moveToNext()){
    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
    val scope=binding(record.getJSONObject("scope"))
    if(scope.guardId!=original.guardId||scope.assignmentId!=original.assignmentId)continue
+   if(owner!=null&&try{ConnectedEventOwnership.owner(record)!=owner}catch(_:Exception){true})continue
    val event=record.getJSONObject("event");val data=event.getJSONObject("data")
    if(event.getString("kind")!="patrol_checkpoint"||data.opt("route_id")!=routeId)continue
    val version=data.opt("route_revision");if((version !is Int&&version !is Long)||(version as Number).toLong()!=revision)continue
@@ -288,6 +292,21 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
  }
  /** The single connected entry enforces the authenticated plan even if a UI caller regresses. */
  @Suppress("DEPRECATION")
+ internal fun capturePatrolCheckpoint(owner:ConnectedDispatchOwner,plan:PatrolPlan,choice:PatrolChoice,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,record:LocationConsentRecord?=null,location:JSONObject?=null):String {
+  require(plan.choice(choice.checkpointId,choice.roundId)==choice){"Checkpoint or round does not belong to the authenticated route"}
+  if(plan.gpsRequired){
+   require(record!=null&&location!=null&&record.scope.binding==owner.scope.binding&&record.scope.account==ConnectedEventOwnership.account(owner)){"GPS checkpoint requires original full owner"}
+   return captureCheckpointGps(record,grant,identity,choice.routeId,choice.revision,choice.checkpointId,observedAt,location,choice.roundId,owner)
+  }
+  require(record==null&&location==null){"Manual checkpoint cannot claim GPS validation"}
+  val db=writableDatabase;db.beginTransaction()
+  try{
+   check(PatrolCheckpointKey(choice.roundId,choice.checkpointId) !in checkpointProgress(owner,choice.routeId,choice.revision)){"Checkpoint already recorded for this owner"}
+   val data=JSONObject().put("route_id",choice.routeId).put("route_revision",choice.revision).put("checkpoint_id",choice.checkpointId);choice.roundId?.let{data.put("round_id",it)}
+   val result=captureInternal("patrol_checkpoint",data,owner.scope.binding,grant,identity,observedAt,null,patrolOwner=owner)
+   db.setTransactionSuccessful();return result
+  }finally{db.endTransaction()}
+ }
  internal fun capturePatrolCheckpoint(plan:PatrolPlan,choice:PatrolChoice,original:GrantBinding,grant:VerifiedShiftGrant,identity:DeviceIdentity,observedAt:Long,record:LocationConsentRecord?=null,location:JSONObject?=null):String {
   require(plan.choice(choice.checkpointId,choice.roundId)==choice){"Checkpoint or round does not belong to the authenticated route"}
   return if(plan.gpsRequired){
@@ -299,7 +318,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   }
  }
  /** A fresh one-shot SDK fix under the original explicit approved consent; never a manual fallback. */
- private fun captureCheckpointGps(record:LocationConsentRecord,grant:VerifiedShiftGrant,identity:DeviceIdentity,routeId:String,revision:Long,checkpointId:String,observedAt:Long,location:JSONObject,roundId:String?=null):String {
+ private fun captureCheckpointGps(record:LocationConsentRecord,grant:VerifiedShiftGrant,identity:DeviceIdentity,routeId:String,revision:Long,checkpointId:String,observedAt:Long,location:JSONObject,roundId:String?=null,owner:ConnectedDispatchOwner?=null):String {
   val original=record.scope.binding;val approved=grant.location?:error("Approved GPS authority required")
   require(record.accepted&&record.id==approved.id&&record.policy.sha256==approved.policy.sha256&&record.policy.payload==approved.policy.payload)
   require(grant.permits("location",original,elapsedNow(),bootNow())){"Location capture authority unavailable"}
@@ -312,10 +331,10 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   AuthorizedLocationPolicy.number(fix,"latitude",-90.0,90.0);AuthorizedLocationPolicy.number(fix,"longitude",-180.0,180.0);AuthorizedLocationPolicy.number(fix,"accuracy_m",Double.MIN_VALUE,p.maxAccuracy)
   val db=writableDatabase;db.beginTransaction()
   try{
-   check(!checkpointRecorded(original,routeId,revision,checkpointId,roundId)){"Checkpoint already recorded in this patrol round"}
+   check(if(owner==null)!checkpointRecorded(original,routeId,revision,checkpointId,roundId)else PatrolCheckpointKey(roundId,checkpointId) !in checkpointProgress(owner,routeId,revision)){"Checkpoint already recorded in this patrol round"}
    val data=JSONObject().put("route_id",routeId).put("route_revision",revision).put("checkpoint_id",checkpointId).put("location",fix)
    roundId?.let{data.put("round_id",it)}
-   val result=captureInternal("patrol_checkpoint",data,original,grant,identity,observedAt,record.scope)
+   val result=captureInternal("patrol_checkpoint",data,original,grant,identity,observedAt,record.scope,patrolOwner=owner)
    db.setTransactionSuccessful();return result
   }finally{db.endTransaction()}
  }
@@ -405,7 +424,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   else->null
  }
  private fun uploadPartition(record:JSONObject):JSONObject {
-  val data=locationData(record.getJSONObject("event"))?:return JSONObject().put("kind","ordinary")
+  val data=locationData(record.getJSONObject("event"))?:return JSONObject().put("kind","ordinary").also{partition->try{ConnectedEventOwnership.owner(record)?.let{partition.put("owner",it.json())}}catch(_:Exception){}}
   return JSONObject().put("kind","location").put("owner",record.optJSONObject("location_owner")?:JSONObject.NULL).put("consent_id",data.opt("consent_id")?:JSONObject.NULL).put("policy_sha256",data.opt("policy_sha256")?:JSONObject.NULL)
  }
  private fun uploadOwner(scope:JSONObject,partition:JSONObject?=null)=EscalationProtocol.hash(if(partition==null)scope.toString()else JSONArray().put(scope).put(partition).toString())
@@ -420,10 +439,15 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   check(binding(old.getJSONObject("scope")).guardId==guardId);saveUpload(db,old)
   db.delete("pending_by_guard","owner=?",arrayOf(owner(guardId)))
  }
- internal fun prepareUpload(identity:DeviceIdentity,audience:String,guardId:String,generation:String):JSONObject? {
+ internal fun prepareUpload(identity:DeviceIdentity,audience:String,guardId:String,generation:String):JSONObject?=prepareUpload(identity,audience,guardId,generation,null)
+ internal fun prepareUpload(identity:DeviceIdentity,audience:String,account:EscalationScope,generation:String):JSONObject? {
+  require(identity.publicIdentity()?.thumbprint==account.thumbprint)
+  return prepareUpload(identity,audience,account.guardId,generation,account)
+ }
+ private fun prepareUpload(identity:DeviceIdentity,audience:String,guardId:String,generation:String,account:EscalationScope?):JSONObject? {
   val db=writableDatabase;db.beginTransaction()
   try{
-   migrateUpload(db,guardId)
+   if(account==null)migrateUpload(db,guardId) // Connected delivery never adopts ownerless legacy pending bodies.
    var selected:JSONObject?=null;val occupied=mutableSetOf<String>();val reserved=mutableSetOf<String>()
    db.rawQuery("SELECT owner,body,review FROM upload_snapshots ORDER BY first_sequence",null).use{c->while(c.moveToNext()){
     val id=c.getString(0);val snapshot=decrypt(c.getString(1),"mercury-upload-snapshot:$id")
@@ -431,7 +455,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
     occupied.add(id)
     val pending=snapshot.getJSONObject("batch").getJSONArray("events");for(i in 0 until pending.length())reserved.add(pending.getJSONObject(i).getString("event_id"))
     val held=!c.isNull(2)&&decrypt(c.getString(2),"mercury-upload-review:$id").getString("generation")==generation
-    if(selected==null&&!held)selected=snapshot
+    if(selected==null&&!held&&(account==null||uploadEligible(db,snapshot,account)))selected=snapshot
    }}
    if(selected==null){
     val events=JSONArray();var first:GrantBinding?=null;var firstPartition:JSONObject?=null;var size=0
@@ -439,6 +463,7 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
      val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");val scope=binding(record.getJSONObject("scope"))
      val partition=uploadPartition(record);val event=record.getJSONObject("event")
      if(scope.guardId!=guardId||event.getString("event_id") in reserved||uploadOwner(record.getJSONObject("scope"),partition) in occupied)continue
+     if(account!=null&&!ConnectedEventOwnership.belongs(record,account))continue
      if(first!=null&&(first!=scope||firstPartition.toString()!=partition.toString()))continue
      check(event.getLong("sequence")==c.getLong(0));val bytes=event.toString().toByteArray(Charsets.UTF_8).size
      if(events.length()>=100||size+bytes>250000)break
@@ -450,6 +475,33 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    val proof=identity.signScopedEventBatch(audience,snapshot.getJSONObject("batch"),binding(snapshot.getJSONObject("scope")))
    db.setTransactionSuccessful();return proof
   }finally{db.endTransaction()}
+ }
+ private fun uploadEligible(db:SQLiteDatabase,snapshot:JSONObject,account:EscalationScope):Boolean=try{
+  val original=binding(snapshot.getJSONObject("scope"));val events=snapshot.getJSONObject("batch").getJSONArray("events");check(events.length() in 1..100)
+  var owner:ConnectedDispatchOwner?=null
+  for(i in 0 until events.length()){
+   val event=events.getJSONObject(i);val sequence=event.getLong("sequence")
+   val record=db.rawQuery("SELECT body FROM captured WHERE sequence=?",arrayOf(sequence.toString())).use{check(it.moveToFirst());decrypt(it.getString(0),"mercury-scoped-event:$sequence")}
+   check(binding(record.getJSONObject("scope"))==original&&record.getJSONObject("event").toString()==event.toString())
+   check(ConnectedEventOwnership.belongs(record,account));val next=ConnectedEventOwnership.owner(record)?:error("Original owner required")
+   check(owner==null||owner==next);owner=next
+  }
+  true
+ }catch(_:Exception){false}
+ /** Recheck the exact immutable snapshot against current account and their immutable original assignment scopes before sending. */
+ internal fun requireUploadOwner(account:EscalationScope,batchId:String):GrantBinding {
+  val snapshot=findUpload(readableDatabase,account.guardId,batchId)?.second?:error("Original upload snapshot required")
+  check(uploadEligible(readableDatabase,snapshot,account)){"Original upload owner unavailable; retained for review"}
+  return binding(snapshot.getJSONObject("scope"))
+ }
+ internal fun requireUploadProof(account:EscalationScope,proof:JSONObject):GrantBinding {
+  val payload=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
+  check(proof.get("version")==2);val id=payload.getString("batch_id");val original=requireUploadOwner(account,id)
+  val snapshot=findUpload(readableDatabase,account.guardId,id)?.second?:error("Original upload snapshot required")
+  val batch=snapshot.getJSONObject("batch")
+  check(payload.keys().asSequence().toSet()==setOf("scope","batch_id","schema_version","events"))
+  check(payload.getJSONObject("scope").toString()==snapshot.getJSONObject("scope").toString()&&payload.get("batch_id")==batch.get("batch_id")&&payload.get("schema_version")==2&&payload.getJSONArray("events").toString()==batch.getJSONArray("events").toString()){"Original signed upload payload differs"}
+  return original
  }
  private fun findUpload(db:SQLiteDatabase,guardId:String,batchId:String):Pair<String,JSONObject>? {
   db.rawQuery("SELECT owner,body FROM upload_snapshots",null).use{c->while(c.moveToNext()){
@@ -498,10 +550,15 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
   for(e in locations){val d=locationData(e)?:error("Original location observation required");check(d.getString("consent_id")==id&&d.getString("policy_sha256")==hash)}
   return Triple(original,id,hash)
  }
- internal fun pendingUploadPhotos(guardId:String,generation:String,limit:Int=3):List<JSONObject>{
+ internal fun pendingUploadPhotos(guardId:String,generation:String,limit:Int=3):List<JSONObject> = pendingUploadPhotos(guardId,generation,limit,null)
+ internal fun pendingUploadPhotos(account:EscalationScope,generation:String,limit:Int=3):List<JSONObject> {
+  return pendingUploadPhotos(account.guardId,generation,limit,account)
+ }
+ private fun pendingUploadPhotos(guardId:String,generation:String,limit:Int,account:EscalationScope?):List<JSONObject>{
   require(limit in 1..100);val result=mutableListOf<JSONObject>()
   readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1 ORDER BY sequence",null).use{c->while(c.moveToNext()){
    val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}");if(binding(record.getJSONObject("scope")).guardId!=guardId)continue
+   if(account!=null&&!ConnectedEventOwnership.belongs(record,account))continue
    val event=record.getJSONObject("event");if(event.getString("kind")!="photo_evidence")continue
    val id=event.getString("event_id")
    val accepted=readableDatabase.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{r->if(!r.moveToFirst())false else{GuardTransport.validateEvidenceReceipt(decrypt(r.getString(0),"mercury-media-receipt:$id"),id,event.getJSONObject("data"));true}}
@@ -509,6 +566,13 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    val held=readableDatabase.rawQuery("SELECT body FROM upload_media_review WHERE event_id=?",arrayOf(id)).use{r->r.moveToFirst()&&decrypt(r.getString(0),"mercury-upload-media-review:$id").getString("generation")==generation}
    if(!held)result.add(record);if(result.size>=limit)break
   }};return result
+ }
+ internal fun requirePhotoOwner(account:EscalationScope,photo:JSONObject):GrantBinding {
+  check(ConnectedEventOwnership.belongs(photo,account)){"Original photo owner unavailable"}
+  val event=photo.getJSONObject("event");check(event.getString("kind")=="photo_evidence");val sequence=event.getLong("sequence")
+  val original=readableDatabase.rawQuery("SELECT body FROM captured WHERE sequence=? AND pilot_receipted=1",arrayOf(sequence.toString())).use{check(it.moveToFirst());decrypt(it.getString(0),"mercury-scoped-event:$sequence")}
+  check(original.toString()==photo.toString()&&ConnectedEventOwnership.belongs(original,account)){"Original accepted photo record differs"}
+  return binding(original.getJSONObject("scope"))
  }
  internal fun retainPhotoForReview(guardId:String,eventId:String,generation:String,status:Int){
   require(status in 300..499||status==0);val db=writableDatabase;db.beginTransaction()
@@ -538,6 +602,31 @@ class ScopedEventStore internal constructor(context: Context, name: String = "me
    db.insertOrThrow("media_receipts",null,ContentValues().apply{put("event_id",id);put("body",cipher.encrypt(receipt.toString().toByteArray(Charsets.UTF_8),"mercury-media-receipt:$id"))})
    db.delete("upload_media_review","event_id=?",arrayOf(id));db.setTransactionSuccessful()
   }finally{db.endTransaction()}
+ }
+ internal fun uploadSummary(account:EscalationScope):String {
+  var pending=0;var photos=0;var reviews=0;var retained=false
+  readableDatabase.rawQuery("SELECT sequence,body,pilot_receipted FROM captured",null).use{c->while(c.moveToNext()){
+   val record=decrypt(c.getString(1),"mercury-scoped-event:${c.getLong(0)}")
+   if(binding(record.getJSONObject("scope")).guardId!=account.guardId)continue
+   if(!ConnectedEventOwnership.belongs(record,account)){retained=true;continue}
+   if(c.getInt(2)==0)pending++ else if(record.getJSONObject("event").getString("kind")=="photo_evidence"){
+    val id=record.getJSONObject("event").getString("event_id")
+    val accepted=readableDatabase.rawQuery("SELECT body FROM media_receipts WHERE event_id=?",arrayOf(id)).use{r->if(!r.moveToFirst())false else{GuardTransport.validateEvidenceReceipt(decrypt(r.getString(0),"mercury-media-receipt:$id"),id,record.getJSONObject("event").getJSONObject("data"));true}}
+    if(!accepted)photos++
+   }
+  }}
+  readableDatabase.rawQuery("SELECT owner,body,review FROM upload_snapshots WHERE review IS NOT NULL",null).use{c->while(c.moveToNext()){
+   val snapshot=decrypt(c.getString(1),"mercury-upload-snapshot:${c.getString(0)}")
+   if(uploadEligible(readableDatabase,snapshot,account))reviews++
+  }}
+  readableDatabase.rawQuery("SELECT event_id FROM upload_media_review",null).use{c->while(c.moveToNext()){
+   val id=c.getString(0)
+   readableDatabase.rawQuery("SELECT sequence,body FROM captured WHERE pilot_receipted=1",null).use{r->while(r.moveToNext()){
+    val record=decrypt(r.getString(1),"mercury-scoped-event:${r.getLong(0)}")
+    if(record.getJSONObject("event").getString("event_id")==id&&ConnectedEventOwnership.belongs(record,account)){reviews++;break}
+   }}
+  }}
+  return "$pending saved record(s) and $photos photo file(s) await service receipts for this account. $reviews upload group(s) retained for review."+(if(retained)" Other original-owner or legacy records remain retained and are not submitted by this account."else "")
  }
  internal fun uploadSummary(guardId:String):String {
   var reviews=0;var photos=0

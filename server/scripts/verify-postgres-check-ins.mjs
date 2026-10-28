@@ -1,3 +1,4 @@
+import {fixtureAuthSession} from './fixture-auth-session.mjs';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,createHash,randomUUID,sign} from 'node:crypto';
 import {Pool} from 'pg';
@@ -13,6 +14,7 @@ export async function verifyPostgresCheckIns(connectionString,admin){
  try{
   const devices=new PostgresDeviceAssignments(pool),store=new PostgresDurableIngest(devices),shifts=new PostgresShiftLifecycle(devices),now=Date.now(),startsAt=now-120000;
   const identity={subject:(await admin.query("SELECT auth_subject FROM mercury_guard.guards WHERE guard_id='device-other'")).rows[0].auth_subject,guardId:'device-other',vendorId:'device-vendor'};
+  const session=await fixtureAuthSession(admin,identity.subject);
   // The disposable fixture's prior shift is closed before opening this independent policy scenario.
   await admin.query("UPDATE mercury_guard.shift_sessions SET clocked_out=clocked_in+1,reason='Synthetic fixture closeout' WHERE guard='device-other' AND clocked_out IS NULL");
   const keys=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),spki=keys.publicKey.export({type:'spki',format:'der'}).toString('base64url');
@@ -39,13 +41,13 @@ export async function verifyPostgresCheckIns(connectionString,admin){
   await devices.cancel(imported.assignmentId);
   const assignment={assignmentId:'check-in-shift',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'device-site',deviceId:device.deviceId,canStart:true,startsAt,endsAt:now+60000,active:true,checkInPolicy:original.check_in_policy};
   await devices.assign(assignment);
-  const scope={identity,assignment,deviceThumbprint:device.thumbprint};await shifts.transition({...scope,request:{action:'start',confirmed:true,request_id:'check-in-start',reason:''},now:startsAt});
+  const scope={identity,session,assignment,deviceThumbprint:device.thumbprint};await shifts.transition({...scope,request:{action:'start',confirmed:true,request_id:'check-in-start',reason:''},now:startsAt});
   const issuer=new PostgresShiftGrantIssuer({devices,privateKey:generateKeyPairSync('rsa',{modulusLength:2048}).privateKey,keyId:'check-in',issuer:'mercury-local',audience:'mercury-local'});
-  const grant=await issuer.issue({identity,assignment,device,now:startsAt,sessionExpiresAt:assignment.endsAt,allowedActions:['photo','check_in']}),claims=JSON.parse(Buffer.from(grant.payload,'base64url'));
+  const grant=await issuer.issue({identity,session,assignment,device,now:startsAt,sessionExpiresAt:assignment.endsAt,allowedActions:['photo','check_in']}),claims=JSON.parse(Buffer.from(grant.payload,'base64url'));
   assert.deepEqual(grant.check_in_policy.attention,attention);assert.equal(grant.check_in_policy.window_ms,10000);
   const originalGrant=await issuer.lookup(claims.grant_id);assert.deepEqual(originalGrant.policy.checkInPolicy,original.check_in_policy);
   grant.check_in_policy.attention.profile='mutated-response';assert.deepEqual(await issuer.lookup(claims.grant_id),originalGrant);
-  const context={subject:identity.subject,guardId:identity.guardId,vendorId:identity.vendorId,siteId:assignment.siteId,assignmentId:assignment.assignmentId,thumbprint:device.thumbprint,publicKeySpki:spki,revocationVersion:1,enrolled:true,revoked:false,audience:'mercury-local',allowedKinds:['check_in','photo_evidence'],notBefore:Math.floor(startsAt/1000)-1,expiresAt:Math.floor(assignment.endsAt/1000)+60,allowHistoricalSequence:true};
+  const context={session,subject:identity.subject,guardId:identity.guardId,vendorId:identity.vendorId,siteId:assignment.siteId,assignmentId:assignment.assignmentId,thumbprint:device.thumbprint,publicKeySpki:spki,revocationVersion:1,enrolled:true,revoked:false,audience:'mercury-local',allowedKinds:['check_in','photo_evidence'],notBefore:Math.floor(startsAt/1000)-1,expiresAt:Math.floor(assignment.endsAt/1000)+60,allowHistoricalSequence:true};
   const bytes=Buffer.from([255,216,255,217]);
   async function deliver(slot,received,mediaAt){
    const due=startsAt+slot*60000,evidence_id=randomUUID(),photoId=randomUUID();
@@ -53,7 +55,7 @@ export async function verifyPostgresCheckIns(connectionString,admin){
    const check={event_id:randomUUID(),sequence:slot*2+2,at:due+2000,kind:'check_in',data:{capture_grant_id:claims.grant_id,policy_revision:1,slot,photo_event_id:photoId,evidence_id,biometric:{method:'android_local_biometric',at:due+1000},location:{at:due+1200,latitude:0,longitude:0,accuracy_m:10,mock:false}}};
    const batch={batch_id:randomUUID(),schema_version:2,scope:{guard_id:context.guardId,site_id:context.siteId,assignment_id:context.assignmentId,device_thumbprint:context.thumbprint,revocation_version:1},events:[photo,check]},payload=Buffer.from(JSON.stringify(batch)).toString('base64url');
    const raw=JSON.stringify({version:2,algorithm:'SHA256withECDSA',audience:context.audience,device_thumbprint:device.thumbprint,public_key_spki:spki,payload,signature_der:sign('sha256',Buffer.from(`mercury-event-batch-v2\n${context.audience}\n${device.thumbprint}\n${payload}`),keys.privateKey).toString('base64url')});
-   const receipt=await store.ingest(raw,{...context,receivedAtMs:received},Math.floor(received/1000));assert.deepEqual(await store.ingest(raw,{...context,receivedAtMs:received},Math.floor(received/1000)),receipt);await store.retainPhoto(await store.photoForGuard(identity.guardId,photoId),bytes,mediaAt);
+   const receipt=await store.ingest(raw,{...context,receivedAtMs:received},Math.floor(received/1000));assert.deepEqual(await store.ingest(raw,{...context,receivedAtMs:received},Math.floor(received/1000)),receipt);await store.retainPhoto(await store.photoForGuard(identity.guardId,photoId),bytes,mediaAt,session);
   }
   await deliver(0,startsAt+3000,startsAt+4000);
   const detected=startsAt+70001,results=await Promise.all([store.reconcileCheckIns(assignment,detected),store.reconcileCheckIns(assignment,detected)]);assert.deepEqual(results[0],results[1]);

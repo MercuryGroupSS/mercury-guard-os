@@ -1,3 +1,4 @@
+import {fixtureAuthSession} from './fixture-auth-session.mjs';
 import assert from 'node:assert/strict';
 import {Pool} from 'pg';
 import {PostgresDeviceAssignments} from '../postgres-device-assignments.mjs';
@@ -11,7 +12,8 @@ export async function verifyPostgresShifts(connectionString,admin){
   const identity={subject:guard.auth_subject,guardId:'device-guard',vendorId:'device-vendor'},thumb=(await devices.device('personal-phone')).thumbprint;
   const assignment={assignmentId:'pg-shift',guardId:identity.guardId,vendorId:identity.vendorId,siteId:'device-site',startsAt:now-1000,endsAt:now+60000,active:true};
   await devices.assign(assignment);await devices.assign({...assignment,assignmentId:'pg-shift-two'});
-  const scope={identity,assignment,deviceThumbprint:thumb},request={action:'start',request_id:'pg-start',confirmed:true,reason:''};
+  const session=await fixtureAuthSession(admin,identity.subject);
+  const scope={identity,session,assignment,deviceThumbprint:thumb},request={action:'start',request_id:'pg-start',confirmed:true,reason:''};
   const started=await Promise.all([shifts.transition({...scope,request,now}),shifts.transition({...scope,request,now:now+1})]);assert.deepEqual(started[0],started[1]);
   await assert.rejects(shifts.transition({...scope,request:{...request,reason:'changed'},now}),/request changed/);
   await assert.rejects(shifts.transition({...scope,assignment:{...assignment,assignmentId:'pg-shift-two'},request:{...request,request_id:'pg-conflict'},now}),e=>e instanceof ShiftTransitionRejected&&e.receipt.code==='active_shift_conflict');

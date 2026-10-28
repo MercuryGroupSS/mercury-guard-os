@@ -87,8 +87,8 @@ class PatrolPointLocationTest {
  @Test fun requiredRouteNeverOffersAManualCompletionWhenFreshAuthorityIsUnavailable(){
   fun views(view:View):List<View> = listOf(view)+if(view is ViewGroup)(0 until view.childCount).flatMap{views(view.getChildAt(it))}else emptyList()
   val before=ScopedEventStore(context).use{it.pendingCount()}
-  ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->scenario.onActivity{activity->
-   GuardAccountActivity::class.java.getDeclaredField("captureBinding").apply{isAccessible=true;set(activity,binding)}
+  ConnectedPatrolUiFixture(context).use{fixture->ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->scenario.onActivity{activity->
+   val binding=fixture.prepare(activity,this.binding)
    val route=JSONObject().put("routeId","required-ui-route").put("revision",1).put("gps_required",true).put("checkpoints",JSONArray().put(JSONObject().put("id","entrance").put("label","Entrance")))
    val item=JSONObject().put("guardId",binding.guardId).put("siteId",binding.siteId).put("assignmentId",binding.assignmentId).put("patrolRoute",route)
    GuardAccountActivity::class.java.getDeclaredMethod("patrolScreen",JSONObject::class.java,String::class.java).apply{isAccessible=true;invoke(activity,item,null)}
@@ -97,7 +97,7 @@ class PatrolPointLocationTest {
    assertTrue(controls.filterIsInstance<TextView>().any{it.text.toString().contains("There is no manual fallback")})
    assertTrue(controls.filterIsInstance<Button>().single{it.text.toString()=="Record checkpoint: Entrance"}.performClick())
    assertTrue(views(activity.window.decorView).filterIsInstance<TextView>().any{it.text.toString().startsWith("Checkpoint not recorded.")})
-  }}
+  }}}
   assertEquals(before,ScopedEventStore(context).use{it.pendingCount()})
  }
 

@@ -41,8 +41,8 @@ class HttpsLocationIntegrationTest {
   val transport=GuardTransport(c.endpoint)
   ScopedEventStore(context).use{db->
    assertEquals("Earlier location receipt was not retained before point fixture",0,db.pendingCount(binding.guardId))
-   db.capturePatrolCheckpoint(plan,plan.choice("entrance"),binding,grant,identity,sample.at,record,sample.data())
-   val proof=db.prepareUpload(identity,c.audience,binding.guardId,"point-interoperability")!!
+   db.capturePatrolCheckpoint(ConnectedDispatchOwner(record.scope.account.configuration,record.scope.account.deviceId,record.scope.account.subject,DispatchScope(binding,record.scope.account.vendorId)),plan,plan.choice("entrance"),grant,identity,sample.at,record,sample.data())
+   val proof=db.prepareUpload(identity,c.audience,record.scope.account,"point-interoperability")!!
    val originalBytes=proof.toString();val batch=JSONObject(String(java.util.Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
    val event=batch.getJSONArray("events").getJSONObject(0);assertEquals(1,batch.getJSONArray("events").length());assertEquals("patrol_checkpoint",event.getString("kind"))
    val before=fixture(m,"/test/receipts").getInt("checkpoint_count")
@@ -162,10 +162,10 @@ class HttpsLocationIntegrationTest {
       val pointFix=Location("gps").apply{latitude=0.0;longitude=0.0;accuracy=5f;elapsedRealtimeNanos=SystemClock.elapsedRealtimeNanos()}
       val point=AuthorizedPatrolLocation.fromLocation(pointFix,queuedGrant,queuedAnchor,request,SystemClock.elapsedRealtimeNanos())?:error("Typed queued checkpoint fixture invalid")
       val plan=AuthorizedPatrolRoute.parse(queuedResponse.getJSONObject("patrol_route"))
-      db.capturePatrolCheckpoint(plan,plan.choice("perimeter"),binding,queuedGrant,identity,point.at,current.record,point.data())
+      db.capturePatrolCheckpoint(ConnectedDispatchOwner(current.record.scope.account.configuration,current.record.scope.account.deviceId,current.record.scope.account.subject,DispatchScope(binding,current.record.scope.account.vendorId)),plan,plan.choice("perimeter"),queuedGrant,identity,point.at,current.record,point.data())
      }
      val incidentAt=ConnectedLocationTiming.observationAt(queuedAnchor.epochMillis,queuedAnchor.elapsedMillis,SystemClock.elapsedRealtime())
-     db.capture("incident",JSONObject().put("description","Synthetic incident after location withdrawal; no real event"),binding,queuedGrant,identity,incidentAt)
+     db.captureIncident(ConnectedIncidentDraftScope(current.record.scope.account.configuration,current.record.scope.account.deviceId,binding.deviceThumbprint,current.record.scope.account.subject,binding.guardId,current.record.scope.account.vendorId,binding.siteId,binding.assignmentId),"Synthetic incident after location withdrawal; no real event",binding,queuedGrant,identity,incidentAt)
      val original=db.prepareUpload(identity,config.audience,binding.guardId,"synthetic-original")!!
      val body=JSONObject(String(java.util.Base64.getUrlDecoder().decode(original.getString("payload")),Charsets.UTF_8));val raw=body.toString();val rows=body.getJSONArray("events");assertEquals("location",rows.getJSONObject(0).getString("kind"))
      val countsBefore=fixture(m,"/test/location-receipts")

@@ -268,7 +268,7 @@ class GuardAccountActivity : Activity() {
      val reminderPolicies=reminderRows.associate{row->val scope=shiftScope(row);check(scope.binding.guardId==guard&&scope.vendorId==vendor&&scope.binding.deviceThumbprint==DeviceIdentity(this).publicIdentity()?.thumbprint);val policy=JSONObject(row.getJSONObject("checkInPolicy").toString());AuthorizedCheckInPolicy.parse(policy);ConnectedDispatchOwner(c.uploadBinding(),c.deviceId,subject,scope) to policy}
      check(reminderPolicies.size==reminderRows.size);AuthorizedReminders(this).retainForAssignments(reminderPolicies)
      ConnectedLocationRuntime.stopIfUnavailable(this,subject,activeIds)
-     val summary=ScopedEventStore(this).use{it.uploadSummary(guard)}
+     val summary=ScopedEventStore(this).use{it.uploadSummary(escalationScope())}
      status.text="Guard: $guard\nVendor: $vendor\n${rows.length()} assignment(s). Shift status comes from the service.\n$summary\nAutomatic delivery continues while the verified upload session is valid; Android may delay work. Sign out stops automatic delivery."
      button("Escalate"){escalationScreen()};button("My escalation requests"){escalationList()};button("My location consents"){locationHistory()};button("Send my queued records"){sendScoped(guard)}
      for(i in 0 until rows.length()){
@@ -1128,7 +1128,7 @@ class GuardAccountActivity : Activity() {
    current
   }
  }
- private fun capturePatrolPoint(item:JSONObject,plan:PatrolPlan,choice:PatrolChoice){
+ private fun capturePatrolPoint(item:JSONObject,owner:ConnectedDispatchOwner,plan:PatrolPlan,choice:PatrolChoice){
   val binding=captureBinding;val grant=captureGrant;val anchor=captureAnchor
   if(binding==null||grant==null||anchor==null){status.text="Checkpoint not recorded. Return to this assignment and refresh current GPS capture authorization.";return}
   val record=try{patrolConsent(item,grant)}catch(_:Exception){status.text="Review the approved patrol GPS notice and current consent before requesting a checkpoint fix.";return}
@@ -1138,7 +1138,7 @@ class GuardAccountActivity : Activity() {
   val cancelControl=button("Cancel checkpoint GPS request",true){cancelPatrolPoint();patrolScreen(item,choice.roundId);status.text="GPS request cancelled. No checkpoint was recorded."}
   fun authorized():Boolean=try{
    check(visibleForLocation&&!stopped&&!isFinishing&&!isDestroyed&&stamp==generation&&root===displayedRoot&&captureGrant===grant&&captureBinding==binding&&config===activeConfig&&accountIdentity==activeAccount)
-   session?.bearer()?:error("Session unavailable")
+   session?.bearer()?:error("Session unavailable");check(connectedCaptureOwner()==owner)
    val current=patrolConsent(item,grant);check(current.id==record.id&&current.scope==record.scope)
    true
   }catch(_:Exception){false}
@@ -1149,7 +1149,7 @@ class GuardAccountActivity : Activity() {
    if(sample==null){status.text="Checkpoint not recorded. A fresh non-simulated precise fix was unavailable, permission changed, or the request expired. You can retry this checkpoint.";return@request}
    try{
     check(plan.gpsRequired&&plan.choice(choice.checkpointId,choice.roundId)==choice)
-    ScopedEventStore(this).use{it.capturePatrolCheckpoint(plan,choice,binding,grant,DeviceIdentity(this),sample.at,record,sample.data())}
+    ScopedEventStore(this).use{it.capturePatrolCheckpoint(owner,plan,choice,grant,DeviceIdentity(this),sample.at,record,sample.data())}
     UploadCoordinator(this).request();patrolScreen(item,choice.roundId);status.text="GPS checkpoint saved encrypted with its original consent and policy. Service acceptance is pending; device-reported coordinates alone do not establish presence."
    }catch(_:Exception){status.text="Checkpoint not recorded. Its consent, assignment or capture authorization changed, or this checkpoint was already saved. Original records remain preserved."}
   }
@@ -1157,6 +1157,7 @@ class GuardAccountActivity : Activity() {
  private fun patrolScreen(item:JSONObject,selectedRoundId:String?=null){
   val closeoutOwner=connectedShiftOwner(item)
   val binding=captureBinding?:return
+  val owner=try{connectedCaptureOwner()}catch(_:Exception){status.text="Sign in and refresh this patrol before viewing its progress.";return}
   screen("ASSIGNED PATROL","Select checkpoints in any order. The approved route determines whether each checkpoint requires a fresh GPS fix.")
   try{
    check(binding.assignmentId==item.getString("assignmentId")&&binding.guardId==item.getString("guardId")&&binding.siteId==item.getString("siteId"))
@@ -1165,7 +1166,7 @@ class GuardAccountActivity : Activity() {
    status.text=instructions
    val db=ScopedEventStore(this)
    try{
-    val recorded=db.checkpointProgress(binding,plan.routeId,plan.revision)
+    val recorded=db.checkpointProgress(owner,plan.routeId,plan.revision)
     if(plan.rounds!=null&&selectedRoundId==null){
      status.text="Choose an assigned patrol round. You can switch rounds without completing them in sequence. Saved checkpoints remain attached to their original round.\n"+instructions
      for(round in plan.rounds){
@@ -1180,11 +1181,11 @@ class GuardAccountActivity : Activity() {
       if(PatrolCheckpointKey(selectedRoundId,point.id) in recorded)root.addView(TextView(this).apply{text="Recorded · ${point.label}";textSize=16f;setPadding(0,dp(12),0,dp(12))})
       else button("Record checkpoint: ${point.label}"){
        try{
-        val choice=plan.choice(point.id,selectedRoundId)
-        if(plan.gpsRequired){capturePatrolPoint(item,plan,choice);return@button}
+        check(connectedCaptureOwner()==owner);val choice=plan.choice(point.id,selectedRoundId)
+        if(plan.gpsRequired){capturePatrolPoint(item,owner,plan,choice);return@button}
         val grant=captureGrant?:error("Refresh authorization");val anchor=captureAnchor?:error("Refresh authorization")
         val observed=Math.addExact(anchor.epochMillis,Math.subtractExact(SystemClock.elapsedRealtime(),anchor.elapsedMillis))
-        ScopedEventStore(this).use{current->current.capturePatrolCheckpoint(plan,choice,binding,grant,DeviceIdentity(this),observed)}
+        ScopedEventStore(this).use{current->current.capturePatrolCheckpoint(owner,plan,choice,grant,DeviceIdentity(this),observed)}
         UploadCoordinator(this).request();patrolScreen(item,selectedRoundId);status.text="Checkpoint saved encrypted for ${round?.label?:"this patrol"}. Automatic delivery is requested; service acceptance is pending."
        }catch(_:Exception){status.text="Checkpoint not recorded. It may already be saved in this round, or authorization may have expired. Return to the assignment to refresh."}
       }
@@ -1202,7 +1203,7 @@ class GuardAccountActivity : Activity() {
   try{
    session?.bearer()?:error("Sign in again")
    val requested=UploadCoordinator(this).request()
-   status.text=(if(requested)"Automatic upload requested. Android schedules network work and may delay it. " else "Sign in again to authorize automatic delivery. ")+ScopedEventStore(this).use{it.uploadSummary(guardId)}
+   status.text=(if(requested)"Automatic upload requested. Android schedules network work and may delay it. " else "Sign in again to authorize automatic delivery. ")+ScopedEventStore(this).use{it.uploadSummary(escalationScope().also{owner->check(owner.guardId==guardId)})}
   }catch(_:Exception){status.text="Upload authority is unavailable. Sign in again; encrypted records and receipts remain preserved."}
  }
 

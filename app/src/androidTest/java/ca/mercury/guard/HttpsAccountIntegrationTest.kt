@@ -43,6 +43,7 @@ class HttpsAccountIntegrationTest {
    val public=identity.create();fixture("/test/enroll",JSONObject().put("public_key_spki",public.publicKeySpki))
    val client=GuardAccountClient("https://localhost:55443")
    val chars="synthetic-password-only".toCharArray();session=client.login("fixture-guard",chars);assertTrue(chars.all{it=='\u0000'})
+   val trusted=GuardServiceConfig.load(context)?:error("HTTPS debug-only packaged trust required")
    val profile=client.profile(session);assertEquals("fixture-guard",profile.getString("guard_id"))
    val assignments=client.assignments(session,"fixture-phone",identity,"mercury-local").getJSONArray("assignments");assertEquals(1,assignments.length())
    val item=assignments.getJSONObject(0);assertEquals(public.thumbprint,item.getString("deviceThumbprint"))
@@ -70,8 +71,9 @@ class HttpsAccountIntegrationTest {
    val binding=GrantBinding("fixture-guard","fixture-site","fixture-shift",public.thumbprint,item.getLong("revocationVersion"))
    val grant=ShiftGrantVerifier("mercury-local","mercury-local",mapOf("https-fixture" to key)).verify(response.getString("key_id"),response.getString("payload"),response.getString("signature"),binding,ServerTimeAnchor(response.getLong("server_time_ms"),started,boot),SystemClock.elapsedRealtime(),boot)
    assertNotNull(grant)
-   db.acknowledgeDispatch(binding,grant!!,identity,"fixture-message",1,response.getLong("server_time_ms"))
-   assertTrue(db.dispatchAcknowledged(binding,"fixture-message",1))
+   val owner=ConnectedDispatchOwner(trusted.uploadBinding(),trusted.deviceId,profile.getString("auth_subject"),DispatchScope(binding,item.getString("vendorId")))
+   db.acknowledgeDispatch(owner,grant!!,identity,"fixture-message",1,response.getLong("server_time_ms"))
+   assertTrue(db.dispatchAcknowledged(owner,"fixture-message",1))
    val inboxName="https-inbox-${UUID.randomUUID()}.db"
    try {
     DispatchInbox(context,inboxName).use { inbox ->
@@ -87,12 +89,12 @@ class HttpsAccountIntegrationTest {
      assertFalse(inbox.list(scope).single().isNull("read_at"))
     }
    } finally { context.deleteDatabase(inboxName) }
-   db.capture("incident",JSONObject().put("description","HTTPS integration synthetic incident"),binding,grant!!,identity,response.getLong("server_time_ms"))
+   db.captureIncident(ConnectedIncidentDraftScope(owner.configuration,owner.deviceId,binding.deviceThumbprint,owner.subject,binding.guardId,owner.scope.vendorId,binding.siteId,binding.assignmentId),"HTTPS integration synthetic incident",binding,grant!!,identity,response.getLong("server_time_ms"))
    val route=response.getJSONObject("patrol_route");assertEquals("fixture-route",route.getString("routeId"))
    val patrol=AuthorizedPatrolRoute.parse(route);assertEquals(listOf("opening","closing"),patrol.rounds!!.map{it.id})
-   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"),"closing")
-   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"entrance",response.getLong("server_time_ms"),"opening")
-   db.captureCheckpoint(binding,grant,identity,"fixture-route",1,"perimeter",response.getLong("server_time_ms"),"opening")
+   db.capturePatrolCheckpoint(owner,patrol,patrol.choice("perimeter","closing"),grant,identity,response.getLong("server_time_ms"))
+   db.capturePatrolCheckpoint(owner,patrol,patrol.choice("entrance","opening"),grant,identity,response.getLong("server_time_ms"))
+   db.capturePatrolCheckpoint(owner,patrol,patrol.choice("perimeter","opening"),grant,identity,response.getLong("server_time_ms"))
    val bitmap=android.graphics.Bitmap.createBitmap(1,1,android.graphics.Bitmap.Config.ARGB_8888)
    val photoBytes=java.io.ByteArrayOutputStream().use{out->assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG,90,out));out.toByteArray()};bitmap.recycle()
    val temporary=File(context.cacheDir,"https-job-${UUID.randomUUID()}.jpg")
@@ -102,14 +104,13 @@ class HttpsAccountIntegrationTest {
    val policy=AuthorizedCheckInPolicy.parse(response.getJSONObject("check_in_policy"))
    // Synthetic evidence exercises protocol linkage; this does not simulate hardware verification.
    val evidence=AuthorizedCheckInEvidence(policy,policy.slotAt(at),at,JSONObject().put("at",at).put("latitude",45).put("longitude",-73).put("accuracy_m",5).put("mock",false))
-   db.captureCheckIn(binding,grant,identity,evidence,photo,at)
-   val proof=db.prepareSigned(identity,"mercury-local","fixture-guard")!!
+   db.captureCheckIn(owner,grant,identity,evidence,photo,at)
+   val proof=db.prepareUpload(identity,"mercury-local",ConnectedEventOwnership.account(owner),"original-https")!!
    val batch=JSONObject(String(Base64.getUrlDecoder().decode(proof.getString("payload")),Charsets.UTF_8))
    val events=batch.getJSONArray("events");val ids=(0 until events.length()).map{events.getJSONObject(it).getString("event_id")}.toSet()
    val photoEvent=(0 until events.length()).map{events.getJSONObject(it)}.single{it.getString("kind")=="photo_evidence"}.getString("event_id")
    val transport=GuardTransport("https://localhost:55443")
    // Exercise the actual persisted JobService against HTTPS after foreground credential memory is cleared.
-   val trusted=GuardServiceConfig.load(context)?:error("HTTPS debug-only packaged trust required")
    val uploadSession=GuardAccountClient.Session(session.bearer(),session.expiresElapsed)
    UploadCoordinator(context).authorize(trusted,uploadSession,"fixture-guard","fixture-vendor",profile.getString("auth_subject"));uploadSession.clear()
    val command="cmd jobscheduler run -f ${context.packageName} ${UploadCoordinator.JOB_ID}"

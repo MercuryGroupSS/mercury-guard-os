@@ -116,7 +116,9 @@ internal class NativeUploadPort(private val context:Context,private val config:G
  UploadDrainPort<JSONObject,JSONObject>,java.io.Closeable {
  private val store=UploadAuthorityStore(context)
  private val client=GuardAccountClient(config.endpoint,network,cancellation)
- private val transport=GuardTransport(config.endpoint,network,cancellation)
+ private var originalRequest:(()->Unit)?=null
+ private val account=EscalationScope(config.uploadBinding(),config.deviceId,authority.thumbprint,authority.subject,authority.guardId,authority.vendorId)
+ private val transport=GuardTransport(config.endpoint,network,cancellation,{check();(originalRequest?:error("Original upload owner required"))()})
  override fun permitted()=try{!cancellation.cancelled()&&store.current(authority,config)&&identity.publicIdentity()?.thumbprint==authority.thumbprint}catch(_:Exception){false}
  private fun check(){cancellation.check();check(permitted()){ "Upload authorization ended" }}
  private fun session():GuardAccountClient.Session {check();return authority.session()}
@@ -127,29 +129,31 @@ internal class NativeUploadPort(private val context:Context,private val config:G
    check();client.assignments(s,config.deviceId,identity,config.audience);check()
   }catch(e:GuardAccountClient.HttpFailure){throw UploadRequestFailure(e.statusCode)}
  }
- override fun nextBatch():JSONObject? {check();return db.prepareUpload(identity,config.audience,authority.guardId,authority.generation)}
+ override fun nextBatch():JSONObject? {check();return db.prepareUpload(identity,config.audience,account,authority.generation)}
  override fun sendBatch(batch:JSONObject){
   val payload=JSONObject(String(java.util.Base64.getUrlDecoder().decode(batch.getString("payload")),Charsets.UTF_8))
-  check(payload.getJSONObject("scope").getString("guard_id")==authority.guardId)
-  try{
-   val original=db.locationUploadScope(authority.guardId,payload.getString("batch_id"))
-   if(original!=null){
-    val (scope,id,hash)=original
-    check(scope.account==EscalationScope(config.uploadBinding(),config.deviceId,authority.thumbprint,authority.subject,authority.guardId,authority.vendorId))
+  check();val original=db.requireUploadProof(account,batch);check(payload.getJSONObject("scope").getString("guard_id")==authority.guardId)
+  fun locationAllowed(){try{
+   val location=db.locationUploadScope(authority.guardId,payload.getString("batch_id"))
+   if(location!=null){
+    val (scope,id,hash)=location;check(scope.account==account)
     check(LocationConsentStore(context).use{it.canUpload(id,scope,hash)}){"Location withdrawal barrier"}
    }
-  }catch(_:Exception){throw UploadRequestFailure(403)}
+  }catch(_:Exception){throw UploadRequestFailure(403)}}
+  locationAllowed()
   val rows=payload.getJSONArray("events");val ids=(0 until rows.length()).map{rows.getJSONObject(it).getString("event_id")}.toSet()
-  val receipt=try{transport.sendPilotBatch(session().bearer(),batch,payload.getString("batch_id"),ids)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}
+  originalRequest=ConnectedUploadFence(::check,{check(db.requireUploadProof(account,batch)==original)},::locationAllowed)
+  val receipt=try{transport.sendPilotBatch(session().bearer(),batch,payload.getString("batch_id"),ids)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}finally{originalRequest=null}
   db.recordUploadReceipt(authority.guardId,JSONObject().put("batch_id",receipt.batchId).put("event_ids",org.json.JSONArray(receipt.eventIds.toList())).put("status","accepted_local_only"))
  }
  override fun reviewBatch(batch:JSONObject,status:Int){check();val payload=JSONObject(String(java.util.Base64.getUrlDecoder().decode(batch.getString("payload")),Charsets.UTF_8));db.retainUploadForReview(authority.guardId,payload.getString("batch_id"),authority.generation,status)}
- override fun nextPhoto():JSONObject? {check();return db.pendingUploadPhotos(authority.guardId,authority.generation,1).firstOrNull()}
+ override fun nextPhoto():JSONObject? {check();return db.pendingUploadPhotos(account,authority.generation,1).firstOrNull()}
  override fun sendPhoto(photo:JSONObject){
-  check();check(photo.getJSONObject("scope").getString("guard_id")==authority.guardId)
+  check();val original=db.requirePhotoOwner(account,photo);check(photo.getJSONObject("scope").getString("guard_id")==authority.guardId)
   val event=photo.getJSONObject("event");val data=event.getJSONObject("data")
   val bytes=try{EvidenceStore(context).readPhoto(data.getString("evidence_id"))}catch(_:Exception){throw UploadEvidenceUnavailable()}
-  val receipt=try{transport.sendPilotEvidence(session().bearer(),event.getString("event_id"),data,bytes,identity,config.audience)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}
+  originalRequest=ConnectedUploadFence(::check,{check(db.requirePhotoOwner(account,photo)==original)})
+  val receipt=try{transport.sendPilotEvidence(session().bearer(),event.getString("event_id"),data,bytes,identity,config.audience)}catch(e:GuardTransport.HttpFailure){throw UploadRequestFailure(e.statusCode)}finally{originalRequest=null}
   db.recordUploadMediaReceipt(authority.guardId,receipt)
  }
  override fun reviewPhoto(photo:JSONObject,status:Int){check();db.retainPhotoForReview(authority.guardId,photo.getJSONObject("event").getString("event_id"),authority.generation,status)}

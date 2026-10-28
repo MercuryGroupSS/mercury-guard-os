@@ -1,3 +1,4 @@
+import {fixtureAuthSession} from './fixture-auth-session.mjs';
 import assert from 'node:assert/strict';
 import {Client,Pool} from 'pg';
 import {readFileSync,readdirSync} from 'node:fs';
@@ -20,10 +21,10 @@ export async function verifyPostgresShiftWindows(connectionString,owner){
   await fixture.query('INSERT INTO mercury_guard.vendors VALUES($1,$2,true)',[vendor,'company']);await fixture.query('INSERT INTO mercury_guard.sites VALUES($1,true)',[site]);
   const identities=[],phones=[];
   for(let i=0;i<3;i++){
-   const subject=randomUUID(),guardId=prefix+'-guard-'+i;await fixture.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[subject,prefix+i+'@example.invalid']);await fixture.query('INSERT INTO mercury_guard.guards VALUES($1,$2,$3,true)',[guardId,subject,vendor]);identities.push({subject,guardId,vendorId:vendor});
+   const subject=randomUUID(),guardId=prefix+'-guard-'+i;await fixture.query('INSERT INTO auth.users(id,email) VALUES($1,$2)',[subject,prefix+i+'@example.invalid']);await fixture.query('INSERT INTO mercury_guard.guards VALUES($1,$2,$3,true)',[guardId,subject,vendor]);identities.push({subject,guardId,vendorId:vendor,session:await fixtureAuthSession(fixture,subject)});
    const key=generateKeyPairSync('ec',{namedCurve:'prime256v1'}).publicKey.export({type:'spki',format:'der'}).toString('base64url'),deviceId=prefix+'-phone-'+i;await devices.enroll({deviceId,mode:'site',siteId:site,active:true,revoked:false,publicKeySpki:key});phones.push((await devices.device(deviceId)).thumbprint);
   }
-  const make=async(id,person,phone,starts,ends)=>{const assignment={assignmentId:prefix+'-'+id,guardId:identities[person].guardId,vendorId:vendor,siteId:site,startsAt:starts,endsAt:ends,active:true};await devices.assign(assignment);return {identity:identities[person],assignment,deviceThumbprint:phones[phone]};};
+  const make=async(id,person,phone,starts,ends)=>{const assignment={assignmentId:prefix+'-'+id,guardId:identities[person].guardId,vendorId:vendor,siteId:site,startsAt:starts,endsAt:ends,active:true};await devices.assign(assignment);return {identity:identities[person],session:identities[person].session,assignment,deviceThumbprint:phones[phone]};};
   const action=(action,requestId=randomUUID(),reason='')=>({action,request_id:requestId,confirmed:true,reason}),start=(scope,now,request=action('start'))=>shifts.transition({...scope,request,now}),scope=s=>({...s.identity,siteId:site,assignmentId:s.assignment.assignmentId,deviceThumbprint:s.deviceThumbprint});
   const original=await make('old',0,0,base,base+5000),originalRequest=action('start'),originalReceipt=await start(original,base+1000,originalRequest);
   const originalRow=(await fixture.query('SELECT row_to_json(h)::text AS raw FROM mercury_guard.shift_sessions h WHERE assignment=$1',[original.assignment.assignmentId])).rows[0].raw,originalRaw=(await fixture.query('SELECT receipt::text AS raw FROM mercury_guard.shift_transitions WHERE request=$1',[originalRequest.request_id])).rows[0].raw;

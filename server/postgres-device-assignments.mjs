@@ -1,3 +1,4 @@
+import {requirePostgresAuthSession} from './postgres-auth-session.mjs';
 import {locationPolicySnapshot} from './location-policy.mjs';
 import {randomBytes,randomUUID,verify} from 'node:crypto';
 import {parseEnrollmentKey,decodeEnrollmentValue} from './enrollment-key.mjs';
@@ -25,20 +26,29 @@ export class PostgresDeviceAssignments{
   await client.query('INSERT INTO mercury_guard.assignments(assignment_id,guard_id,vendor_id,site_id,starts_at_ms,ends_at_ms,active,patrol_route,check_in_policy,location_policy) VALUES($1,$2,$3,$4,$5,$6,true,$7,$8,$9)',[a.assignmentId,a.guardId,a.vendorId,a.siteId,a.startsAt,a.endsAt,route,policy,a.locationPolicy?locationPolicySnapshot(a.locationPolicy).policy:null]);
  }
  async cancel(assignmentId,client=this.pool){if((await client.query('UPDATE mercury_guard.assignments SET active=false WHERE assignment_id=$1',[assignmentId])).rowCount!==1)throw Error('Unknown assignment');}
- async challenge(identity,deviceId,now=Date.now()){
+ async lockGuard(client,identity){
+  const current=await client.query(`SELECT 1 FROM mercury_guard.guards g JOIN mercury_guard.vendors v ON v.vendor_id=g.vendor_id WHERE g.guard_id=$1 AND g.auth_subject=$2::uuid AND g.vendor_id=$3 AND g.active AND v.active FOR SHARE OF g,v`,[identity.guardId,identity.subject,identity.vendorId]);
+  if(current.rowCount!==1)throw Error('Current individual guard required');
+ }
+ async challenge(identity,deviceId,now=Date.now(),session){
   if(!id(identity?.subject)||!id(identity.guardId)||!id(deviceId)||!Number.isSafeInteger(now)||now<=0)throw Error('Invalid challenge');
   return this.transaction(async client=>{
+   await requirePostgresAuthSession(client,session,identity.subject,now);
    const d=deviceRow((await client.query(deviceSelect+' WHERE d.device_id=$1 FOR SHARE OF d',[deviceId])).rows[0]);
    if(!d?.active||d.revoked||d.mode==='personal'&&d.guardId!==identity.guardId)throw Error('Device unavailable');
+   await this.lockGuard(client,identity);
+   if(d.mode==='site'&&(await client.query('SELECT 1 FROM mercury_guard.sites WHERE site_id=$1 AND active FOR SHARE',[d.siteId])).rowCount!==1)throw Error('Current site required');
    const requestId=randomUUID(),nonce=randomBytes(32).toString('base64url'),expires=now+60000;
    await client.query('INSERT INTO mercury_guard.device_challenges VALUES($1,$2,$3,$4,$5) ON CONFLICT(auth_subject,device_id) DO UPDATE SET request_id=excluded.request_id,nonce=excluded.nonce,expires_at_ms=excluded.expires_at_ms',[requestId,identity.subject,deviceId,nonce,expires]);
+   await requirePostgresAuthSession(client,session,identity.subject,now);
    return {audience:this.audience,request_id:requestId,challenge:nonce,expires_at:expires};
   });
  }
- async list(identity,proof,now=Date.now(),{historical=false,includeCancelled=false}={}){
+ async list(identity,proof,now=Date.now(),{historical=false,includeCancelled=false,session}={}){
   const fields=['version','algorithm','audience','request_id','challenge','device_thumbprint','public_key_spki','signature_der'];
   if(!identity||!id(identity.subject)||!Number.isSafeInteger(now)||!proof||Object.keys(proof).sort().join()!==fields.sort().join()||proof.version!==1||proof.algorithm!=='SHA256withECDSA'||proof.audience!==this.audience)throw Error('Invalid proof');
   return this.transaction(async client=>{
+   await requirePostgresAuthSession(client,session,identity.subject,now);
    const hint=(await client.query('SELECT device_id FROM mercury_guard.device_challenges WHERE request_id=$1 AND auth_subject=$2',[proof.request_id,identity.subject])).rows[0];if(!hint)throw Error('Challenge unavailable');
    const d=deviceRow((await client.query(deviceSelect+' WHERE d.device_id=$1 FOR SHARE OF d',[hint.device_id])).rows[0]);
    const c=(await client.query('SELECT * FROM mercury_guard.device_challenges WHERE request_id=$1 AND auth_subject=$2 FOR UPDATE',[proof.request_id,identity.subject])).rows[0];
@@ -47,12 +57,14 @@ export class PostgresDeviceAssignments{
    const message=`mercury-enrollment-proof-v1\n${this.audience}\n${c.request_id}\n${c.nonce}\n${d.thumbprint}`;
    if(!verify('sha256',Buffer.from(message),parseEnrollmentKey(d.publicKeySpki).key,decodeEnrollmentValue(proof.signature_der,80)))throw Error('Invalid signature');
    await client.query('DELETE FROM mercury_guard.device_challenges WHERE request_id=$1',[c.request_id]);
-   const rows=(await client.query('SELECT * FROM mercury_guard.assignments WHERE guard_id=$1',[identity.guardId])).rows;
+   await this.lockGuard(client,identity);
+   const rows=(await client.query(`SELECT a.* FROM mercury_guard.assignments a JOIN mercury_guard.guards g ON g.guard_id=a.guard_id AND g.vendor_id=a.vendor_id JOIN mercury_guard.vendors v ON v.vendor_id=g.vendor_id JOIN mercury_guard.sites s ON s.site_id=a.site_id WHERE a.guard_id=$1 AND g.auth_subject=$2::uuid AND a.vendor_id=$3 AND g.active AND v.active AND s.active ORDER BY a.assignment_id FOR SHARE OF a,g,v,s`,[identity.guardId,identity.subject,identity.vendorId])).rows;
    const assignments=rows.map(assignmentRow).map(a=>{
     if(historical&&now>a.endsAt+86400000)return null;
     const mapped=assignmentForGuard({identity,assignment:includeCancelled?{...a,active:true}:a,device:d,now:historical?Math.min(now,a.endsAt-1):now});
     return mapped?{...mapped,...(includeCancelled?{assignmentActive:a.active}:{}),...(a.patrolRoute?{patrolRoute:a.patrolRoute}:{}),...(a.checkInPolicy?{checkInPolicy:a.checkInPolicy}:{}),...(a.locationPolicy?{locationPolicy:a.locationPolicy,locationPolicySha256:a.locationPolicySha256,locationPolicyPayload:a.locationPolicyPayload}:{}),deviceThumbprint:d.thumbprint,revocationVersion:d.revocationVersion}:null;
    }).filter(Boolean);
+   await requirePostgresAuthSession(client,session,identity.subject,now);
    return {assignments};
   });
  }

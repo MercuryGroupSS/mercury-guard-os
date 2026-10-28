@@ -1,3 +1,4 @@
+import {fixtureAuthSession} from './fixture-auth-session.mjs';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,createPublicKey,verify} from 'node:crypto';
 import {Pool} from 'pg';
@@ -11,7 +12,8 @@ export async function verifyPostgresGrants(connectionString,admin){
   const r=(await admin.query("SELECT h.*,g.auth_subject FROM mercury_guard.shift_sessions h JOIN mercury_guard.guards g ON g.guard_id=h.guard WHERE h.clocked_out IS NULL AND h.guard='device-guard'")).rows[0];assert.ok(r);
   const identity={subject:r.auth_subject,guardId:r.guard,vendorId:r.vendor},device=await devices.deviceByThumbprint(r.device),now=Number(r.clocked_in)+1;
   const assignment={assignmentId:r.assignment,guardId:r.guard,vendorId:r.vendor,siteId:r.site,deviceId:device.deviceId,startsAt:Number(r.starts_at),endsAt:Number(r.ends_at),canStart:true};
-  const context={identity,device,assignment,now,sessionExpiresAt:now+120000,allowedActions:['incident','photo']};
+  const session=await fixtureAuthSession(admin,identity.subject);
+  const context={identity,session,device,assignment,now,sessionExpiresAt:now+120000,allowedActions:['incident','photo']};
   const signed=await issuer.issue(context),claims=JSON.parse(Buffer.from(signed.payload,'base64url'));
   assert.equal(verify('sha256',Buffer.from(`mercury-shift-grant-v1.${signed.key_id}.${signed.payload}`),createPublicKey(keys.privateKey),Buffer.from(signed.signature,'base64url')),true);
   const second=new PostgresShiftGrantIssuer(config),saved=await second.lookup(claims.grant_id);

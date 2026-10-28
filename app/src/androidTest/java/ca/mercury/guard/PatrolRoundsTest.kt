@@ -24,9 +24,9 @@ class PatrolRoundsTest {
   val legacy=AuthorizedPatrolRoute.parse(route(false));assertNull(legacy.choice("entrance").roundId)
  }
  @Test fun realAccountScreenOffersExplicitRoundsAndSwitchesWithoutForcedCompletion(){
-  ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
+  ConnectedPatrolUiFixture(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext).use{fixture->ActivityScenario.launch(GuardAccountActivity::class.java).use{scenario->
    scenario.onActivity{activity->
-    val binding=GrantBinding("synthetic-round-ui","synthetic-site","synthetic-assignment","a".repeat(64),1)
+    val binding=fixture.prepare(activity,GrantBinding("synthetic-round-ui","synthetic-site","synthetic-assignment","a".repeat(64),1))
     val field=GuardAccountActivity::class.java.getDeclaredField("captureBinding");field.isAccessible=true;field.set(activity,binding)
     val item=JSONObject().put("guardId",binding.guardId).put("siteId",binding.siteId).put("assignmentId",binding.assignmentId).put("patrolRoute",route())
     // Instrumentation injects only a synthetic presentation snapshot, never service/capture authority.
@@ -39,6 +39,6 @@ class PatrolRoundsTest {
    onView(withText("Choose another patrol round")).perform(scrollTo(),click())
    onView(withText("Opening patrol · 0/2 recorded")).perform(scrollTo(),click())
    onView(withText("PATROL · Opening patrol")).check(matches(isDisplayed()))
-  }
+  }}
  }
 }
