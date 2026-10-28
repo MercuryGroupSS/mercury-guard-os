@@ -17,7 +17,7 @@ export async function verifyPostgresReceivedReports(connectionString,owner){
   await owner.query('INSERT INTO auth.users(id,email) VALUES($1,$2),($3,$4)',[subject,'received-admin@example.invalid',guardSubject,'received-guard@example.invalid']);
   await owner.query('INSERT INTO auth.sessions(id,user_id) VALUES($1,$2)',[sessionId,subject]);
   await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subject,'received-admin@example.invalid']);
-  const devices=new PostgresDeviceAssignments(pool),admin=new PostgresAdministration({devices}),session={subject,active:true,expiresAt:Math.floor(Date.now()/1000)+3600},ownerMapping=new ReceiverMappingOwner(ownerPool),inbox=new PostgresDashboardInbox(pool);
+  const devices=new PostgresDeviceAssignments(pool),admin=new PostgresAdministration({devices}),session={subject,sessionId,active:true,expiresAt:Math.floor(Date.now()/1000)+3600},ownerMapping=new ReceiverMappingOwner(ownerPool),inbox=new PostgresDashboardInbox(pool);
   const mapping={assignmentId:'received-assignment',guardId:'received-guard',vendorId:'received-company',siteId:'received-site',dashboardShiftId:'received-upstream',destination:'received-isolated',revision:1,active:true},device='c'.repeat(64),at=Date.now();
   const approve=async value=>ownerMapping.approve({mapping:value,requestId:randomUUID(),operator:'Synthetic verifier',reason:'Disposable received-report test'});
   await approve(mapping);
@@ -51,6 +51,9 @@ export async function verifyPostgresReceivedReports(connectionString,owner){
   const request=token=>new Request('https://mercury.test/v1/admin/media/'+photo.delivery_id,{headers:token?{authorization:'Bearer '+token}:{}});
   assert.equal((await handler(request(null))).status,401);assert.equal((await handler(request('synthetic-guard'))).status,403);let response=await handler(request('synthetic-admin'));assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');assert.equal(response.headers.get('x-content-type-options'),'nosniff');assert.deepEqual(Buffer.from(await response.arrayBuffer()),bytes);
   await owner.query('DELETE FROM auth.sessions WHERE id=$1',[sessionId]);assert.equal((await handler(request('synthetic-admin'))).status,401);
+  // Restore this synthetic session so the following case still exercises
+  // membership revocation, independently of the exact-session denial above.
+  await owner.query('INSERT INTO auth.sessions(id,user_id) VALUES($1,$2)',[sessionId,subject]);
   // A revocation between the HTTP precheck and reading transaction must still deny.
   const racing=createAdminHandler({verifySession:async()=>session,admin:{member:async value=>{const allowed=await admin.member(value);await owner.query('UPDATE mercury_guard.admin_accounts SET active=false WHERE auth_subject=$1',[subject]);return allowed;},media:admin.media.bind(admin)}});assert.equal((await racing(request('synthetic-admin'))).status,403);await assert.rejects(admin.catalog(session,'received_reports'),AdminDeniedError);
   await owner.query('UPDATE mercury_guard.admin_accounts SET active=true WHERE auth_subject=$1',[subject]);

@@ -1,4 +1,5 @@
 const uuid=x=>typeof x==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(x);
+export class CurrentAuthSessionError extends Error{}
 // Only call after this exact access token has been verified by Auth. No token,
 // refresh credential, or editable metadata is stored here or returned to clients.
 export function createPostgresAuthSessionReader(client){
@@ -15,5 +16,5 @@ export function createPostgresAuthSessionReader(client){
 // returning a receipt/page. This adds no Auth write or row-lock privileges.
 export async function requirePostgresAuthSession(client,session,subject,at=Date.now()){
  const current=Math.max(at,Date.now());
- if(!Number.isSafeInteger(at)||at<=0||!uuid(subject)||session?.subject!==subject||session.active!==true||!uuid(session.sessionId)||!Number.isSafeInteger(session.expiresAt)||!Number.isSafeInteger(session.expiresAt*1000)||!Number.isSafeInteger(current)||session.expiresAt*1000<=current||!await createPostgresAuthSessionReader(client)(subject,session.sessionId))throw Error('Current exact Auth session required');
+ if(!Number.isSafeInteger(at)||at<=0||!uuid(subject)||session?.subject!==subject||session.active!==true||!uuid(session.sessionId)||!Number.isSafeInteger(session.expiresAt)||!Number.isSafeInteger(session.expiresAt*1000)||!Number.isSafeInteger(current)||session.expiresAt*1000<=current||!await createPostgresAuthSessionReader(client)(subject,session.sessionId))throw new CurrentAuthSessionError('Current exact Auth session required');
 }

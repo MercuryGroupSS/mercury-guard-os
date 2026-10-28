@@ -1,4 +1,5 @@
 import {verifyPostgresSessionFences} from './verify-postgres-session-fences.mjs';
+import {verifyPostgresAdminSessionFences} from './verify-postgres-admin-session-fences.mjs';
 import {Client} from 'pg';
 import {readFileSync} from 'node:fs';
 import {randomUUID,createHash} from 'node:crypto';
@@ -71,6 +72,7 @@ try{
  await verifyPostgresDispatch(url.toString(),fixture);
  await verifyPostgresDashboard(url.toString(),fixture);
  await verifyPostgresAdministration(url.toString(),fixture);
+ await verifyPostgresAdminSessionFences(url.toString(),fixture);
  await verifyPostgresAuthSessions(url.toString(),fixture);
  await verifyPostgresOwnerMembership(url.toString(),fixture);
  await verifyPostgresReceivedReports(url.toString(),fixture);

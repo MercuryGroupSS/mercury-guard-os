@@ -204,6 +204,12 @@ jobs:
             echo 'Isolated local stack startup failed; private runtime output is not published.'
             exit 1
           fi
+      - name: Actual local Auth administrator logout race and exact cleanup
+        env:
+          MERCURY_CONFIGURED_REAL_AUTH: synthetic-only
+        run: |
+          mkdir -p app/build/reports/readiness
+          node server/scripts/check-configured-real-auth.mjs > app/build/reports/readiness/configured-real-auth-result.json
       - name: Verify Guard logical restore and bounded handler outcomes
         run: |
           mkdir -p app/build/reports/readiness
@@ -239,5 +245,6 @@ jobs:
           path: |
             app/build/reports/signin-acceptance/result.json
             app/build/reports/readiness/restore-result.json
+            app/build/reports/readiness/configured-real-auth-result.json
             app/build/reports/readiness/capacity-result.json
           if-no-files-found: warn

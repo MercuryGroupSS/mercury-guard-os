@@ -3,6 +3,7 @@ import {randomUUID,generateKeyPairSync} from 'node:crypto';
 import {Pool} from 'pg';
 import {PostgresDeviceAssignments} from '../postgres-device-assignments.mjs';
 import {PostgresAdministration,AdminDeniedError,AdminConflictError} from '../postgres-administration.mjs';
+import {fixtureAuthSession} from './fixture-auth-session.mjs';
 export async function verifyPostgresAdministration(connectionString,owner){
  const pool=new Pool({connectionString,max:4,options:'-c role=service_role'});
  try{
@@ -10,7 +11,7 @@ export async function verifyPostgresAdministration(connectionString,owner){
   await owner.query('INSERT INTO auth.users(id,email) VALUES($1,$2),($3,$4),($5,$6)',[adminSubject,email,subjects[0],'a@example.invalid',subjects[1],'b@example.invalid']);
   await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[adminSubject,email]);
   const devices=new PostgresDeviceAssignments(pool),accounts=new Map(subjects.map((subject,i)=>[subject,{subject,email:i?'b@example.invalid':'a@example.invalid',confirmed:true,enabled:true}]));
-  const admin=new PostgresAdministration({devices,loadAuthAccount:async subject=>accounts.get(subject)}),session={subject:adminSubject,active:true,expiresAt:Math.floor(Date.now()/1000)+3600};
+  const admin=new PostgresAdministration({devices,loadAuthAccount:async subject=>accounts.get(subject)}),session=await fixtureAuthSession(owner,adminSubject);
   const action=(name,payload)=>({request_id:randomUUID(),action:name,reason:'Synthetic administration test',payload});
   assert.equal(await admin.member({...session,subject:subjects[0],user_metadata:{admin:true}}),false);
   const create=action('vendor.create',{vendorId:'admin-vendor',kind:'company',active:true}),created=await Promise.all([admin.apply(session,create),admin.apply(session,create)]);assert.deepEqual(created[0],created[1]);
@@ -24,8 +25,9 @@ export async function verifyPostgresAdministration(connectionString,owner){
   await assert.rejects(admin.apply(session,action('guard.status',{guardId:'admin-guard-0',active:true})));assert.equal((await pool.query("SELECT active FROM mercury_guard.guards WHERE guard_id='admin-guard-0'")).rows[0].active,false);
   accounts.get(subjects[0]).confirmed=true;await admin.apply(session,action('guard.status',{guardId:'admin-guard-0',active:true}));
   await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subjects[1],accounts.get(subjects[1]).email]);
-  await assert.rejects(admin.apply({...session,subject:subjects[1]},create),AdminConflictError);
-  await assert.rejects(admin.settle({...session,subject:subjects[1]},closed),AdminConflictError);
+  const otherAdminSession=await fixtureAuthSession(owner,subjects[1]);
+  await assert.rejects(admin.apply(otherAdminSession,create),AdminConflictError);
+  await assert.rejects(admin.settle(otherAdminSession,closed),AdminConflictError);
   const page=await admin.catalog(session,'ops_bindings');assert.equal(page.items.length,50);assert.ok(page.next_cursor);const next=await admin.catalog(session,'ops_bindings',page.next_cursor);assert.ok(next.items.every(x=>x.source_id>page.next_cursor));
   assert.equal((await admin.catalog(session,'guards')).items.filter(g=>g.vendor_id==='admin-vendor').length,2);
   const key=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),enrollment={deviceId:'admin-phone',mode:'site',siteId:'admin-site',active:true,revoked:false,publicKeySpki:key.publicKey.export({type:'spki',format:'der'}).toString('base64url')};

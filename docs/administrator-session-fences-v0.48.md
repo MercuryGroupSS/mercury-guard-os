@@ -1,0 +1,17 @@
+# Administrator transaction session checks
+
+An administrator can start a request with a valid sign-in, then sign out while a private catalog is being read or a change is waiting to commit. The previous implementation checked the verified token and current membership before the request, and locked membership in its transaction, but did not recheck that exact Auth session before returning the result. A disposable PostgreSQL regression reproduced a catalog being returned after the session was deleted on another connection.
+
+`PostgresAdministration` now requires the verified principal's exact subject, session ID and unexpired token, and reads the existing narrow `auth.sessions` columns. Each protected transaction checks it at entry and immediately before returning a catalog, report, private photo, applied receipt or not-applied resolution. The final check also covers historical receipts and missing-media results. A rejected final check rolls back both domain changes and the audit insert. A current independent session for the same administrator can still retry the original request and receive the original receipt without rewriting it.
+
+The shared session helper now distinguishes a denied session from a database error. Denial remains fail-closed; database unavailability is not presented as a successful membership decision. No new Auth row locks, database grants, tables, configuration fields or HTTP request fields are introduced. The existing membership lock, request advisory lock, content conflict checks and immutable receipts remain intact. Provider deletion after the last non-locking session read is still not serialized with commit; this change does not claim to eliminate that final narrow interval.
+
+## Verification
+
+- The full Node suite includes typed denial versus database-error coverage.
+- Canonical PostgreSQL replay uses real service-role transactions and a separate owner connection to delete only the exact synthetic session after a real catalog query, domain write, audit insert, stored receipt read, report read or private JPEG query. It checks denial, rollback, unchanged receipts, independent-session recovery and the existing limited Auth-column rights.
+- Older direct PostgreSQL fixtures now create their own explicit disposable session rows. The received-report fixture restores its synthetic session after the logout test so later membership and image-integrity cases still exercise their intended conditions.
+- The actual local Supabase Auth/direct-TLS gate obtains two genuine provider sessions, approves only a synthetic local administrator, verifies an audited request and its exact retry, then logs out through the real provider while an administrator commit is in flight. The change and audit must roll back, and the other session must recover the original receipt. Exact run-owned records, Auth identity, temporary keys and runtime files are removed.
+- The real-provider gate runs in the already isolated sign-in CI job before its existing platform, logical restore and capacity checks. Its published artifact contains only the sanitized fixed result, never credentials or runtime files.
+
+Local checks do not establish hosted configuration, physical biometric/camera/GNSS acceptance, continuous Ops synchronization or an operational SLA. Android source and version remain unchanged from v0.47; no new phone installation is needed for this backend correction. Exact-commit CI and production publication are separate recorded gates.
