@@ -13,7 +13,7 @@ export function readConfiguredReceiver(config){
   if(!value||Object.keys(value).sort().join()!=='destination,token,version'||value.version!==1||
    typeof value.destination!=='string'||!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/.test(value.destination)||
    typeof value.token!=='string'||!(/^[\x21-\x7e]{32,4096}$/).test(value.token)||
-   [config.auth.publishable_key,config.auth.server_key,config.ops_refresh?.server_key].includes(value.token))throw Error();
+   [config.auth.publishable_key,config.auth.server_key,config.ops_refresh?.server_key,config.ops_refresh?.schedule_token].includes(value.token))throw Error();
   return {destination:value.destination,token:value.token};
  }catch{throw Error('Configured receiver private configuration invalid');}
 }

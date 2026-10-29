@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['server/**', 'supabase/**', 'netlify/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', 'netlify/**', 'integration-drafts/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
   pull_request:
-    paths: ['server/**', 'supabase/**', 'netlify/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
+    paths: ['server/**', 'supabase/**', 'netlify/**', 'integration-drafts/**', 'netlify.toml', 'package.json', 'package-lock.json', '.github/workflows/server-contract.yml']
 permissions:
   contents: read
 jobs:
@@ -35,6 +35,12 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run check:netlify
       - run: npm run test:netlify-bundle
+      - name: Build and verify the uninstalled Ops review function
+        run: npm run build:ops-bridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ops-schedule-bridge-review
+          path: .local-backend/ops-schedule-bridge-draft/
       - name: Real browser account and administration request origins
         run: node server/scripts/check-browser-origin-ci.mjs
       - name: Real browser account and report interactions

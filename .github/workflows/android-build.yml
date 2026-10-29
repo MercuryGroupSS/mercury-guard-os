@@ -210,6 +210,10 @@ jobs:
         run: |
           mkdir -p app/build/reports/readiness
           node server/scripts/check-configured-real-auth.mjs > app/build/reports/readiness/configured-real-auth-result.json
+      - name: Actual local schedule bridge, Auth, cancellation and owned cleanup
+        run: |
+          mkdir -p app/build/reports/readiness
+          MERCURY_DOCKER_BIN="$(command -v docker)" node server/scripts/check-local-ops-bridge.mjs > app/build/reports/readiness/ops-schedule-bridge.log
       - name: Verify Guard logical restore and bounded handler outcomes
         run: |
           mkdir -p app/build/reports/readiness

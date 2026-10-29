@@ -173,3 +173,12 @@ app, schema, privileges and hosted configuration remain unchanged.
 ### v0.49 — personal fingerprint return sign-in
 
 Adds explicit personal-phone setup after initial individual password authentication, biometric-gated encrypted return credentials, current approved-device/session checks, bounded signed permits, provider refresh rotation and lost-response recovery. Shared site and administrator login continue to exclude refresh tokens. No schema, grant, Ops/Homebase, hosted enrollment or signing-identity changes are required. See `docs/personal-fingerprint-return-v0.49.md` for the protocol, sign-out limits and measured acceptance boundaries. A real scan through the new CryptoObject and an approved individual/device/assignment remain attended acceptance gates.
+
+
+## Optional restricted schedule bridge — v0.50
+
+Both Guard runtimes now support an explicit authenticated schedule-bridge transport. The existing source reader and disabled default remain available. The proposed Ops function keeps the existing Ops database credential on its own server; Guard holds only a separate token whose endpoint accepts approved shift IDs and the five schedule fields. The source function is staged outside Guard's function directory, built as one self-contained reviewed module and tested outside the source tree. It is not installed or enabled by the Guard deployment. See [the bridge contract and activation gates](ops-schedule-bridge-v0.50.md).
+
+Local verification covers denied credentials/IDs, production-only context, strict bounds, history opt-in, malformed/stale response rejection, both runtime compositions and error preservation. A real local Supabase REST/Auth drill also exercises source projection through the bridge, enrolled-device assignment access, replay denial, recurring cancellation and exact fixture cleanup. These tests do not establish a deployed live Ops bridge or a new physical authenticated shift. Existing app changes and the two dedicated Functions secrets require explicit authorization before activation.
+
+The user's stated final target is a full Mercury phone operating system. Current deliverables remain an Android APK and dedicated backend. A custom home application or kiosk alone does not meet that target. Supported hardware firmware access, vendor drivers, system signing, recovery, OTA updates and installed-system acceptance are separate platform work; no replacement system image or supported installation path for the present Fold is claimed here.

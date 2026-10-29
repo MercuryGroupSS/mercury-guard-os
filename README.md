@@ -1,5 +1,9 @@
 # Mercury One — Mercury Guard OS
 
+The current deliverable is an Android APK and dedicated backend. The final target includes a custom Mercury operating system; replacement firmware, supported hardware installation, system signing, recovery and OTA acceptance remain a separate platform phase. A launcher or kiosk alone does not complete that requirement.
+
+The optional [v0.50 schedule bridge](docs/ops-schedule-bridge-v0.50.md) is implemented for both Guard server runtimes. Its proposed Ops-side function remains a review artifact outside Guard's deployed function directory until separately approved. Existing applications are unchanged by installing Guard.
+
 Mercury One is a native Android guard application with a white/cyan interface and particle-face sign-in surface. It includes an offline demonstration and a separately configured, individually authenticated account flow. A valid trusted configuration launches enrollment/sign-in directly; a missing configuration opens the demo, and a malformed configuration blocks connected entry.
 
 The connected implementation supports approved assignments and confirmed shifts, encrypted incidents/drafts/photos, any-order checkpoints and explicit patrol rounds, timed check-ins, dispatch acknowledgements, signed scoped grants/batches, durable queued delivery and separate receipt states. Escalate works without an active assignment and distinguishes service receipt from explicit operator acknowledgement. Optional shift location requires an approved exact notice/policy, separate individual consent and a short signed lease; withdrawal stops collection and blocks original location retries without blocking independent incidents.

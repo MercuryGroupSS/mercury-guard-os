@@ -9,7 +9,7 @@ import {PostgresGuardDirectory} from './postgres-guard-directory.mjs';
 import {PostgresDeviceAssignments} from './postgres-device-assignments.mjs';
 import {PostgresOpsAssignmentSync} from './postgres-ops-assignment-sync.mjs';
 import {PostgresOpsBindingStore} from './postgres-ops-binding-store.mjs';
-import {createOpsShiftReader} from './ops-shift-reader.mjs';
+import {createOpsSourceReader} from './ops-source-reader.mjs';
 import {createOpsRefreshWorker} from './ops-refresh-worker.mjs';
 import {PostgresLocationConsents} from './postgres-location-consents.mjs';
 import {PostgresDurableIngest} from './postgres-durable-ingest.mjs';
@@ -105,7 +105,7 @@ export async function openNetlifyRuntime(config,materials,{fetchImpl=fetch,poolF
   const delivery=c.dashboard_delivery?{observations:createDashboardRouter({...c.dashboard_delivery,fetchImpl:fetchBound}),media:createDashboardMediaRouter({...c.dashboard_delivery,fetchImpl:fetchBound})}:null;
   const bridge=createDashboardBridge({store,bindings,outbox,shiftLifecycle,batchSize:c.workers.batch_size,send:delivery?async job=>{await requireDeployment();return delivery.observations(job);}:null});
   let ops=null;
-  if(c.ops_refresh){const approved=new PostgresOpsBindingStore(pool),source=createOpsShiftReader({url:c.ops_refresh.origin,serverKey:c.ops_refresh.server_key,historyFallback:c.ops_refresh.history_fallback??false,fetchImpl:fetchBound}),sync=new PostgresOpsAssignmentSync(devices);ops=createOpsRefreshWorker({loadBindings:async()=>{await requireDeployment();return approved.list();},readShifts:async ids=>{await requireDeployment();return source(ids);},sync:{apply:async(...args)=>{await requireDeployment();return sync.apply(...args);},revokeBinding:async(...args)=>{await requireDeployment();return sync.revokeBinding(...args);}},directory});}
+  if(c.ops_refresh){const approved=new PostgresOpsBindingStore(pool),source=createOpsSourceReader(c.ops_refresh,{fetchImpl:fetchBound}),sync=new PostgresOpsAssignmentSync(devices);ops=createOpsRefreshWorker({loadBindings:async()=>{await requireDeployment();return approved.list();},readShifts:async ids=>{await requireDeployment();return source(ids);},sync:{apply:async(...args)=>{await requireDeployment();return sync.apply(...args);},revokeBinding:async(...args)=>{await requireDeployment();return sync.revokeBinding(...args);}},directory});}
   const track=operation=>{active.add(operation);void operation.finally(()=>active.delete(operation)).catch(()=>{});return operation;};
   const runtime={
    check(){if(closed)return Promise.reject(Error('Netlify runtime closed'));return track((async()=>{await assertConfiguredDatabase(pool,identity);await application.assertConfiguration();if(closed)throw Error('Netlify runtime closed');return {status:'configuration_verified',origin:c.public_origin,deployment_id:c.deployment_id};})());},

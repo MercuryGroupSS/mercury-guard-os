@@ -1,5 +1,6 @@
 import {createPrivateKey,createPublicKey,createHash,X509Certificate} from 'node:crypto';
 import {strictJson} from './verify-batch.mjs';
+import {validateOpsSourceConfig} from './ops-source-config.mjs';
 import {createDashboardRouter,createDashboardMediaRouter} from './dashboard-router.mjs';
 
 const exact=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).sort().join()===keys.sort().join();
@@ -23,7 +24,7 @@ function publicConfiguration(value){
  if(!exact(c.database,['connection_mode'])||!['session','direct'].includes(c.database.connection_mode))fail();
  if(!exact(c.issuer,['issuer','audience','key_id'])||!safe(c.issuer.issuer,256)||!(/^[A-Za-z0-9._:/-]{1,128}$/).test(c.issuer.audience)||!(/^[A-Za-z0-9_-]{1,64}$/).test(c.issuer.key_id))fail();
  if(!exact(c.workers,['batch_size','max_duration_ms'])||!Number.isSafeInteger(c.workers.batch_size)||c.workers.batch_size<1||c.workers.batch_size>20||!Number.isSafeInteger(c.workers.max_duration_ms)||c.workers.max_duration_ms<1000||c.workers.max_duration_ms>25000)fail();
- if(c.ops_refresh!==null){if(!exact(c.ops_refresh,Object.hasOwn(c.ops_refresh??{},'history_fallback')?['origin','history_fallback']:['origin'])||Object.hasOwn(c.ops_refresh,'history_fallback')&&typeof c.ops_refresh.history_fallback!=='boolean')fail();origin(c.ops_refresh.origin);}
+ if(c.ops_refresh!==null)validateOpsSourceConfig(c.ops_refresh);
  if(typeof c.dashboard_delivery!=='boolean'||typeof c.dashboard_receiver!=='boolean')fail();c.mail_recipients=recipients(c.mail_recipients);return c;
 }
 function secret(get,name,max=65536,{optional=false}={}){
@@ -31,7 +32,7 @@ function secret(get,name,max=65536,{optional=false}={}){
  if(typeof value!=='string'||Buffer.byteLength(value)>max||value.length<1)fail();return value;
 }
 function receiver(value,config){
- if(!exact(value,['version','destination','token'])||value.version!==1||typeof value.destination!=='string'||!(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/).test(value.destination)||typeof value.token!=='string'||!(/^[\x21-\x7e]{32,4096}$/).test(value.token)||[config.auth.publishable_key,config.auth.server_key,config.ops_refresh?.server_key].includes(value.token))fail();
+ if(!exact(value,['version','destination','token'])||value.version!==1||typeof value.destination!=='string'||!(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/).test(value.destination)||typeof value.token!=='string'||!(/^[\x21-\x7e]{32,4096}$/).test(value.token)||[config.auth.publishable_key,config.auth.server_key,config.ops_refresh?.server_key,config.ops_refresh?.schedule_token].includes(value.token))fail();
  return {destination:value.destination,token:value.token};
 }
 // Only this loader reads the platform environment. No process.env fallback, files, TLS keys,
@@ -46,8 +47,9 @@ export function readNetlifyEnvironment({get}={}){
   if(issuerKey.asymmetricKeyType!=='rsa'||issuerKey.asymmetricKeyDetails.modulusLength<2048)fail();
   const issuerSpki=createPublicKey(issuerKey).export({type:'spki',format:'der'}),ca=secret(get,'MERCURY_GUARD_DATABASE_CA',65536,{optional:true});
   if(ca!==undefined){if(!ca.includes('-----BEGIN CERTIFICATE-----')||ca.includes('PRIVATE KEY'))fail();new X509Certificate(ca);}
-  const config={...c,mode:'netlify',auth,database,ops_refresh:c.ops_refresh===null?null:{...c.ops_refresh,server_key:apiKey(secret(get,'MERCURY_GUARD_OPS_SERVER_KEY',16384),'service_role')},dashboard_delivery:null,dashboard_receiver:null};
-  if(c.dashboard_delivery){const d=strictJson(secret(get,'MERCURY_GUARD_DELIVERY_CONFIG',65536));if(!exact(d,['version','destinations'])||d.version!==1)fail();createDashboardRouter(d);createDashboardMediaRouter(d);if(d.destinations.some(v=>typeof v.token!=='string'||!(/^[\x21-\x7e]{32,4096}$/).test(v.token)||[auth.publishable_key,auth.server_key,config.ops_refresh?.server_key].includes(v.token)))fail();config.dashboard_delivery={destinations:d.destinations};}
+  const config={...c,mode:'netlify',auth,database,ops_refresh:c.ops_refresh===null?null:c.ops_refresh.transport==='schedule_bridge'?{...c.ops_refresh,schedule_token:secret(get,'MERCURY_GUARD_OPS_SCHEDULE_TOKEN',128)}:{...c.ops_refresh,server_key:apiKey(secret(get,'MERCURY_GUARD_OPS_SERVER_KEY',16384),'service_role')},dashboard_delivery:null,dashboard_receiver:null};
+  if(config.ops_refresh){validateOpsSourceConfig(config.ops_refresh,{credentials:true});if(config.ops_refresh.transport==='schedule_bridge'&&[auth.publishable_key,auth.server_key].includes(config.ops_refresh.schedule_token))fail();}
+  if(c.dashboard_delivery){const d=strictJson(secret(get,'MERCURY_GUARD_DELIVERY_CONFIG',65536));if(!exact(d,['version','destinations'])||d.version!==1)fail();createDashboardRouter(d);createDashboardMediaRouter(d);if(d.destinations.some(v=>typeof v.token!=='string'||!(/^[\x21-\x7e]{32,4096}$/).test(v.token)||[auth.publishable_key,auth.server_key,config.ops_refresh?.server_key,config.ops_refresh?.schedule_token].includes(v.token)))fail();config.dashboard_delivery={destinations:d.destinations};}
   if(c.dashboard_receiver)config.dashboard_receiver=receiver(strictJson(secret(get,'MERCURY_GUARD_RECEIVER_CONFIG',16384)),config);
   return {config,materials:{issuerKey,issuerPublicKey:issuerSpki.toString('base64url'),issuerSha256:createHash('sha256').update(issuerSpki).digest('hex'),...(ca?{databaseCa:Buffer.from(ca)}:{})}};
  }catch{fail();}
@@ -57,9 +59,9 @@ export function readNetlifyEnvironment({get}={}){
 export function validateNetlifyConfiguration(value,materials){
  try{
   const fields=['version','mode','deployment_id','public_origin','platform','auth','database','issuer','workers','ops_refresh','dashboard_delivery','dashboard_receiver','mail_recipients'];
-  if(!exact(value,fields)||value.mode!=='netlify'||!exact(value.auth,['origin','publishable_key','server_key'])||!exact(value.database,['connection_mode','url'])||value.ops_refresh!==null&&!exact(value.ops_refresh,Object.hasOwn(value.ops_refresh??{},'history_fallback')?['origin','server_key','history_fallback']:['origin','server_key']))fail();
-  const c=structuredClone(value),base={...c,auth:{origin:c.auth.origin,publishable_key:c.auth.publishable_key},database:{connection_mode:c.database.connection_mode},ops_refresh:c.ops_refresh===null?null:{origin:c.ops_refresh.origin,...(Object.hasOwn(c.ops_refresh,'history_fallback')?{history_fallback:c.ops_refresh.history_fallback}:{})},dashboard_delivery:c.dashboard_delivery!==null,dashboard_receiver:c.dashboard_receiver!==null};delete base.mode;
-  const env={MERCURY_GUARD_NETLIFY_CONFIG:JSON.stringify(base),MERCURY_GUARD_AUTH_SERVER_KEY:c.auth.server_key,MERCURY_GUARD_DATABASE_URL:c.database.url,MERCURY_GUARD_ISSUER_PRIVATE_KEY:materials?.issuerKey?.export({type:'pkcs8',format:'pem'}),MERCURY_GUARD_DATABASE_CA:materials?.databaseCa?.toString('utf8'),MERCURY_GUARD_OPS_SERVER_KEY:c.ops_refresh?.server_key,MERCURY_GUARD_DELIVERY_CONFIG:c.dashboard_delivery===null?undefined:JSON.stringify({version:1,...c.dashboard_delivery}),MERCURY_GUARD_RECEIVER_CONFIG:c.dashboard_receiver===null?undefined:JSON.stringify({version:1,...c.dashboard_receiver})};
+  if(!exact(value,fields)||value.mode!=='netlify'||!exact(value.auth,['origin','publishable_key','server_key'])||!exact(value.database,['connection_mode','url'])||value.ops_refresh!==null&&!validateOpsSourceConfig(value.ops_refresh,{credentials:true}))fail();
+  const c=structuredClone(value),base={...c,auth:{origin:c.auth.origin,publishable_key:c.auth.publishable_key},database:{connection_mode:c.database.connection_mode},ops_refresh:c.ops_refresh===null?null:Object.fromEntries(Object.entries(c.ops_refresh).filter(([key])=>!['server_key','schedule_token'].includes(key))),dashboard_delivery:c.dashboard_delivery!==null,dashboard_receiver:c.dashboard_receiver!==null};delete base.mode;
+  const env={MERCURY_GUARD_NETLIFY_CONFIG:JSON.stringify(base),MERCURY_GUARD_AUTH_SERVER_KEY:c.auth.server_key,MERCURY_GUARD_DATABASE_URL:c.database.url,MERCURY_GUARD_ISSUER_PRIVATE_KEY:materials?.issuerKey?.export({type:'pkcs8',format:'pem'}),MERCURY_GUARD_DATABASE_CA:materials?.databaseCa?.toString('utf8'),MERCURY_GUARD_OPS_SERVER_KEY:c.ops_refresh?.server_key,MERCURY_GUARD_OPS_SCHEDULE_TOKEN:c.ops_refresh?.schedule_token,MERCURY_GUARD_DELIVERY_CONFIG:c.dashboard_delivery===null?undefined:JSON.stringify({version:1,...c.dashboard_delivery}),MERCURY_GUARD_RECEIVER_CONFIG:c.dashboard_receiver===null?undefined:JSON.stringify({version:1,...c.dashboard_receiver})};
   const checked=readNetlifyEnvironment({get:name=>env[name]});if(checked.materials.issuerSha256!==materials?.issuerSha256||checked.materials.issuerPublicKey!==materials?.issuerPublicKey)fail();return checked.config;
  }catch{fail();}
 }
