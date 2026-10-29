@@ -24,7 +24,7 @@ For Netlify, set `ops_refresh` to the following public shape inside the existing
 {"origin":"https://ops.example.invalid","transport":"schedule_bridge","history_fallback":true}
 ```
 
-Place the matching token in `MERCURY_GUARD_OPS_SCHEDULE_TOKEN` on Guard and `MERCURY_GUARD_SCHEDULE_TOKEN` on Ops. The old `MERCURY_GUARD_OPS_SERVER_KEY` is unnecessary in bridge mode. The direct configured runtime instead carries `schedule_token` in its existing private configuration file and requires `interval_ms` as before. Both loaders reject mixed/unknown credential shapes and receiver/delivery token reuse. Keep `ops_refresh:null` until the separate source deployment and secret installation are approved and verified.
+Place the matching token in `MERCURY_GUARD_OPS_SCHEDULE_TOKEN` on Guard and `MERCURY_GUARD_SCHEDULE_TOKEN` on Ops. The old `MERCURY_GUARD_OPS_SERVER_KEY` is unnecessary in bridge mode. The direct configured runtime instead carries `schedule_token` in its existing private configuration file and requires `interval_ms` as before. Both loaders reject mixed/unknown credential shapes. Receiver credentials and Netlify delivery credentials cannot reuse the bridge token. Keep `ops_refresh:null` until the separate source deployment and secret installation are approved and verified.
 
 Requests and responses use normal verified HTTPS, reject redirects, have a five-second source deadline and a 64 KiB response bound. Responses are noncacheable and the consumer rejects timestamps more than 60 seconds from its clock. The consumer never logs provider bodies or credentials. Refresh errors retain the previous assignments; existing source-version and binding-revision checks prevent regressions.
 
