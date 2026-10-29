@@ -147,3 +147,25 @@ The v0.47 source passed all nine exact-source CI jobs and was published to the d
 The owner-selected mailbox subsequently completed personal verification/password setup and received an audited administrator membership. A fresh actual Auth session was confirmed. Private credentials and operational source records remain excluded from this repository. Phone enrollment, individual guard/vendor/site bindings, hosted read-only Ops credentials and attended biometric/camera/GNSS acceptance remain open. The user has deferred phone work while connected to another computer.
 
 The v0.48 backend candidate closes a reproduced administrator exact-session gap. Catalogs, report metadata, private photos, mutations, resolutions and stored receipt retries now require the same current Auth session through their transaction's final result check. Concurrent provider logout causes denial or rollback rather than a new committed change. A valid independent session can recover the unchanged original receipt. No Auth locks, schema, privileges or Android inputs change. Disposable PostgreSQL interleavings and an actual local Auth/TLS logout-during-commit check cover the correction; exact-source CI and publication remain separate gates. See [the session verification scope](administrator-session-fences-v0.48.md).
+
+
+## Phone mode acceptance after real Fold biometric verification
+
+The physical Fold passed113 isolated tests with existing data and identity
+unchanged. A separate local diagnostic verified actual camera output and a fresh
+non-mock SDK GPS fix, then deleted its output and removed only its owned app.
+The user subsequently enrolled a fingerprint and the unchanged Preview displayed
+Device verified through its normal biometric callback. Account login and hosted
+phone/guard/site/source bindings remain separate acceptance gates.
+
+The user clarified that personal return sign-in should require only a fingerprint
+after initial individual setup, while shared site phones must identify the guard.
+The current Preview still asks for Guard ID/password after biometrics in both
+modes; personal biometric return sign-in is not implemented. The new actual-local
+Auth/TLS mode matrix tests distinct individual accounts at the same company,
+shared-site isolation, personal exact-guard access across sites, proof/replay
+denials, deactivation, revocation and real provider logout, without attendance or
+phone actions. Exact fixture cleanup is required. See
+[phone mode acceptance](phone-mode-acceptance-v0.48.md) for measured scope and the
+remaining personal-login requirement. This is a test-only change; runtime, native
+app, schema, privileges and hosted configuration remain unchanged.

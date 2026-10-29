@@ -20,6 +20,7 @@ import {PostgresDispatchFeed} from '../postgres-dispatch-feed.mjs';
 import {PostgresAdministration} from '../postgres-administration.mjs';
 import {PostgresEscalations} from '../postgres-escalations.mjs';
 import {createAdminAuthAccountReader} from '../admin-auth-account.mjs';
+import {verifyConfiguredPhoneModes} from './verify-configured-phone-modes.mjs';
 
 if(process.argv.length!==2||process.env.MERCURY_CONFIGURED_REAL_AUTH!=='synthetic-only'){console.error('{"status":"failed","phase":"explicit_synthetic_mode_required"}');process.exit(1);}
 const root=new URL('../../',import.meta.url),privateDir=new URL('.local-backend/',root),privateFile=new URL('configured-real-auth.json',privateDir);
@@ -29,7 +30,7 @@ let local;try{local=JSON.parse(readConfiguredFile(new URL('supabase-start.log',r
 const run=randomUUID(),prefix='configured-real-auth-'+run,guardId=prefix+'-guard',vendorId=prefix+'-vendor',email=prefix+'@example.invalid',password=randomBytes(32).toString('base64url');
 const adminVendorId=prefix+'-admin-vendor',racingVendorId=prefix+'-racing-vendor',adminRequestId=randomUUID(),racingRequestId=randomUUID();
 const owner=new Client({connectionString:local.DB_URL,connectionTimeoutMillis:5000,statement_timeout:10000,query_timeout:12000});
-let ownerConnected=false,ownsFile=false,subject,fixture,config,materials,identity,pool,service,issuer,cleanupPromise,interrupted=false;
+let ownerConnected=false,ownsFile=false,subject,fixture,config,materials,identity,pool,service,issuer,cleanupPromise,interrupted=false,phoneModes;
 const tokens=[];let phase='preflight';
 process.once('SIGINT',()=>{interrupted=true;});process.once('SIGTERM',()=>{interrupted=true;});
 const lifetime=setTimeout(()=>{interrupted=true;},120000);lifetime.unref();
@@ -103,7 +104,7 @@ try{
   await owner.query('COMMIT');
  }catch(error){await owner.query('ROLLBACK');throw error;}
  phase='auth_create';active();const created=await provider('admin/users',{method:'POST',headers:serviceHeaders,body:JSON.stringify({email,password,email_confirm:true,user_metadata:{mercury_fixture_run:prefix}})});assert.equal(created.status,200);const user=await created.json();assert.match(user.id,/^[a-f0-9-]{36}$/i);assert.equal(user.email,email);assert.equal(user.user_metadata?.mercury_fixture_run,prefix);subject=user.id;ownership();
- await owner.query('INSERT INTO mercury_guard.vendors(vendor_id,kind,active) VALUES($1,$2,true)',[vendorId,'individual']);
+ await owner.query('INSERT INTO mercury_guard.vendors(vendor_id,kind,active) VALUES($1,$2,true)',[vendorId,'company']);
  await owner.query('INSERT INTO mercury_guard.guards(guard_id,auth_subject,vendor_id,active) VALUES($1,$2,$3,true)',[guardId,subject,vendorId]);
  await owner.query('INSERT INTO mercury_guard.guard_login(guard_id,email) VALUES($1,$2)',[guardId,email]);
  phase='configured_tls';active();pool=await openConfiguredDatabase(config,materials);
@@ -119,6 +120,8 @@ try{
  const claims=tokens.map(token=>JSON.parse(Buffer.from(token.split('.')[1],'base64url')));assert.notEqual(claims[0].session_id,claims[1].session_id);for(const claim of claims){assert.equal(claim.sub,subject);assert.ok(claim.exp>Math.floor(Date.now()/1000));assert.equal((await owner.query('SELECT EXISTS(SELECT 1 FROM auth.sessions WHERE id=$1::uuid AND user_id=$2::uuid) AS active',[claim.session_id,subject])).rows[0].active,true);}
  for(const token of tokens){const profile=await request('/v1/me',{token});assert.equal(profile.status,200);assert.equal(profile.data.auth_subject,subject);assert.equal(profile.data.guard_id,guardId);assert.equal(profile.data.vendor_id,vendorId);}
  assert.equal((await request('/v1/admin/me',{token:tokens[0]})).status,403);
+ phase='actual_phone_mode_boundaries';
+ phoneModes=await verifyConfiguredPhoneModes({owner,devices,request,provider,serviceHeaders,identity:{subject,guardId,vendorId},token:tokens[0],prefix,privateDir});
  phase='actual_admin_authority';
  await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subject,email]);
  for(const token of tokens){assert.equal((await request('/v1/admin/me',{token})).status,200);assert.equal((await request('/v1/admin/catalog?kind=vendors',{token})).status,200);}
@@ -143,7 +146,7 @@ try{
  phase='postgres_session_revocation';assert.equal((await owner.query('DELETE FROM auth.sessions WHERE id=$1::uuid AND user_id=$2::uuid',[claims[1].session_id,subject])).rowCount,1);
  assert.equal((await request('/v1/me',{token:tokens[1]})).status,401);
  active();await cleanup();
- console.log(JSON.stringify({status:'passed',provider:'actual_local_supabase_auth',composition:'configured_application_direct_tls',workers:'not_started',sessions_verified:2,independent_session_after_logout:true,administrator_current_session:true,actual_provider_logout_during_admin_commit_rolled_back:true,immutable_admin_retry_from_independent_session:true,postgres_revoked_session_denied:true,custom_audience:true,exact_cleanup:'confirmed',global_limiter:'preserved'}));
+ console.log(JSON.stringify({status:'passed',provider:'actual_local_supabase_auth',composition:'configured_application_direct_tls',workers:'not_started',sessions_verified:3,phone_modes:phoneModes,independent_session_after_logout:true,administrator_current_session:true,actual_provider_logout_during_admin_commit_rolled_back:true,immutable_admin_retry_from_independent_session:true,postgres_revoked_session_denied:true,custom_audience:true,exact_cleanup:'confirmed',global_limiter:'preserved'}));
 }catch(error){
  let clean=true;try{await cleanup();}catch{clean=false;}
  const log=new URL('configured-real-auth-'+run+'.log',privateDir);try{writeFileSync(log,String(error?.stack??error)+'\nphase='+phase+'\ncleanup='+clean+'\n',{mode:0o600});chmodSync(log,0o600);}catch{}
