@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {tmpdir} from 'node:os';
 import assert from 'node:assert/strict';
+import {verifyDefaultScheduleEntrypoint} from './check-ops-schedule-default.mjs';
 
 const root=fileURLToPath(new URL('../../',import.meta.url));
 if(process.argv.length>3)throw Error('One optional review output folder accepted');
@@ -25,6 +26,7 @@ try{
  const context={site:{id:site},deploy:{context:'production'}};
  assert.equal((await handler(new Request(url),context)).status,401);assert.equal(fetched,0);
  const response=await handler(new Request(url,{headers:{authorization:'Bearer '+token}}),context);assert.equal(response.status,200);const value=await response.json();assert.equal(value.rows[0].id,id);assert.equal(fetched,1);assert.ok(!JSON.stringify(value).includes(env.SUPABASE_SERVICE_ROLE_KEY));
- const record={status:'standalone_review_bundle_verified',file:'mercury-one-schedule.mjs',bytes:bytes.length,sha256:sha(bytes),source_inputs:Object.keys(result.metafile.inputs).sort().map(path=>({path,sha256:sha(readFileSync(resolve(root,path)))})),verification:{loaded_outside_source:true,missing_credential_denied_before_upstream:true,synthetic_scoped_five_field_read:true,source_key_absent_from_response:true},live_Ops_modified:false,live_activation_authorized:false};
+ const defaultHandler=verifyDefaultScheduleEntrypoint(path);
+ const record={status:'standalone_review_bundle_verified',file:'mercury-one-schedule.mjs',bytes:bytes.length,sha256:sha(bytes),source_inputs:Object.keys(result.metafile.inputs).sort().map(path=>({path,sha256:sha(readFileSync(resolve(root,path)))})),verification:{loaded_outside_source:true,missing_credential_denied_before_upstream:true,synthetic_scoped_five_field_read:true,source_key_absent_from_response:true,production_default_handler:defaultHandler},live_Ops_modified:false,live_activation_authorized:false};
  writeFileSync(join(out,'BUILD-RECORD.json'),JSON.stringify(record,null,2)+'\n');console.log(JSON.stringify(record));
 }finally{rmSync(temp,{recursive:true,force:true});}

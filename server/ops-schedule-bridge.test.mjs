@@ -10,12 +10,18 @@ import {readNetlifyEnvironment,validateNetlifyConfiguration} from './netlify-con
 import {configuredFixture} from './fixtures/configured-service.mjs';
 import {validateConfiguredServiceConfig} from './configured-service-config.mjs';
 import {createOpsScheduleEntrypoint} from '../integration-drafts/ops-schedule-bridge/entry.mjs';
+import {verifyDefaultScheduleEntrypoint} from './scripts/check-ops-schedule-default.mjs';
+import {fileURLToPath} from 'node:url';
 
 const token=randomBytes(32).toString('base64url'),origin='https://ops.example.invalid',at=Date.parse('2026-10-29T17:00:00Z');
 const shift={id:'synthetic-ridge-shift',scheduled_start:'2026-10-29T22:00:00Z',scheduled_end:'2026-10-30T10:00:00Z',status:'scheduled',updated_at:'2026-10-29T16:55:00Z'};
 function endpoint(ids=[shift.id],history='false'){const u=new URL(OPS_SCHEDULE_PATH,origin);u.searchParams.set('ids',JSON.stringify(ids));u.searchParams.set('history',history);return u;}
 function fixture(options={}){let calls=0;const bridge=createOpsScheduleBridge({publicOrigin:origin,token,allowedIds:[shift.id,'missing'],allowHistory:true,now:()=>at,readShifts:async requested=>{calls++;return {rows:requested.includes(shift.id)?[shift]:[],missingIds:requested.filter(id=>id!==shift.id),fetchedAt:at};},...options});return {bridge,calls:()=>calls};}
 const request=(url=endpoint(),headers={authorization:'Bearer '+token},method='GET')=>new Request(url,{headers,method});
+test('actual production export reads the isolated Node environment without an Edge global',()=>{
+ const result=verifyDefaultScheduleEntrypoint(fileURLToPath(new URL('../integration-drafts/ops-schedule-bridge/entry.mjs',import.meta.url)));
+ assert.equal(result.default_Node_handler_passed,true);assert.equal(result.Netlify_global_absent,true);
+});
 test('bridge and consumer complete the exact five-field protocol without names, clock events or service keys',async()=>{
  let options;const f=fixture(),reader=createOpsScheduleBridgeReader({url:origin,token,historyFallback:true,now:()=>at,fetchImpl:async(url,init)=>{options=init;return f.bridge(new Request(url,init));}});
  assert.deepEqual(await reader([shift.id,'missing']),{rows:[shift],missingIds:['missing'],fetchedAt:at});

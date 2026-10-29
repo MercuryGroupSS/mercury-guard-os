@@ -10,7 +10,7 @@ Run `npm run build:ops-bridge` to create a self-contained `mercury-one-schedule.
 
 ## Narrow source authority
 
-The Ops function uses its existing `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in place. The URL must match the reviewed Ops Supabase project. Its new token is a separate random 32-byte base64url value, held only in Functions secrets on the two services. No token belongs in the APK, public configuration, source, browser or logs.
+The Ops Node function reads its existing `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in place through `process.env`, following [Netlify's Node Functions documentation](https://docs.netlify.com/build/functions/environment-variables/). The URL must match the reviewed Ops Supabase project. Its new token is a separate random 32-byte base64url value, held only in Functions secrets on the two services. No token belongs in the APK, public configuration, source, browser or logs. Both source and standalone bundle tests invoke the actual exported handler in a fresh process with synthetic environment values and no Edge runtime global.
 
 The Ops-side `MERCURY_GUARD_SCHEDULE_CONFIG` is a version-1 object with exactly `version`, `site_id`, `public_origin`, `allowed_ids` and `allow_history`. `allowed_ids` is an explicit list of 1–1000 approved source shift IDs. Production site identity, deployment context, canonical request origin/path and the token must all match. A source ID approval does not identify a guard; Guard still requires its separate approved individual/vendor/site/device mapping.
 

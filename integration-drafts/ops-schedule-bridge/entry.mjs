@@ -20,4 +20,6 @@ export function createOpsScheduleEntrypoint({get,fetchImpl=fetch}){
   }catch{return unavailable();}
  };
 }
-export default createOpsScheduleEntrypoint({get:name=>Netlify.env.get(name)});
+// This is a Node Function, so credentials come from process.env, as in the
+// existing Ops functions. Netlify.env is the separate Edge runtime API.
+export default (request,context)=>createOpsScheduleEntrypoint({get:name=>process.env[name]})(request,context);
