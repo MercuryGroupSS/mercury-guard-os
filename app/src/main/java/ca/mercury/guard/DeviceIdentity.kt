@@ -64,6 +64,12 @@ class DeviceIdentity(context: Context, private val alias: String = "mercury.devi
    .put("challenge",challenge).put("device_thumbprint",identity.thumbprint).put("public_key_spki",identity.publicKeySpki)
    .put("signature_der",encoded(signature))
  }
+ /** Distinct personal login/refresh domains; never accepts a caller-provided signing key. */
+ internal fun signPersonalMessage(message:String):String=synchronized(lock){
+  require(message.startsWith("mercury-personal-login-v1\n")||message.startsWith("mercury-personal-refresh-v1\n"));require(message.toByteArray(Charsets.UTF_8).size<=8192)
+  val ks=store();checked(ks)?:error("Installation identity required")
+  encoded(Signature.getInstance("SHA256withECDSA").run{initSign(ks.getKey(alias,null) as PrivateKey);update(message.toByteArray(Charsets.UTF_8));sign()})
+ }
  /** Replay binds only the exact original piece; it cannot create or replace another piece. */
  fun signEvidenceChunk(audience:String,eventId:String,metadata:JSONObject,index:Int,chunkHash:String,chunkBytes:Int):String=synchronized(lock){
   val ks=store();val identity=checked(ks)?:error("Installation signing key not initialized")

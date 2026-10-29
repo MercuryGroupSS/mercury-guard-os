@@ -179,7 +179,8 @@ class GuardAccountActivity : Activity() {
     };button("Escalate"){unverifiedEscalation()};button("Set up or reset password"){openAccountPage()};button("Close"){finish()};return
    }
   }catch(_:Exception){screen("IDENTITY UNAVAILABLE","This phone's existing signing identity could not be opened. Contact your administrator; do not clear app data.");button("Escalate"){unverifiedEscalation()};button("Close"){finish()};return}
-  screen("GUARD SIGN-IN","Verify on this device, then enter your individual guard ID and password. Device biometrics do not identify your guard account.\nService: ${c.endpoint}")
+  val remembered=try{PersonalAccountStore(this).available(c,DeviceIdentity(this).publicIdentity()!!.thumbprint)}catch(_:Exception){false}
+  screen(if(remembered)"PERSONAL SIGN-IN"else"GUARD SIGN-IN",if(remembered)"Unlock your saved personal Guard account with your fingerprint. Current account and phone approval are checked online."else"Verify on this device, then enter your individual guard ID and password. Shared site phones require each guard to sign in. A personal phone can remember its approved account after setup.\nService: ${c.endpoint}")
   loginParticles=ParticleLoginView(this).apply{
    contentDescription="Mercury One decorative particle face. Verify with biometrics to continue; this animation does not recognize your identity."
    importantForAccessibility=View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -187,9 +188,9 @@ class GuardAccountActivity : Activity() {
   }
   root.addView(loginParticles,2,LinearLayout.LayoutParams(-1,dp(280)))
   loginParticles?.startMotion()
-  button("Escalate"){unverifiedEscalation()};button("Verify with biometrics") { biometric() };button("Stop automatic uploads and sign out",true){signOut()};button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
+  button("Escalate"){unverifiedEscalation()};button(if(remembered)"Unlock personal account with fingerprint"else"Verify with biometrics") { if(remembered)personalBiometric()else biometric() };button("Stop automatic uploads and sign out",true){signOut()};button("Set up or reset password"){openAccountPage()};button("Phone enrollment details"){enrollmentDetails()};button("Return"){finish()}
  }
- private fun signOut(){UploadCoordinator(this).stop(session,config);startScreen();status.text="Signed out on this phone. Automatic delivery stopped; encrypted records remain preserved. Service sign-out was requested and can remain unconfirmed while offline."}
+ private fun signOut(){val forgotten=try{PersonalAccountStore(this).forget();true}catch(_:Exception){false};UploadCoordinator(this).stop(session,config);startScreen();status.text=if(forgotten)"Signed out on this phone. Personal return access was forgotten. Automatic delivery stopped; encrypted records remain preserved. Service sign-out was requested and can remain unconfirmed while offline."else"Automatic delivery stopped and foreground access is locked. Personal key cleanup could not be confirmed; retry sign-out before handing over this phone. Existing shift records remain preserved."}
  private fun openAccountPage(){
   val c=config?:return
   try{
@@ -220,24 +221,62 @@ class GuardAccountActivity : Activity() {
    })
   }catch(_:Exception){signal=null;loginParticles?.setSigningIn(false);status.text="This phone needs an initialized installation identity and an available secure biometric. Ask your administrator to complete setup."}
  }
+ private fun personalBiometric(){
+  if(signal!=null||busy)return
+  val c=config?:return;val stamp=generation;val store=PersonalAccountStore(this)
+  try{
+   val thumb=DeviceIdentity(this).publicIdentity()?.thumbprint?:error("Installation identity required")
+   val pending=store.prepareUnlock(c,thumb);val cancellation=CancellationSignal();signal=cancellation;loginParticles?.setSigningIn(true)
+   val builder=BiometricPrompt.Builder(this).setTitle("Unlock your personal Guard account").setNegativeButton("Cancel",mainExecutor){_,_->if(stamp==generation){signal=null;loginParticles?.setSigningIn(false)}}
+   if(Build.VERSION.SDK_INT>=30)builder.setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+   builder.build().authenticate(BiometricPrompt.CryptoObject(pending.cipher),cancellation,mainExecutor,object:BiometricPrompt.AuthenticationCallback(){
+    override fun onAuthenticationSucceeded(result:BiometricPrompt.AuthenticationResult){
+     if(stamp!=generation||!visibleForLocation||stopped||isFinishing||isDestroyed)return
+     signal=null
+     try{
+      val opened=store.unlock(pending,result.cryptoObject?.cipher?:error("Biometric cipher required"),c,thumb)
+      UploadCoordinator(this@GuardAccountActivity).stop();busy=true;status.text="Checking your saved personal account and current phone approval…"
+      Thread{
+       var returned:GuardAccountClient.PersonalResult?=null;var denied=false;var saved=false
+       try{returned=GuardAccountClient(c.endpoint).personalReturn(opened.credential,c,DeviceIdentity(this@GuardAccountActivity));saved=store.rotate(opened,c,thumb,returned!!.credential)}
+       catch(e:GuardAccountClient.HttpFailure){denied=e.statusCode in setOf(401,403);if(denied)store.forget(opened.generation)}catch(_:Exception){}finally{opened.clear();returned?.credential?.remove("refresh_token")}
+       val current=returned;val committed=saved;val rejected=denied
+       runOnUiThread{
+        if(stamp!=generation||!visibleForLocation||stopped||isFinishing||isDestroyed){current?.clear();return@runOnUiThread}
+        busy=false;loginParticles?.setSigningIn(false)
+        if(current!=null&&committed){session=current.session;loadAssignments()}else{current?.clear();status.text=if(rejected)"Saved personal access is no longer authorized. Sign out and complete individual setup again."else"Personal sign-in could not finish. Your encrypted return credential is retained for a safe retry. Check the connection and try again."}
+       }
+      }.start()
+     }catch(_:Exception){loginParticles?.setSigningIn(false);status.text="Fingerprint-protected access could not be opened. Sign out to forget personal setup, then set it up again with your account. Existing shift records remain preserved."}
+    }
+    override fun onAuthenticationError(code:Int,message:CharSequence){if(stamp==generation){signal=null;loginParticles?.setSigningIn(false);status.text="Fingerprint verification was not completed. Your account remains locked."}}
+   })
+  }catch(_:Exception){signal=null;loginParticles?.setSigningIn(false);status.text="Personal fingerprint access is unavailable or has changed. Sign out to forget personal setup, then sign in with your individual account to set it up again."}
+ }
  private fun credentials(){
   UploadCoordinator(this).stop() // A new account attempt may belong to the next guard on a shared phone.
   screen("YOUR GUARD ACCOUNT","Device verified. Enter your individual guard ID, not a company vendor ID.")
   val user=EditText(this).apply{hint="Guard ID";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;isSingleLine=true;isSaveEnabled=false;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS}
   val secret=EditText(this).apply{hint="Password";inputType=InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD;isSingleLine=true;isSaveEnabled=false;importantForAutofill=View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS}
   password=secret;root.addView(user);root.addView(secret)
+  val remember=CheckBox(this).apply{text="Set up fingerprint return sign-in on my personal phone";isSaveEnabled=false}
+  root.addView(remember)
+  root.addView(TextView(this).apply{text="Requires administrator approval of this phone for your individual account. Leave unchecked on a shared site phone.";textSize=14f})
   button("Sign in"){
    val id=user.text.toString().trim();val chars=secret.text.toString().toCharArray();secret.text.clear()
-   val c=config?:return@button;val stamp=generation;busy=true;status.text="Checking your account…"
+   val c=config?:return@button;val personal=remember.isChecked;val stamp=generation;busy=true;status.text="Checking your account…"
    Thread{
-    var result:GuardAccountClient.Session?=null
-    try{result=GuardAccountClient(c.endpoint).login(id,chars)}catch(_:Exception){}finally{chars.fill('\u0000')}
-    val loggedIn=result
+    var result:GuardAccountClient.Session?=null;var personalResult:GuardAccountClient.PersonalResult?=null
+    try{val client=GuardAccountClient(c.endpoint);if(personal){personalResult=client.personalLogin(id,chars,c,DeviceIdentity(this));result=personalResult?.session}else result=client.login(id,chars)}catch(_:Exception){}finally{chars.fill('\u0000')}
+    val loggedIn=result;val remembered=personalResult
     runOnUiThread{
-     if(stamp!=generation||isFinishing||isDestroyed){loggedIn?.clear();return@runOnUiThread}
+     if(stamp!=generation||!visibleForLocation||stopped||isFinishing||isDestroyed){remembered?.clear();loggedIn?.clear();return@runOnUiThread}
      busy=false
-     if(loggedIn==null){status.text="Sign-in failed or is temporarily unavailable. Check your ID and password, then try again."}
-     else{session=loggedIn;loadAssignments()}
+     if(loggedIn==null){status.text=if(personal)"Personal sign-in was not authorized. Check your individual account and this phone's personal approval. On a shared site phone, leave fingerprint return setup unchecked."else"Sign-in failed or is temporarily unavailable. Check your ID and password, then try again."}
+     else{
+      try{if(remembered!=null)PersonalAccountStore(this).establish(c,DeviceIdentity(this).publicIdentity()!!.thumbprint,remembered.credential);session=loggedIn;remembered?.credential?.remove("refresh_token");loadAssignments()}
+      catch(_:Exception){remembered?.clear();loggedIn.clear();status.text="Personal fingerprint setup could not be saved. Stop uploads and sign out to forget previous personal setup, then try again. Existing shift records and installation identity are preserved."}
+     }
     }
    }.start()
   }

@@ -6,7 +6,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 
-/** Explicit configured service only. No credentials, tokens or refresh tokens are persisted. */
+/** Explicit configured service only. Personal credentials are returned only to the separate biometric store. */
 class GuardAccountClient(endpoint: String,private val network:android.net.Network?=null,private val cancellation:UploadCancellation?=null) {
  companion object { private val possessionLock=java.util.concurrent.locks.ReentrantLock() }
  private val origin = endpoint.trimEnd('/')
@@ -35,6 +35,9 @@ class GuardAccountClient(endpoint: String,private val network:android.net.Networ
   val started = SystemClock.elapsedRealtime()
   val response = try { request("/v1/session/login", JSONObject().put("guard_id", guardId).put("password", String(password))) }
    finally { password.fill('\u0000') }
+  return sessionResponse(response,started)
+ }
+ private fun sessionResponse(response:JSONObject,started:Long):Session {
   require(response.keys().asSequence().toSet() == setOf("access_token", "expires_at", "server_time_ms"))
   val token = response.get("access_token") as? String ?: error("Invalid session")
   require(token.isNotBlank() && token.length <= 16384 && token.none { it.isWhitespace() })
@@ -44,6 +47,36 @@ class GuardAccountClient(endpoint: String,private val network:android.net.Networ
   require(server > 0 && remaining in 1..86400000L)
   // Anchor at request start so transport delay cannot extend the session.
   return Session(token,Math.addExact(started,remaining)).also { it.bearer() }
+ }
+ internal class PersonalResult(val session:Session,val credential:JSONObject){override fun toString()="PersonalResult(redacted)";fun clear(){session.clear();credential.remove("refresh_token")}}
+ private fun personalResponse(response:JSONObject,started:Long,config:GuardServiceConfig,thumb:String):PersonalResult{
+  require(response.keys().asSequence().toSet()==setOf("access_token","expires_at","server_time_ms","refresh_token","permit"))
+  val credential=JSONObject().put("refresh_token",response.getString("refresh_token")).put("permit",response.getJSONObject("permit"))
+  PersonalAccountProtocol.validate(credential,config,thumb)
+  val session=sessionResponse(JSONObject().put("access_token",response.get("access_token")).put("expires_at",response.get("expires_at")).put("server_time_ms",response.get("server_time_ms")),started)
+  return PersonalResult(session,credential)
+ }
+ internal fun personalLogin(guardId:String,password:CharArray,config:GuardServiceConfig,identity:DeviceIdentity):PersonalResult{
+  require(guardId.matches(Regex("[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}"))&&password.size in 1..1024)
+  val thumb=identity.publicIdentity()?.thumbprint?:error("Installation identity required");val at=System.currentTimeMillis();val id=java.util.UUID.randomUUID().toString()
+  val message="mercury-personal-login-v1\n${config.audience}\n$guardId\n${config.deviceId}\n$at\n$id\n$thumb"
+  val proof=JSONObject().put("issued_at_ms",at).put("request_id",id).put("thumbprint",thumb).put("signature_der",identity.signPersonalMessage(message))
+  val started=SystemClock.elapsedRealtime()
+  val r=try{request("/v1/session/personal/login",JSONObject().put("guard_id",guardId).put("password",String(password)).put("device_id",config.deviceId).put("proof",proof),maxRequestBytes=8192)}finally{password.fill('\u0000')}
+  return personalResponse(r,started,config,thumb)
+ }
+ internal fun personalReturn(credential:JSONObject,config:GuardServiceConfig,identity:DeviceIdentity):PersonalResult=possession{
+  val thumb=identity.publicIdentity()?.thumbprint?:error("Installation identity required");PersonalAccountProtocol.validate(credential,config,thumb)
+  val permit=credential.getJSONObject("permit");val token=credential.getString("refresh_token")
+  val c=request("/v1/session/personal/challenge",JSONObject().put("permit",permit),maxRequestBytes=8192)
+  require(c.keys().asSequence().toSet()==setOf("audience","request_id","challenge","expires_at")&&c.getString("audience")==config.audience&&EscalationRules.uuid(c.getString("request_id"))&&c.getString("challenge").matches(Regex("[A-Za-z0-9_-]{43}")))
+  fun hash(v:String)=java.security.MessageDigest.getInstance("SHA-256").digest(v.toByteArray(Charsets.UTF_8)).joinToString(""){"%02x".format(it.toInt() and 255)}
+  // Canonical property insertion order matches the protocol permit's exact two-key wire representation.
+  val canonicalPermit=JSONObject().put("payload",permit.getString("payload")).put("signature",permit.getString("signature"))
+  val message="mercury-personal-refresh-v1\n${config.audience}\n${c.getString("request_id")}\n${c.getString("challenge")}\n$thumb\n${hash(permit.getString("payload")+"."+permit.getString("signature"))}\n${hash(token)}"
+  val proof=JSONObject().put("request_id",c.getString("request_id")).put("challenge",c.getString("challenge")).put("signature_der",identity.signPersonalMessage(message))
+  val started=SystemClock.elapsedRealtime()
+  personalResponse(request("/v1/session/personal/refresh",JSONObject().put("permit",canonicalPermit).put("refresh_token",token).put("proof",proof),maxRequestBytes=32768),started,config,thumb)
  }
  fun profile(session: Session): JSONObject = request("/v1/me",null,session)
  fun assignments(session: Session, deviceId: String, identity: DeviceIdentity, expectedAudience: String): JSONObject = possession {

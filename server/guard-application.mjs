@@ -1,6 +1,7 @@
 import {createSupabaseSessionVerifier} from './supabase-session.mjs';
 import {createPostgresAuthSessionReader} from './postgres-auth-session.mjs';
-import {createPasswordSession} from './password-session.mjs';
+import {createPersonalSessionHandler} from './personal-session.mjs';
+import {createPasswordSession,createRefreshSession} from './password-session.mjs';
 import {createSessionLogoutHandler} from './session-logout-handler.mjs';
 import {createAccountCredentials} from './account-credentials.mjs';
 import {createAccountHandler} from './account-handler.mjs';
@@ -41,6 +42,7 @@ export function createGuardApplication({configuration,pool,directory,devices,gra
  if(c.receiver_enabled?typeof receiver?.observations!=='function'||typeof receiver?.media!=='function':receiver!==null)throw Error('Explicit configured receiver composition required');
  const auth={url:c.auth.origin,publishableKey:c.auth.publishable_key,allowLocal:c.allow_local_auth,loadSession:createPostgresAuthSessionReader(pool),fetchImpl};
  const verifySession=createSupabaseSessionVerifier(auth),passwordSession=createPasswordSession(auth),credentials=createAccountCredentials({...auth,verifySession});
+ const personal=createPersonalSessionHandler({directory,devices,pool,grantIssuer,verifySession,passwordSession:createPasswordSession({...auth,includeRefresh:true}),refreshSession:createRefreshSession(auth),origin:c.public_origin});
  const accountCredentials=c.mail_recipients===null?credentials:{...credentials,sendCode:async(email,intent)=>{if(!c.mail_recipients.includes(email))throw Error('Account recipient unavailable');return credentials.sendCode(email,intent);},setPassword:async(email,code,password)=>{if(!c.mail_recipients.includes(email))throw Error('Account recipient unavailable');return credentials.setPassword(email,code,password);}};
  const account=createAccountHandler({credentials:accountCredentials,consumeAttempt:createPostgresLoginLimiter(pool)}),logout=createSessionLogoutHandler({...auth,verifySession});
  const ingest=createGrantIngestHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession}),profile=createGuardProfileHandler({directory,verifySession}),login=createLoginHandler({directory,passwordSession}),assignments=createAssignmentHandler({directory,devices,grantIssuer,store,dispatch,shiftLifecycle,verifySession}),evidence=createEvidenceHandler({directory,devices,grantIssuer,store,verifySession});
@@ -56,6 +58,7 @@ export function createGuardApplication({configuration,pool,directory,devices,gra
   if(p==='/admin'||p.startsWith('/admin/'))return adminConsoleResponse(request);
   if(p.startsWith('/v1/admin/'))return administration(request);
   if(p==='/v1/session/logout')return logout(request);
+  if(p.startsWith('/v1/session/personal/'))return personal(request);
   if(p==='/v1/session/login')return login(request);
   if(p==='/v1/me')return profile(request);
   if(['/v1/device-challenge','/v1/assignments','/v1/dispatch','/v1/shift-grant','/v1/shift-transition'].includes(p))return assignments(request);

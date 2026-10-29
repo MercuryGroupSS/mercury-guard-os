@@ -17,7 +17,7 @@ function applicationFixture(){
   if(url.endsWith('/user'))return Response.json({id:subject});throw Error('Unexpected trusted Auth route');
  };
  const pool={query:async(sql,args)=>{assert.ok(sql.includes('auth.sessions'));return {rows:[{active:args[1]===subject&&sessions.has(args[0])}]};}},directory={loadGuardsForSubject:async s=>s===subject?[{guardId:'synthetic-guard',authSubject:subject,vendorId:'synthetic-company',active:enabled}]:[],loadVendor:async()=>({vendorId:'synthetic-company',kind:'company',active:true})};
- const config=fixture.config,devices={audience:config.issuer.audience},grantIssuer={issuer:config.issuer.issuer,audience:config.issuer.audience,keyId:config.issuer.key_id};
+ const config=fixture.config,devices={audience:config.issuer.audience},grantIssuer={key:materials.issuerKey,issuer:config.issuer.issuer,audience:config.issuer.audience,keyId:config.issuer.key_id};
  const args={config,pool,directory,devices,grantIssuer,store:{},dispatch:{},shiftLifecycle:{},admin:{},escalations:{audience:config.issuer.audience,receive(){},status(){}},locationConsents:{audience:config.issuer.audience,challenge(){},receive(){},status(){}},fetchImpl};
  return {application:createConfiguredApplication(args),args,subject,id,other,sessions,jwt,disable:()=>{enabled=false;},calls:()=>calls};
 }

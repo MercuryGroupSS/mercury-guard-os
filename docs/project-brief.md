@@ -169,3 +169,7 @@ phone actions. Exact fixture cleanup is required. See
 [phone mode acceptance](phone-mode-acceptance-v0.48.md) for measured scope and the
 remaining personal-login requirement. This is a test-only change; runtime, native
 app, schema, privileges and hosted configuration remain unchanged.
+
+### v0.49 — personal fingerprint return sign-in
+
+Adds explicit personal-phone setup after initial individual password authentication, biometric-gated encrypted return credentials, current approved-device/session checks, bounded signed permits, provider refresh rotation and lost-response recovery. Shared site and administrator login continue to exclude refresh tokens. No schema, grant, Ops/Homebase, hosted enrollment or signing-identity changes are required. See `docs/personal-fingerprint-return-v0.49.md` for the protocol, sign-out limits and measured acceptance boundaries. A real scan through the new CryptoObject and an approved individual/device/assignment remain attended acceptance gates.

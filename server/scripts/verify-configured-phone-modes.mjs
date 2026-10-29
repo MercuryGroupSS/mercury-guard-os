@@ -1,10 +1,11 @@
+import {personalLoginMessage,personalRefreshMessage} from '../personal-session.mjs';
 import assert from 'node:assert/strict';
-import {generateKeyPairSync,createHash,sign,randomBytes} from 'node:crypto';
+import {generateKeyPairSync,createHash,sign,randomBytes,randomUUID} from 'node:crypto';
 import {writeFileSync,readFileSync,unlinkSync,chmodSync} from 'node:fs';
 
 // Called only by the actual LOCAL Auth/TLS fixture. This does not simulate a
 // human biometric, persist a login, clock in, or modify hosted phone enrollment.
-export async function verifyConfiguredPhoneModes({owner,devices,request,provider,serviceHeaders,identity,token,prefix,privateDir}){
+export async function verifyConfiguredPhoneModes({owner,devices,request,provider,serviceHeaders,identity,token,ownerPassword,prefix,privateDir}){
  assert.match(prefix,/^configured-real-auth-[a-f0-9-]{36}$/);
  const guardB=prefix+'-second-guard',email=guardB+'@example.invalid',password=randomBytes(32).toString('base64url');
  const siteA=prefix+'-site-a',siteB=prefix+'-site-b',sitePhone=prefix+'-site-phone',personalPhone=prefix+'-personal-phone';
@@ -14,9 +15,11 @@ export async function verifyConfiguredPhoneModes({owner,devices,request,provider
   const key=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),spki=key.publicKey.export({type:'spki',format:'der'});
   return {deviceId,key,spki:spki.toString('base64url'),thumb:createHash('sha256').update(spki).digest('hex')};
  });
+ const minuteStarted=Math.floor(Date.now()/60000);
+ const personalBuckets=()=>Array.from({length:Math.floor(Date.now()/60000)-minuteStarted+1},(_,i)=>'account:'+createHash('sha256').update('personal:'+personalPhone+':'+identity.subject+':'+(minuteStarted+i)).digest('hex'));
  let subjectB,tokenB,owned=false,completed=false,cleanupConfirmed=false;
  const record=()=>{
-  const value={prefix,guardB,email,siteA,siteB,sitePhone,personalPhone,assignments,ownerSubject:identity.subject,vendorId:identity.vendorId,deviceKeys:pairs.map(({deviceId,spki,thumb})=>({deviceId,spki,thumb})),...(subjectB?{subjectB}:{})};
+  const value={prefix,minuteStarted,guardB,email,siteA,siteB,sitePhone,personalPhone,assignments,ownerSubject:identity.subject,vendorId:identity.vendorId,deviceKeys:pairs.map(({deviceId,spki,thumb})=>({deviceId,spki,thumb})),...(subjectB?{subjectB}:{})};
   writeFileSync(file,JSON.stringify(value),{mode:0o600,...(!owned?{flag:'wx'}:{})});chmodSync(file,0o600);owned=true;
  };
  const proof=(pair,c)=>({version:1,algorithm:'SHA256withECDSA',audience:c.audience,request_id:c.request_id,challenge:c.challenge,device_thumbprint:pair.thumb,public_key_spki:pair.spki,signature_der:sign('sha256',Buffer.from(`mercury-enrollment-proof-v1\n${c.audience}\n${c.request_id}\n${c.challenge}\n${pair.thumb}`),pair.key.privateKey).toString('base64url')});
@@ -42,7 +45,7 @@ export async function verifyConfiguredPhoneModes({owner,devices,request,provider
   await attempt(()=>owner.query('DELETE FROM mercury_guard.guard_login WHERE guard_id=$1 AND email=$2',[guardB,email]));
   await attempt(()=>owner.query('DELETE FROM mercury_guard.guards WHERE guard_id=$1 AND auth_subject=$2::uuid AND vendor_id=$3',[guardB,subjectB??null,identity.vendorId]));
   const bucket='account:'+createHash('sha256').update(guardB).digest('hex');
-  await attempt(()=>owner.query('DELETE FROM mercury_guard.login_attempts WHERE bucket=$1',[bucket]));
+  await attempt(()=>owner.query('DELETE FROM mercury_guard.login_attempts WHERE bucket=ANY($1::text[])',[[bucket,...personalBuckets()]]));
   if(subjectB)await attempt(async()=>{
    const rows=(await owner.query("SELECT id FROM auth.users WHERE id=$1::uuid AND email=$2 AND raw_user_meta_data->>'mercury_fixture_run'=$3",[subjectB,email,prefix])).rows;
    if(rows.length){const r=await provider('admin/users/'+subjectB,{method:'DELETE',headers:serviceHeaders});assert.equal(r.ok,true);}
@@ -55,9 +58,9 @@ export async function verifyConfiguredPhoneModes({owner,devices,request,provider
     (SELECT count(*) FROM mercury_guard.sites WHERE site_id=ANY($3::text[])) AS sites,
     (SELECT count(*) FROM mercury_guard.guard_login WHERE guard_id=$4) AS logins,
     (SELECT count(*) FROM mercury_guard.guards WHERE guard_id=$4) AS guards,
-    (SELECT count(*) FROM mercury_guard.login_attempts WHERE bucket=$5) AS account_limiter,
+    (SELECT count(*) FROM mercury_guard.login_attempts WHERE bucket=$5 OR bucket=ANY($9::text[])) AS account_limiter,
     (SELECT count(*) FROM auth.users WHERE email=$6 AND raw_user_meta_data->>'mercury_fixture_run'=$7) AS users,
-    (SELECT count(*) FROM auth.sessions WHERE user_id=$8::uuid) AS sessions`,[[sitePhone,personalPhone],assignments,[siteA,siteB],guardB,bucket,email,prefix,subjectB??null])).rows[0];
+    (SELECT count(*) FROM auth.sessions WHERE user_id=$8::uuid) AS sessions`,[[sitePhone,personalPhone],assignments,[siteA,siteB],guardB,bucket,email,prefix,subjectB??null,personalBuckets()])).rows[0];
    assert.ok(Object.values(row).every(n=>Number(n)===0));
   });
   if(failures.length)throw new AggregateError(failures,'Exact phone-mode fixture cleanup unconfirmed');
@@ -102,9 +105,42 @@ export async function verifyConfiguredPhoneModes({owner,devices,request,provider
   assert.equal((await request('/v1/device-challenge',{token:tokenB,body:{device_id:sitePhone}})).status,400);
   assert.deepEqual(await list(token,proof(pairs[1],await challenge(token,personalPhone))),[assignments[1]]);
   await owner.query('UPDATE mercury_guard.sites SET active=true WHERE site_id=$1',[siteA]);
+  // Actual provider refresh with one personal installation. A site key, a
+  // company peer, a spoofed biometric flag and an unbound token cannot opt in.
+  const loginProof=(pair,guard)=>{const issued_at_ms=Date.now(),request_id=randomUUID();return {issued_at_ms,request_id,thumbprint:pair.thumb,signature_der:sign('sha256',Buffer.from(personalLoginMessage(devices.audience,guard,pair.deviceId,issued_at_ms,request_id,pair.thumb)),pair.key.privateKey).toString('base64url')};};
+  const personalLogin=(pair,guard,pw,extra={})=>request('/v1/session/personal/login',{body:{guard_id:guard,password:pw,device_id:pair.deviceId,proof:loginProof(pair,guard),...extra}});
+  assert.equal((await personalLogin(pairs[0],identity.guardId,ownerPassword)).status,401);
+  assert.equal((await personalLogin(pairs[1],guardB,password)).status,401);
+  assert.equal((await personalLogin(pairs[1],identity.guardId,ownerPassword,{biometric_verified:true})).status,400);
+  const first=await personalLogin(pairs[1],identity.guardId,ownerPassword);assert.equal(first.status,200);
+  assert.deepEqual(Object.keys(first.data).sort(),['access_token','expires_at','permit','refresh_token','server_time_ms']);
+  const firstClaims=JSON.parse(Buffer.from(first.data.access_token.split('.')[1],'base64url'));
+  const makeRefresh=async credentials=>{
+   const c=await request('/v1/session/personal/challenge',{body:{permit:credentials.permit}});assert.equal(c.status,200);
+   return {permit:credentials.permit,refresh_token:credentials.refresh_token,proof:{request_id:c.data.request_id,challenge:c.data.challenge,signature_der:sign('sha256',Buffer.from(personalRefreshMessage(devices.audience,c.data.request_id,c.data.challenge,pairs[1].thumb,credentials.permit,credentials.refresh_token)),pairs[1].key.privateKey).toString('base64url')}};
+  };
+  const original=await makeRefresh(first.data),renewed=await request('/v1/session/personal/refresh',{body:original});assert.equal(renewed.status,200);
+  assert.equal(JSON.parse(Buffer.from(renewed.data.access_token.split('.')[1],'base64url')).session_id,firstClaims.session_id);
+  assert.equal((await request('/v1/session/personal/refresh',{body:original})).status,401);
+  // Simulate a lost response, retaining the exact original sealed credential.
+  // After the normal 10-second reuse interval, Auth's parent recovery still works.
+  await new Promise(resolve=>setTimeout(resolve,11000));
+  const recovered=await request('/v1/session/personal/refresh',{body:await makeRefresh(first.data)});assert.equal(recovered.status,200);
+  assert.equal(JSON.parse(Buffer.from(recovered.data.access_token.split('.')[1],'base64url')).session_id,firstClaims.session_id);
+  const bound=JSON.parse(Buffer.from(recovered.data.permit.payload,'base64url'));
+  assert.equal(bound.expires_at_ms,JSON.parse(Buffer.from(first.data.permit.payload,'base64url')).expires_at_ms);
+  const altered=await makeRefresh(recovered.data);altered.refresh_token+='x';assert.equal((await request('/v1/session/personal/refresh',{body:altered})).status,401);
+  assert.equal((await request('/v1/me',{token:recovered.data.access_token})).status,200);
+  const pendingLogout=await makeRefresh(recovered.data);
+  assert.equal((await request('/v1/session/logout',{token:recovered.data.access_token,method:'POST'})).status,200);
+  assert.equal((await request('/v1/session/personal/refresh',{body:pendingLogout})).status,401);
+  assert.equal((await request('/v1/session/personal/challenge',{body:{permit:recovered.data.permit}})).status,401);
+  assert.equal((await request('/v1/me',{token})).status,200);
+  const forRevoke=await personalLogin(pairs[1],identity.guardId,ownerPassword);assert.equal(forRevoke.status,200);
   const beforeRevoked=proof(pairs[1],await challenge(token,personalPhone));await devices.revoke(personalPhone);
   assert.equal((await request('/v1/assignments',{token,body:beforeRevoked})).status,400);
   assert.equal((await request('/v1/device-challenge',{token,body:{device_id:personalPhone}})).status,400);
+  assert.equal((await request('/v1/session/personal/challenge',{body:{permit:forRevoke.data.permit}})).status,401);
   assert.deepEqual(await list(tokenB,proof(pairs[0],await challenge(tokenB,sitePhone))),[assignments[2]]);
   const beforeLogout=proof(pairs[0],await challenge(tokenB,sitePhone));
   assert.deepEqual(await request('/v1/session/logout',{token:tokenB,method:'POST'}),{status:200,data:{status:'signed_out'}});
@@ -115,5 +151,5 @@ export async function verifyConfiguredPhoneModes({owner,devices,request,provider
   completed=true;
  }finally{await cleanup();}
  assert.ok(completed&&cleanupConfirmed);
- return {status:'passed',provider:'actual_local_supabase_auth',distinct_individual_accounts:2,shared_company_vendor:true,site_phone_per_guard_and_site_isolation:true,concurrent_shared_phone_challenges:true,personal_phone_exact_guard_only:true,personal_phone_authorized_multiple_sites:true,cross_guard_proof_and_payload_spoof_denied:true,client_biometric_flag_not_identity:true,pre_clock_in_capture_grant_denied:true,altered_signature_and_replay_denied:true,inactive_site_and_revoked_personal_device_denied:true,real_provider_logout_stops_original_guard_only:true,attendance_rows_created:0,exact_cleanup:'confirmed',phone_actions:0,personal_biometric_return_login:'not_implemented_or_claimed'};
+ return {status:'passed',provider:'actual_local_supabase_auth',distinct_individual_accounts:2,shared_company_vendor:true,site_phone_per_guard_and_site_isolation:true,concurrent_shared_phone_challenges:true,personal_phone_exact_guard_only:true,personal_phone_authorized_multiple_sites:true,cross_guard_proof_and_payload_spoof_denied:true,client_biometric_flag_not_identity:true,pre_clock_in_capture_grant_denied:true,altered_signature_and_replay_denied:true,inactive_site_and_revoked_personal_device_denied:true,real_provider_logout_stops_original_guard_only:true,attendance_rows_created:0,exact_cleanup:'confirmed',phone_actions:0,personal_return_protocol:'actual_refresh_rotation_parent_recovery_and_revocation_passed',human_biometric:'not_simulated_or_claimed'};
 }

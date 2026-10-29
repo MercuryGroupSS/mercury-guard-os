@@ -121,7 +121,7 @@ try{
  for(const token of tokens){const profile=await request('/v1/me',{token});assert.equal(profile.status,200);assert.equal(profile.data.auth_subject,subject);assert.equal(profile.data.guard_id,guardId);assert.equal(profile.data.vendor_id,vendorId);}
  assert.equal((await request('/v1/admin/me',{token:tokens[0]})).status,403);
  phase='actual_phone_mode_boundaries';
- phoneModes=await verifyConfiguredPhoneModes({owner,devices,request,provider,serviceHeaders,identity:{subject,guardId,vendorId},token:tokens[0],prefix,privateDir});
+ phoneModes=await verifyConfiguredPhoneModes({owner,devices,request,provider,serviceHeaders,identity:{subject,guardId,vendorId},token:tokens[0],ownerPassword:password,prefix,privateDir});
  phase='actual_admin_authority';
  await owner.query('INSERT INTO mercury_guard.admin_accounts(auth_subject,email,active) VALUES($1,$2,true)',[subject,email]);
  for(const token of tokens){assert.equal((await request('/v1/admin/me',{token})).status,200);assert.equal((await request('/v1/admin/catalog?kind=vendors',{token})).status,200);}
@@ -146,7 +146,7 @@ try{
  phase='postgres_session_revocation';assert.equal((await owner.query('DELETE FROM auth.sessions WHERE id=$1::uuid AND user_id=$2::uuid',[claims[1].session_id,subject])).rowCount,1);
  assert.equal((await request('/v1/me',{token:tokens[1]})).status,401);
  active();await cleanup();
- console.log(JSON.stringify({status:'passed',provider:'actual_local_supabase_auth',composition:'configured_application_direct_tls',workers:'not_started',sessions_verified:3,phone_modes:phoneModes,independent_session_after_logout:true,administrator_current_session:true,actual_provider_logout_during_admin_commit_rolled_back:true,immutable_admin_retry_from_independent_session:true,postgres_revoked_session_denied:true,custom_audience:true,exact_cleanup:'confirmed',global_limiter:'preserved'}));
+ console.log(JSON.stringify({status:'passed',provider:'actual_local_supabase_auth',composition:'configured_application_direct_tls',workers:'not_started',sessions_verified:5,phone_modes:phoneModes,independent_session_after_logout:true,administrator_current_session:true,actual_provider_logout_during_admin_commit_rolled_back:true,immutable_admin_retry_from_independent_session:true,postgres_revoked_session_denied:true,custom_audience:true,exact_cleanup:'confirmed',global_limiter:'preserved'}));
 }catch(error){
  let clean=true;try{await cleanup();}catch{clean=false;}
  const log=new URL('configured-real-auth-'+run+'.log',privateDir);try{writeFileSync(log,String(error?.stack??error)+'\nphase='+phase+'\ncleanup='+clean+'\n',{mode:0o600});chmodSync(log,0o600);}catch{}

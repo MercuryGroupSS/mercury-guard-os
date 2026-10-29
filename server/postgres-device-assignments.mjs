@@ -1,3 +1,4 @@
+import {PersonalSessionDenied} from './personal-session.mjs';
 import {requirePostgresAuthSession} from './postgres-auth-session.mjs';
 import {locationPolicySnapshot} from './location-policy.mjs';
 import {randomBytes,randomUUID,verify} from 'node:crypto';
@@ -42,6 +43,20 @@ export class PostgresDeviceAssignments{
    await client.query('INSERT INTO mercury_guard.device_challenges VALUES($1,$2,$3,$4,$5) ON CONFLICT(auth_subject,device_id) DO UPDATE SET request_id=excluded.request_id,nonce=excluded.nonce,expires_at_ms=excluded.expires_at_ms',[requestId,identity.subject,deviceId,nonce,expires]);
    await requirePostgresAuthSession(client,session,identity.subject,now);
    return {audience:this.audience,request_id:requestId,challenge:nonce,expires_at:expires};
+  });
+ }
+ async consumePersonalChallenge(identity,device,proof,message,now,session){
+  const deny=()=>{throw new PersonalSessionDenied();};
+  if(!proof||Object.keys(proof).sort().join()!==['request_id','challenge','signature_der'].sort().join()||!(/^[a-f0-9-]{36}$/).test(proof.request_id??'')||typeof proof.challenge!=='string')deny();
+  return this.transaction(async client=>{
+   await requirePostgresAuthSession(client,session,identity.subject,now);
+   const d=deviceRow((await client.query(deviceSelect+' WHERE d.device_id=$1 FOR SHARE OF d',[device.deviceId])).rows[0]);
+   if(!d?.active||d.revoked||d.mode!=='personal'||d.guardId!==identity.guardId||d.thumbprint!==device.thumbprint||d.revocationVersion!==device.revocationVersion)deny();
+   const c=(await client.query('SELECT * FROM mercury_guard.device_challenges WHERE request_id=$1 AND auth_subject=$2 FOR UPDATE',[proof.request_id,identity.subject])).rows[0];
+   if(!c||c.device_id!==d.deviceId||Number(c.expires_at_ms)<=now||c.nonce!==proof.challenge)deny();
+   let valid=false;try{valid=verify('sha256',Buffer.from(message),parseEnrollmentKey(d.publicKeySpki).key,decodeEnrollmentValue(proof.signature_der,80));}catch{}if(!valid)deny();
+   await this.lockGuard(client,identity);await requirePostgresAuthSession(client,session,identity.subject,now);
+   await client.query('DELETE FROM mercury_guard.device_challenges WHERE request_id=$1',[proof.request_id]);
   });
  }
  async list(identity,proof,now=Date.now(),{historical=false,includeCancelled=false,session}={}){
